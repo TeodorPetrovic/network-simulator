@@ -1,5 +1,7 @@
 import react from "@vitejs/plugin-react";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
+import tailwindcss from "@tailwindcss/vite";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
@@ -10,8 +12,12 @@ export default defineConfig({
         prerender: { outputPath: "/index.html" },
       },
     }),
+    tailwindcss(),
     react(),
   ],
+  resolve: {
+    alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
+  },
   server: {
     host: "127.0.0.1",
     proxy: {

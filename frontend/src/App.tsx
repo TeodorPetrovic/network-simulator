@@ -1,13 +1,26 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent, PointerEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { FormEvent } from "react";
+import { Activity, FolderOpen, Network, Plus, Search, Trash2, X } from "lucide-react";
 import { api, projectNotificationsUrl } from "./api";
-import type { Drawing, Link, Node, Project, ProjectEvent, RuntimeInfo, RuntimeTemplate, TopologySnapshot } from "./api";
-import { applyProjectEvent, sanitizeDrawingSvg } from "./topology";
+import type { LinkEndpoint, Node, Project, ProjectEvent, ResourceMonitor, RuntimeInfo, RuntimeTemplate, TopologySnapshot } from "./api";
+import { applyProjectEvent } from "./topology";
+import { SimulatorWorkspace } from "./SimulatorWorkspace";
+import type { ConsoleTarget } from "./ConsoleDock";
+import { ResourceMonitorPopover } from "./ResourceMonitorPopover";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 type Selection = { kind: "node" | "link"; id: string } | null;
-
-const scene = { x: -620, y: -380, width: 1240, height: 760 };
-
+const MarketplaceDialog = lazy(() => import("./MarketplaceDialog").then((module) => ({ default: module.MarketplaceDialog })));
+const ConsoleDock = lazy(() => import("./ConsoleDock").then((module) => ({ default: module.ConsoleDock })));
 type AppProps = {
   projectId: string | null;
   navigateToProject: (id: string | null) => void;
@@ -16,6 +29,9 @@ type AppProps = {
 function App({ projectId, navigateToProject }: AppProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
+  const [resources, setResources] = useState<ResourceMonitor | null>(null);
+  const [resourceError, setResourceError] = useState("");
+  const [refreshingResources, setRefreshingResources] = useState(false);
   const [project, setProject] = useState<Project | null>(null);
   const [topology, setTopology] = useState<TopologySnapshot | null>(null);
   const [busy, setBusy] = useState(true);
@@ -30,12 +46,49 @@ function App({ projectId, navigateToProject }: AppProps) {
   const [templates, setTemplates] = useState<RuntimeTemplate[]>([]);
   const [templateId, setTemplateId] = useState("");
   const [nodeCommand, setNodeCommand] = useState("");
+  const [nodeStartupScript, setNodeStartupScript] = useState("");
+  const [nodeStartupConfig, setNodeStartupConfig] = useState("");
+  const [nodeIdlePc, setNodeIdlePc] = useState("");
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [uploadingQemuImage, setUploadingQemuImage] = useState(false);
   const [nodeName, setNodeName] = useState("");
   const [selection, setSelection] = useState<Selection>(null);
   const [connecting, setConnecting] = useState(false);
-  const [firstEndpoint, setFirstEndpoint] = useState<string | null>(null);
+  const [linkEndpoints, setLinkEndpoints] = useState<LinkEndpoint[]>([]);
+  const [startingAll, setStartingAll] = useState(false);
   const [notice, setNotice] = useState("");
+  const [consoleTargets, setConsoleTargets] = useState<ConsoleTarget[]>([]);
+  const [activeConsoleId, setActiveConsoleId] = useState<string | null>(null);
+  const [consoleMinimized, setConsoleMinimized] = useState(true);
+  const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
+  const pendingNodeNames = useRef(new Set<string>());
+
+  useEffect(() => {
+    setConsoleTargets([]);
+    setActiveConsoleId(null);
+    setConsoleMinimized(true);
+    setResources(null);
+  }, [projectId]);
+
+  const refreshResourceMonitor = useCallback(async () => {
+    setRefreshingResources(true);
+    try {
+      const snapshot = await api.resourceMonitor();
+      setResources(snapshot);
+      setResourceError("");
+    } catch (reason) {
+      setResourceError(errorMessage(reason));
+    } finally {
+      setRefreshingResources(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshResourceMonitor();
+    const timer = window.setInterval(() => void refreshResourceMonitor(), 5000);
+    return () => window.clearInterval(timer);
+  }, [refreshResourceMonitor]);
 
   useEffect(() => {
     let active = true;
@@ -43,7 +96,10 @@ function App({ projectId, navigateToProject }: AppProps) {
       .then((status) => active && setRuntimeInfo(status))
       .catch(() => active && setRuntimeInfo({
         docker: { available: false, version: null, error: "Runtime status is unavailable" },
-        qemu: { available: false, version: null, qemu_img_available: false, image_directory: "", image_count: 0, acceleration: "TCG", error: "Runtime status is unavailable" },
+        qemu: { available: false, version: null, qemu_img_available: false, image_directory: "", image_count: 0, acceleration: "TCG", kvm_accessible: false, acceleration_error: "Runtime status is unavailable", error: "Runtime status is unavailable" },
+        vpcs: { available: false, version: null, error: "Runtime status is unavailable" },
+        dynamips: { available: false, version: null, binary: "dynamips", image_directory: "images/dynamips", image_count: 0, error: "Runtime status is unavailable" },
+        ubridge: { available: false, binary: "ubridge", version: null, error: "Runtime status is unavailable" },
       }));
     return () => { active = false; };
   }, []);
@@ -102,11 +158,12 @@ function App({ projectId, navigateToProject }: AppProps) {
     const loadProject = async () => {
       try {
         await api.openProject(projectId);
-        const snapshot = await api.topology(projectId);
+        const [snapshot, availableTemplates] = await Promise.all([api.topology(projectId), api.templates()]);
         if (!active) return;
         cursor = snapshot.event_cursor;
         setProject(snapshot.project);
         setTopology(snapshot);
+        setTemplates(availableTemplates);
         setConnection("connected");
         connect();
       } catch (reason) {
@@ -132,6 +189,7 @@ function App({ projectId, navigateToProject }: AppProps) {
     const query = filter.trim().toLowerCase();
     return projects.filter((item) => !query || item.name.toLowerCase().includes(query));
   }, [filter, projects]);
+  const selectedNodeTemplate = templates.find((item) => item.template_id === templateId);
 
   async function createProject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -182,12 +240,16 @@ function App({ projectId, navigateToProject }: AppProps) {
         x: -420 + (index % 4) * 270,
         y: -210 + Math.floor(index / 4) * 170,
         ...(nodeCommand.trim() ? { start_command: nodeCommand.trim() } : {}),
+        ...(nodeStartupScript.trim() ? { startup_script: nodeStartupScript } : {}),
+        ...(nodeIdlePc.trim() ? { idlepc: nodeIdlePc.trim() } : {}),
+        ...(nodeStartupConfig.trim() ? { startup_config: nodeStartupConfig } : {}),
       });
-      setTopology((current) => current ? { ...current, nodes: [...current.nodes, node] } : current);
+      setTopology((current) => current ? { ...current, nodes: upsertNode(current.nodes, node) } : current);
       setSelection({ kind: "node", id: node.node_id });
       setNodeName("");
       setNodeDialogOpen(false);
-      setNotice(`${node.name} ${node.node_type === "qemu" ? "virtual machine" : "container"} created and added to the topology`);
+      const kind = node.node_type === "dynamips" ? "Cisco IOS router" : node.node_type === "qemu" ? "virtual machine" : node.node_type === "vpcs" ? "VPCS" : "container";
+      setNotice(`${node.name} ${kind} created and added to the topology`);
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
@@ -204,12 +266,58 @@ function App({ projectId, navigateToProject }: AppProps) {
       const selected = available.find((item) => item.template_id === templateId) ?? available[0];
       setTemplateId(selected?.template_id ?? "");
       setNodeCommand(selected?.template_type === "docker" ? selected.start_command ?? "" : "");
+      setNodeStartupScript(selected?.template_type === "vpcs" ? selected.startup_script ?? "" : "");
+      setNodeStartupConfig("");
+      setNodeIdlePc(selected?.template_type === "dynamips" ? selected.idlepc : "");
     } catch (reason) {
       setTemplates([]);
       setTemplateId("");
       setError(errorMessage(reason));
     } finally {
       setLoadingTemplates(false);
+    }
+  }
+
+  async function importDynamipsImage(file?: File) {
+    if (!file) return;
+    setUploadingImage(true);
+    setError("");
+    try {
+      const uploaded = await api.uploadDynamipsImage(file);
+      const available = await api.templates();
+      setTemplates(available);
+      const template = available.find((item) => item.template_type === "dynamips" && item.image === uploaded.image);
+      if (template?.template_type === "dynamips") {
+        setTemplateId(template.template_id);
+        setNodeName((current) => current || file.name.replace(/\.[^.]+$/, ""));
+        setNodeIdlePc(template.idlepc);
+      }
+      setNotice(`Imported IOS image ${uploaded.name} (${(uploaded.bytes / (1024 * 1024)).toFixed(1)} MiB)`);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setUploadingImage(false);
+    }
+  }
+
+  async function importQemuImage(file?: File) {
+    if (!file) return;
+    setUploadingQemuImage(true);
+    setError("");
+    try {
+      const uploaded = await api.uploadQemuImage(file);
+      const available = await api.templates();
+      setTemplates(available);
+      const template = available.find((item) => item.template_type === "qemu" && item.hda_disk_image === uploaded.image);
+      if (template?.template_type === "qemu") {
+        setTemplateId(template.template_id);
+        setNodeName((current) => current || file.name.replace(/\.[^.]+$/, ""));
+      }
+      setNotice(`Added QEMU image ${uploaded.name} (${(uploaded.bytes / (1024 * 1024)).toFixed(1)} MiB) to the global image library`);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setUploadingQemuImage(false);
     }
   }
 
@@ -227,45 +335,93 @@ function App({ projectId, navigateToProject }: AppProps) {
     }
   }
 
-  async function connectNodes(nodeId: string) {
+  async function changeAllNodes(action: "start" | "stop") {
+    if (!projectId || !topology || startingAll) return;
+    const targets = topology.nodes.filter((node) => action === "start" ? node.status !== "started" : node.status === "started");
+    if (!targets.length) return;
+    setStartingAll(true);
+    const results = await Promise.allSettled(targets.map((node) => api[`${action}Node`](projectId, node.node_id)));
+    const updates = new Map<string, Node>();
+    const failures: string[] = [];
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") updates.set(targets[index].node_id, result.value);
+      else failures.push(`${targets[index].name}: ${errorMessage(result.reason)}`);
+    });
+    setTopology((current) => current ? { ...current, nodes: current.nodes.map((node) => updates.get(node.node_id) ?? node) } : current);
+    setStartingAll(false);
+    if (failures.length) setError(`${failures.length} device${failures.length === 1 ? "" : "s"} could not ${action}: ${failures.join("; ")}`);
+    else setNotice(`${action === "start" ? "Started" : "Stopped"} ${updates.size} device${updates.size === 1 ? "" : "s"}`);
+  }
+
+  async function addTemplateAt(templateId: string, x?: number, y?: number) {
     if (!projectId || !topology) return;
-    if (!firstEndpoint) {
-      setFirstEndpoint(nodeId);
-      setNotice("Choose a second node to connect");
+    const template = templates.find((item) => item.template_id === templateId);
+    if (!template) {
+      setError("That device template is no longer available. Refresh the device library and try again.");
       return;
     }
-    if (firstEndpoint === nodeId) return;
-    const usedPorts = new Map<string, Set<number>>();
-    for (const link of topology.links) {
-      for (const endpoint of link.nodes ?? []) {
-        if (!usedPorts.has(endpoint.node_id)) usedPorts.set(endpoint.node_id, new Set());
-        const node = topology.nodes.find((item) => item.node_id === endpoint.node_id);
-        usedPorts.get(endpoint.node_id)?.add(node?.node_type === "qemu" ? endpoint.adapter_number : endpoint.port_number);
-      }
-    }
-    const nextFreePort = (id: string) => {
-      const ports = usedPorts.get(id) ?? new Set<number>();
-      let port = 0;
-      while (ports.has(port)) port += 1;
-      return port;
-    };
-    const endpointFor = (id: string) => {
-      const node = topology.nodes.find((item) => item.node_id === id);
-      const next = nextFreePort(id);
-      return node?.node_type === "qemu"
-        ? { node_id: id, adapter_number: next, port_number: 0 }
-        : { node_id: id, adapter_number: 0, port_number: next };
-    };
+    const index = topology.nodes.length;
+    const position = { x: x ?? -420 + (index % 5) * 180, y: y ?? -220 + Math.floor(index / 5) * 150 };
+    const name = generatedNodeName(template, topology.nodes, pendingNodeNames.current);
+    pendingNodeNames.current.add(name);
     try {
-      const link = await api.createLink(projectId, [firstEndpoint, nodeId].map(endpointFor));
-      setTopology((current) => current ? { ...current, links: [...current.links, link] } : current);
-      setSelection({ kind: "link", id: link.link_id });
-      setFirstEndpoint(null);
-      setConnecting(false);
-      setNotice("Link created");
+      const node = await api.createNodeFromTemplate(projectId, templateId, {
+        name,
+        ...position,
+        ...(template.template_type === "docker" && template.start_command ? { start_command: template.start_command } : {}),
+        ...(template.template_type === "vpcs" && template.startup_script ? { startup_script: template.startup_script } : {}),
+        ...(template.template_type === "dynamips" && template.idlepc ? { idlepc: template.idlepc } : {}),
+      });
+      setTopology((current) => current ? { ...current, nodes: upsertNode(current.nodes, node) } : current);
+      setSelection({ kind: "node", id: node.node_id });
+      setNotice(`${node.name} added to the topology`);
     } catch (reason) {
       setError(errorMessage(reason));
-      setFirstEndpoint(null);
+    } finally {
+      pendingNodeNames.current.delete(name);
+    }
+  }
+
+  async function renameNode(nodeId: string, name: string) {
+    if (!projectId) return;
+    try {
+      const node = await api.updateNode(projectId, nodeId, { name });
+      setTopology((current) => current ? { ...current, nodes: current.nodes.map((item) => item.node_id === nodeId ? node : item) } : current);
+      setConsoleTargets((current) => current.map((target) => target.nodeId === nodeId ? { ...target, nodeName: node.name } : target));
+      setNotice(`Device renamed to ${node.name}`);
+    } catch (reason) {
+      setError(errorMessage(reason));
+      throw reason;
+    }
+  }
+
+  function openConsole(node: Node) {
+    if (!projectId || !["docker", "qemu", "vpcs", "dynamips"].includes(node.node_type ?? "")) return;
+    const target: ConsoleTarget = { projectId, nodeId: node.node_id, nodeName: node.name, nodeType: node.node_type as ConsoleTarget["nodeType"] };
+    setConsoleTargets((current) => current.some((item) => item.nodeId === node.node_id) ? current : [...current, target]);
+    setActiveConsoleId(node.node_id);
+    setConsoleMinimized(false);
+  }
+
+  function selectPort(endpoint: LinkEndpoint) {
+    if (!connecting) return;
+    setLinkEndpoints((current) => current.some((item) => samePort(item, endpoint))
+      ? current.filter((item) => !samePort(item, endpoint))
+      : [...current, endpoint]);
+    setSelection({ kind: "node", id: endpoint.node_id });
+  }
+
+  async function createSelectedLink() {
+    if (!projectId || !topology || linkEndpoints.length < 2) return;
+    try {
+      const link = await api.createLink(projectId, linkEndpoints);
+      setTopology((current) => current ? { ...current, links: upsertLink(current.links, link) } : current);
+      setSelection({ kind: "link", id: link.link_id });
+      setLinkEndpoints([]);
+      setConnecting(false);
+      setNotice(`Ethernet segment created with ${link.nodes.length} endpoints`);
+    } catch (reason) {
+      setError(errorMessage(reason));
     }
   }
 
@@ -332,378 +488,177 @@ function App({ projectId, navigateToProject }: AppProps) {
     : null;
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <a className="brand" href="/" onClick={(event) => { event.preventDefault(); navigateToProject(null); }}>
-          <span className="brand-mark">N</span>
-          <span><b>network</b><small>STUDIO</small></span>
-        </a>
-        <div className="sidebar-label">WORKSPACE</div>
-        <button className={`nav-item ${!projectId ? "active" : ""}`} onClick={() => navigateToProject(null)}>
-          <span className="nav-icon">▦</span> Projects
-        </button>
-        <div className="sidebar-label recent-label">RECENT LABS</div>
-        {projects.slice(0, 4).map((item) => (
-          <button className="recent-item" key={item.project_id} onClick={() => navigateToProject(item.project_id)}>
-            <span className="recent-dot" />{item.name}
-          </button>
-        ))}
-        <div className="sidebar-spacer" />
-        <div className="server-card">
-          <span className={`server-light ${runtimeInfo?.docker.available ? "" : "runtime-offline"}`} />
-          <div><b>Docker Engine</b><small>{runtimeInfo?.docker.available ? `Available · ${runtimeInfo.docker.version}` : runtimeInfo ? "Unavailable" : "Checking…"}</small></div>
-          <span className="server-menu">•••</span>
-        </div>
-        <div className="server-card">
-          <span className={`server-light ${runtimeInfo?.qemu.available ? "" : "runtime-offline"}`} />
-          <div><b>QEMU / KVM</b><small>{runtimeInfo?.qemu.available ? `Available · ${runtimeInfo.qemu.acceleration}` : runtimeInfo ? "Unavailable" : "Checking…"}</small></div>
-          <span className="server-menu">•••</span>
-        </div>
-        <div className="sidebar-footer">Network Studio <span>0.1.0</span></div>
-      </aside>
-
-      <main className="main-area">
-        <header className="topbar">
-          <div className="breadcrumbs"><span>Workspace</span><i>/</i><b>{project?.name ?? (projectId ? "Project" : "Projects")}</b></div>
-          <div className="topbar-actions">
-            <span className={`connection-pill ${connection}`}><span className="status-light" />{connection === "connected" ? "API connected" : connection === "reconnecting" ? "Reconnecting…" : connection === "checking" ? "Checking API…" : "API unavailable"}</span>
-            <button className="avatar" aria-label="User menu">T</button>
+    <TooltipProvider>
+      <div className="app-shell">
+        <header className="sim-app-header">
+          <Button variant="ghost" className="sim-brand" onClick={() => navigateToProject(null)}>
+            <span className="sim-brand-mark"><Network size={18} /></span>
+            <span>Network Simulator</span>
+          </Button>
+          <div className="sim-header-context">
+            <span>{projectId ? "Project workspace" : "Projects"}</span>
+            {project && <><span className="text-muted-foreground">/</span><b title={project.name}>{project.name}</b></>}
+          </div>
+          <div className="sim-header-actions">
+            <Badge variant={connection === "connected" ? "secondary" : connection === "disconnected" ? "destructive" : "outline"} className="gap-1.5">
+              <span className={`sim-connection-dot ${connection}`} />{connection === "connected" ? "Controller connected" : connection === "reconnecting" ? "Reconnecting" : connection === "checking" ? "Connecting" : "Controller unavailable"}
+            </Badge>
+            <ResourceMonitorPopover resources={resources} runtimeInfo={runtimeInfo} error={resourceError} refreshing={refreshingResources} onRefresh={() => void refreshResourceMonitor()} />
           </div>
         </header>
 
-        {error && <div className="toast toast-error" role="alert"><span>{error}</span><button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
-        {notice && <div className="toast toast-success" role="status"><span>{notice}</span><button onClick={() => setNotice("")} aria-label="Dismiss message">×</button></div>}
+        {error && <Card className="sim-flash sim-flash-error" role="alert"><span>{error}</span><Button variant="ghost" size="icon-xs" onClick={() => setError("")} aria-label="Dismiss error"><X /></Button></Card>}
+        {notice && <Card className="sim-flash" role="status"><span>{notice}</span><Button variant="ghost" size="icon-xs" onClick={() => setNotice("")} aria-label="Dismiss message"><X /></Button></Card>}
 
-        {projectId ? (
-          <ProjectWorkspace
-            busy={busy}
+        <main className="main-area">
+          {projectId ? (busy || !project || !topology ? <div className="sim-loading"><Activity className="animate-pulse" />Loading project topology…</div> : <SimulatorWorkspace
             project={project}
             topology={topology}
+            templates={templates}
+            runtimeInfo={runtimeInfo}
+            resources={resources}
+            batchLifecycleRunning={startingAll}
             selection={selection}
             selectedNode={selectedNode}
             selectedLink={selectedLink}
             connecting={connecting}
-            firstEndpoint={firstEndpoint}
+            linkEndpoints={linkEndpoints}
             onBack={closeProject}
             onOpenNodeDialog={() => void openNodeDialog()}
+            onOpenMarketplace={() => setMarketplaceOpen(true)}
+            onAddTemplate={(id, x, y) => void addTemplateAt(id, x, y)}
             onNodeLifecycle={changeNodeLifecycle}
-            onToggleConnect={() => { setConnecting((value) => !value); setFirstEndpoint(null); setNotice("Select two nodes to add a link"); }}
-            onDeleteSelection={deleteSelection}
-            onNodeClick={(id) => connecting ? void connectNodes(id) : setSelection({ kind: "node", id })}
-            onLinkClick={(id) => setSelection({ kind: "link", id })}
+            onStartAll={() => void changeAllNodes("start")}
+            onStopAll={() => void changeAllNodes("stop")}
+            onOpenConsole={openConsole}
+            onToggleConnect={() => { setConnecting((value) => !value); setLinkEndpoints([]); setNotice(connecting ? "Port connection mode cancelled" : "Select interface ports to connect"); }}
+            onCreateLink={() => void createSelectedLink()}
+            onDeleteSelection={() => void deleteSelection()}
+            onNodeRename={renameNode}
+            onSelectNode={(id) => setSelection({ kind: "node", id })}
+            onSelectLink={(id) => setSelection({ kind: "link", id })}
+            onSelectCanvas={() => setSelection(null)}
+            onSelectPort={selectPort}
+            onNodeContext={(id) => setSelection({ kind: "node", id })}
             onNodeMove={updateLocalPosition}
             onNodeMoveEnd={saveNodePosition}
-          />
-        ) : (
-          <section className="projects-page">
-            <div className="page-heading">
-              <div>
-                <div className="eyebrow">YOUR WORKSPACE</div>
-                <h1>Projects</h1>
-                <p>Build, connect, and manage your network labs.</p>
-              </div>
-              <button className="primary-button" onClick={() => document.getElementById("new-project-name")?.focus()}>
-                <span>＋</span> New project
-              </button>
+          />) : <section className="projects-page">
+            <div className="projects-heading">
+              <div><div className="sim-section-label">LAB MANAGEMENT</div><h1>Projects</h1><p>Open a project or create a network lab.</p></div>
+              <Button variant="outline" onClick={() => setMarketplaceOpen(true)}><Search />Image catalog</Button>
             </div>
+            <Card className="sim-create-project">
+              <div className="sim-project-create-icon"><Plus /></div>
+              <div className="min-w-0 flex-1"><h2>New project</h2><p>Create an empty topology, then add devices from the global image library.</p></div>
+              <form className="sim-create-form" onSubmit={createProject}>
+                <Input id="new-project-name" aria-label="New project name" placeholder="e.g. Branch office network" value={projectName} onChange={(event) => setProjectName(event.target.value)} />
+                <Button type="submit" disabled={!projectName.trim() || creatingProject}><Plus />{creatingProject ? "Creating…" : "Create project"}</Button>
+              </form>
+            </Card>
+            <div className="sim-project-list-heading"><div><h2>All projects <Badge variant="secondary">{projects.length}</Badge></h2><p>Projects are stored by the local controller.</p></div><label className="relative w-64"><Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input aria-label="Filter projects" placeholder="Filter projects…" value={filter} onChange={(event) => setFilter(event.target.value)} className="pl-9" /></label></div>
+            {busy ? <Card className="sim-empty-state">Loading projects…</Card> : filteredProjects.length ? <Card className="sim-project-table-card"><Table>
+              <TableHeader><TableRow><TableHead>Project</TableHead><TableHead>Status</TableHead><TableHead>Location</TableHead><TableHead className="w-32 text-right">Actions</TableHead></TableRow></TableHeader>
+              <TableBody>{filteredProjects.map((item) => <TableRow key={item.project_id}>
+                <TableCell><Button variant="ghost" className="sim-project-link h-auto max-w-full justify-start px-0 py-1 text-left" onClick={() => navigateToProject(item.project_id)}><span className="sim-project-table-icon"><FolderOpen size={17} /></span><span className="truncate">{item.name}</span></Button></TableCell>
+                <TableCell><Badge variant="outline" className="capitalize">{item.status ?? "closed"}</Badge></TableCell>
+                <TableCell className="text-muted-foreground">Local controller</TableCell>
+                <TableCell><div className="flex justify-end gap-1"><Button variant="outline" size="sm" onClick={() => navigateToProject(item.project_id)}>Open project</Button><Button variant="ghost" size="icon-sm" onClick={() => void deleteProject(item)} aria-label={`Delete ${item.name}`} title="Delete project"><Trash2 /></Button></div></TableCell>
+              </TableRow>)}</TableBody>
+            </Table></Card> : <Card className="sim-empty-state"><FolderOpen size={28} /><b>{projects.length ? "No matching projects" : "No projects yet"}</b><span>{projects.length ? "Try another project name." : "Create a project above to start your first lab."}</span></Card>}
+          </section>}
+        </main>
 
-            <form className="create-project-card" onSubmit={createProject}>
-              <div className="create-icon">＋</div>
-              <div className="create-copy"><b>Start a new lab</b><span>Give your project a name to create a blank topology.</span></div>
-              <div className="create-fields">
-                <input id="new-project-name" aria-label="New project name" placeholder="e.g. Branch office network" value={projectName} onChange={(event) => setProjectName(event.target.value)} />
-                <button className="primary-button" type="submit" disabled={!projectName.trim() || creatingProject}>
-                  {creatingProject ? "Creating…" : "Create project"}
-                </button>
-              </div>
-            </form>
+        {projectId && consoleTargets.length > 0 && <Suspense fallback={<div className="sim-console-loading">Loading console…</div>}><ConsoleDock
+          targets={consoleTargets}
+          activeNodeId={activeConsoleId}
+          minimized={consoleMinimized}
+          onSelect={setActiveConsoleId}
+          onMinimize={() => setConsoleMinimized(true)}
+          onRestore={() => setConsoleMinimized(false)}
+          onClose={(nodeId) => { setConsoleTargets((current) => current.filter((target) => target.nodeId !== nodeId)); setActiveConsoleId((current) => current === nodeId ? (consoleTargets.find((target) => target.nodeId !== nodeId)?.nodeId ?? null) : current); }}
+        /></Suspense>}
 
-            <div className="section-heading">
-              <div><h2>All projects <span className="count-badge">{projects.length}</span></h2><p>Open a project to continue working on its topology.</p></div>
-              <label className="search-box"><span>⌕</span><input aria-label="Filter projects" placeholder="Find a project" value={filter} onChange={(event) => setFilter(event.target.value)} /></label>
+      <Dialog open={nodeDialogOpen} onOpenChange={setNodeDialogOpen}>
+        <DialogContent className="max-h-[92dvh] max-w-xl overflow-y-auto">
+          <form onSubmit={addNode} className="space-y-4">
+            <DialogHeader><DialogTitle>Add a node</DialogTitle><DialogDescription>Choose an installed template or add an image to the global library.</DialogDescription></DialogHeader>
+            <div className="grid gap-2"><Label htmlFor="node-name">Node name</Label><Input id="node-name" autoFocus placeholder="e.g. Core router" value={nodeName} onChange={(event) => setNodeName(event.target.value)} /></div>
+            <div className="grid gap-2"><Label htmlFor="node-template">Available device template</Label>
+              {loadingTemplates ? <Card className="p-3 text-sm text-muted-foreground" role="status">Discovering local runtime images…</Card> : templates.length ? (
+                <Select value={templateId} onValueChange={(value) => {
+                  const selected = templates.find((item) => item.template_id === value);
+                  setTemplateId(value);
+                  setNodeCommand(selected?.template_type === "docker" ? selected.start_command ?? "" : "");
+                  setNodeStartupScript(selected?.template_type === "vpcs" ? selected.startup_script ?? "" : "");
+                  setNodeStartupConfig("");
+                  setNodeIdlePc(selected?.template_type === "dynamips" ? selected.idlepc : "");
+                }}>
+                  <SelectTrigger id="node-template"><SelectValue placeholder="Select a device template" /></SelectTrigger>
+                  <SelectContent>{templates.map((template) => <SelectItem key={template.template_id} value={template.template_id}>{template.template_type === "dynamips" ? "Dynamips / Cisco IOS · " : template.template_type === "qemu" ? "QEMU · " : template.template_type === "vpcs" ? "VPCS · " : "Docker · "}{template.name}</SelectItem>)}</SelectContent>
+                </Select>
+              ) : <Card className="p-3 text-sm text-muted-foreground" role="status">{runtimeInfo?.docker.available || runtimeInfo?.qemu.available || runtimeInfo?.vpcs.available || runtimeInfo?.dynamips.available ? <>No local templates yet. Pull a Docker image, add a QEMU disk under <code>{runtimeInfo.qemu.image_directory || "images/qemu"}</code>, install VPCS, or import a Cisco IOS image below.</> : <>Docker Engine, QEMU, VPCS, and Dynamips are unavailable. Check the controller service account's runtime access.</>}</Card>}
             </div>
-
-            {busy ? <div className="loading-card">Loading projects…</div> : filteredProjects.length ? (
-              <div className="project-grid">
-                {filteredProjects.map((item) => (
-                  <article className="project-card" key={item.project_id}>
-                    <div className="project-card-top"><div className="project-glyph">⌘</div><button className="icon-button" aria-label={`Delete ${item.name}`} onClick={() => void deleteProject(item)}>•••</button></div>
-                    <h3>{item.name}</h3>
-                    <div className="project-meta"><span className="project-status"><i />{item.status ?? "closed"}</span><span>Local project</span></div>
-                    <button className="card-open" onClick={() => navigateToProject(item.project_id)}>Open project <span>→</span></button>
-                  </article>
-                ))}
-              </div>
-            ) : projects.length ? (
-              <div className="empty-card"><div className="empty-icon">⌕</div><b>No matching projects</b><span>Try another search term.</span></div>
-            ) : (
-              <div className="empty-card"><div className="empty-icon">◇</div><b>No projects yet</b><span>Create a project above to start your first network lab.</span></div>
-            )}
-          </section>
-        )}
-      </main>
-
-      {nodeDialogOpen && (
-        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setNodeDialogOpen(false); }}>
-          <form className="modal-card" onSubmit={addNode}>
-            <div className="modal-heading"><div><div className="eyebrow">TOPOLOGY</div><h2>Add a node</h2></div><button type="button" className="icon-button" onClick={() => setNodeDialogOpen(false)} aria-label="Close">×</button></div>
-            <label className="field-label" htmlFor="node-name">Node name</label>
-            <input id="node-name" autoFocus placeholder="e.g. Core switch" value={nodeName} onChange={(event) => setNodeName(event.target.value)} />
-            <label className="field-label" htmlFor="node-template">Installed runtime image</label>
-            {loadingTemplates ? <div className="runtime-empty" role="status">Discovering local runtime images…</div> : templates.length ? (
-              <select id="node-template" value={templateId} onChange={(event) => {
-                const selected = templates.find((item) => item.template_id === event.target.value);
-                setTemplateId(event.target.value);
-                setNodeCommand(selected?.template_type === "docker" ? selected.start_command ?? "" : "");
-              }}>
-                {templates.map((template) => <option key={template.template_id} value={template.template_id}>{template.template_type === "qemu" ? "QEMU · " : "Docker · "}{template.name}</option>)}
-              </select>
-            ) : (
-              <div className="runtime-empty" role="status">
-                {runtimeInfo?.docker.available || runtimeInfo?.qemu.available
-                  ? <>No local runtime images. Pull a Docker image or place a QEMU disk image in <code>{runtimeInfo.qemu.image_directory || "images/qemu"}</code>.</>
-                  : <>Docker Engine and QEMU are unavailable. Install a runtime and make sure this service account can access it.</>}
-              </div>
-            )}
-            {templates.find((item) => item.template_id === templateId)?.template_type === "docker" && <>
-              <label className="field-label" htmlFor="node-command">Container command (optional)</label>
-              <input id="node-command" placeholder="e.g. /bin/sh -c 'sleep 3600'" value={nodeCommand} onChange={(event) => setNodeCommand(event.target.value)} />
-            </>}
-            {templates.find((item) => item.template_id === templateId)?.template_type === "qemu" ? (
-              <div className="node-type-note"><span className="node-mini-icon">▣</span><span><b>QEMU virtual machine</b><small>Creates a private copy-on-write disk. KVM is used when accessible; otherwise QEMU uses TCG.</small></span></div>
-            ) : templates.length > 0 ? (
-              <div className="node-type-note"><span className="node-mini-icon">▦</span><span><b>Docker container</b><small>Creates a stopped container from the selected local image.</small></span></div>
-            ) : null}
-            <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setNodeDialogOpen(false)}>Cancel</button><button className="primary-button" type="submit" disabled={!nodeName.trim() || !templateId || loadingTemplates || creatingNode}>{creatingNode ? "Creating…" : "Create node"}</button></div>
+            <Card className="grid gap-2 p-3 shadow-none"><Label htmlFor="qemu-image-upload">Add a QEMU disk image</Label>
+              <Input id="qemu-image-upload" type="file" accept=".qcow2,.qcow,.raw,.img,.vmdk,.vdi" disabled={uploadingQemuImage} onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; void importQemuImage(file); }} />
+              <p className="text-xs text-muted-foreground">{uploadingQemuImage ? "Uploading and validating with qemu-img…" : `Validated with qemu-img, then stored globally in ${runtimeInfo?.qemu.image_directory || "the QEMU image directory"}. Maximum upload size: 64 GiB.`}</p>
+            </Card>
+            <Card className="grid gap-2 p-3 shadow-none"><Label htmlFor="ios-image-upload">Import Cisco IOS for Dynamips</Label>
+              <Input id="ios-image-upload" type="file" accept=".bin,.image,.img,.elf" disabled={uploadingImage} onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; void importDynamipsImage(file); }} />
+              <p className="text-xs text-muted-foreground">{uploadingImage ? "Uploading and validating the IOS ELF image…" : `Validated as a Dynamips-compatible ELF image, then stored in ${runtimeInfo?.dynamips.image_directory || "images/dynamips"}.`}</p>
+            </Card>
+            {templates.find((item) => item.template_id === templateId)?.template_type === "docker" && <div className="grid gap-2"><Label htmlFor="node-command">Container command (optional)</Label><Input id="node-command" placeholder="e.g. /bin/sh -c 'sleep 3600'" value={nodeCommand} onChange={(event) => setNodeCommand(event.target.value)} /></div>}
+            {templates.find((item) => item.template_id === templateId)?.template_type === "vpcs" && <div className="grid gap-2"><Label htmlFor="vpcs-startup-script">Startup script (optional)</Label><Textarea id="vpcs-startup-script" rows={4} placeholder="ip 192.168.1.10/24" value={nodeStartupScript} onChange={(event) => setNodeStartupScript(event.target.value)} /></div>}
+            {selectedNodeTemplate?.template_type === "dynamips" && <><div className="grid gap-2"><Label htmlFor="dynamips-idlepc">Idle-PC address (optional)</Label><Input id="dynamips-idlepc" placeholder="0x606e0538" value={nodeIdlePc} onChange={(event) => setNodeIdlePc(event.target.value)} /></div><div className="grid gap-2"><Label htmlFor="dynamips-startup-config">IOS startup configuration (optional)</Label><Textarea id="dynamips-startup-config" rows={5} placeholder="hostname R1&#10;no ip domain-lookup" value={nodeStartupConfig} onChange={(event) => setNodeStartupConfig(event.target.value)} /></div></>}
+            {selectedNodeTemplate?.template_type === "qemu" && <Card className="p-3 text-xs text-muted-foreground shadow-none"><b className="text-foreground">QEMU virtual machine</b><p className="mt-1">Creates a private copy-on-write disk. {runtimeInfo?.qemu.kvm_accessible ? "KVM acceleration is available." : runtimeInfo?.qemu.acceleration_error ?? "QEMU may use TCG if KVM access is unavailable."}</p></Card>}
+            {selectedNodeTemplate?.template_type === "vpcs" && <Card className="p-3 text-xs text-muted-foreground shadow-none"><b className="text-foreground">Virtual PC simulator</b><p className="mt-1">Starts a lightweight VPCS process with one Ethernet adapter and an interactive console.</p></Card>}
+            {selectedNodeTemplate?.template_type === "dynamips" && <Card className="p-3 text-xs text-muted-foreground shadow-none"><b className="text-foreground">Cisco IOS router · Dynamips c7200</b><p className="mt-1">Creates a Dynamips hypervisor router from the imported IOS image.</p></Card>}
+            {selectedNodeTemplate?.template_type === "docker" && <Card className="p-3 text-xs text-muted-foreground shadow-none"><b className="text-foreground">Docker container</b><p className="mt-1">Creates a stopped container from the selected local image.</p></Card>}
+            <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setNodeDialogOpen(false)}>Cancel</Button><Button type="submit" disabled={!nodeName.trim() || !templateId || loadingTemplates || creatingNode || uploadingImage || uploadingQemuImage}>{creatingNode ? "Creating…" : "Create node"}</Button></div>
           </form>
-        </div>
-      )}
-    </div>
-  );
-}
+        </DialogContent>
+      </Dialog>
 
-type WorkspaceProps = {
-  busy: boolean;
-  project: Project | null;
-  topology: TopologySnapshot | null;
-  selection: Selection;
-  selectedNode: Node | null | undefined;
-  selectedLink: Link | null | undefined;
-  connecting: boolean;
-  firstEndpoint: string | null;
-  onBack: () => void;
-  onOpenNodeDialog: () => void;
-  onNodeLifecycle: (id: string, action: "start" | "stop" | "suspend" | "reload") => void;
-  onToggleConnect: () => void;
-  onDeleteSelection: () => void;
-  onNodeClick: (id: string) => void;
-  onLinkClick: (id: string) => void;
-  onNodeMove: (id: string, x: number, y: number) => void;
-  onNodeMoveEnd: (id: string, x: number, y: number) => void;
-};
-
-function ProjectWorkspace(props: WorkspaceProps) {
-  const [zoom, setZoom] = useState(1);
-  const { project, topology, busy } = props;
-  if (busy || !project || !topology) return <div className="workspace-loading"><span className="spinner" />Loading project topology…</div>;
-  const selected = props.selectedNode ?? props.selectedLink;
-
-  return (
-    <section className="workspace-page">
-      <div className="workspace-heading">
-        <div className="workspace-title"><button className="back-button" onClick={props.onBack} aria-label="Back to projects">←</button><div><div className="eyebrow">NETWORK LAB</div><h1>{project.name}</h1></div><span className="status-tag"><i />{project.status ?? "opened"}</span></div>
-        <div className="workspace-tools">
-          <button className="secondary-button" onClick={props.onToggleConnect} aria-pressed={props.connecting}><span className="button-glyph">⌁</span>{props.connecting ? "Cancel link" : "Connect nodes"}</button>
-          <button className="primary-button" onClick={props.onOpenNodeDialog}><span>＋</span> Add node</button>
-          <button className="icon-button delete-button" onClick={props.onDeleteSelection} disabled={!props.selection} aria-label="Delete selected item" title="Delete selected item">⌫</button>
-        </div>
+      {marketplaceOpen && <Suspense fallback={<div className="sim-dialog-loading">Loading image catalog…</div>}><MarketplaceDialog onClose={() => setMarketplaceOpen(false)} /></Suspense>}
       </div>
-
-      {props.connecting && <div className="connect-hint">{props.firstEndpoint ? "Now select the other node to finish the link." : "Select the first node, then the second node."}<button onClick={props.onToggleConnect}>Cancel</button></div>}
-
-      <div className="workspace-layout">
-        <div className="canvas-card">
-          <div className="canvas-toolbar"><div className="canvas-title"><span className="canvas-live"><i />Live</span><b>Topology</b><span className="canvas-separator" />{topology.nodes.length} nodes <span>·</span> {topology.links.length} links</div><div className="canvas-actions"><button aria-label="Zoom out" title="Zoom out" onClick={() => setZoom((value) => Math.max(0.6, Number((value - 0.1).toFixed(1))))}>−</button><span>{Math.round(zoom * 100)}%</span><button aria-label="Zoom in" title="Zoom in" onClick={() => setZoom((value) => Math.min(1.8, Number((value + 0.1).toFixed(1))))}>＋</button><button aria-label="Fit topology" title="Fit topology" onClick={() => setZoom(1)}>⤢</button></div></div>
-          <TopologyCanvas
-            nodes={topology.nodes}
-            links={topology.links}
-            drawings={topology.drawings}
-            zoom={zoom}
-            selection={props.selection}
-            connecting={props.connecting}
-            firstEndpoint={props.firstEndpoint}
-            onNodeClick={props.onNodeClick}
-            onLinkClick={props.onLinkClick}
-            onNodeMove={props.onNodeMove}
-            onNodeMoveEnd={props.onNodeMoveEnd}
-          />
-          <div className="canvas-footer"><span><kbd>Drag</kbd> to reposition</span><span><kbd>Click</kbd> to select</span><span>Changes save automatically</span></div>
-        </div>
-
-        <aside className="inspector-card">
-          <div className="inspector-heading"><div><div className="eyebrow">PROJECT</div><h2>Overview</h2></div><button className="icon-button" aria-label="Project options">•••</button></div>
-          <div className="stat-row"><div className="stat-icon node-stat">▦</div><div><b>{topology.nodes.length}</b><span>Nodes</span></div><div className="stat-icon link-stat">⌁</div><div><b>{topology.links.length}</b><span>Links</span></div></div>
-          <div className="inspector-divider" />
-          <div className="inspector-section"><div className="inspector-section-title">{selected ? "SELECTED ITEM" : "TOPOLOGY OBJECTS"}</div>
-            {props.selectedNode ? <>
-              <div className="selected-details"><div className="detail-icon">▣</div><div><b>{props.selectedNode.name}</b><span>{typeof props.selectedNode.image === "string" ? props.selectedNode.image : typeof props.selectedNode.hda_disk_image === "string" ? props.selectedNode.hda_disk_image.split("/").at(-1) : props.selectedNode.node_type ?? "Node"}</span><span className="detail-id">{props.selectedNode.node_id.slice(0, 8)}</span></div></div>
-              <div className="runtime-controls">
-                <span className={`runtime-state ${props.selectedNode.status === "started" ? "running" : ""}`}>{props.selectedNode.status ?? "stopped"}{props.selectedNode.runtime_missing ? " · runtime missing" : ""}</span>
-                <div className="runtime-actions">
-                  <button className="secondary-button" onClick={() => props.onNodeLifecycle(props.selectedNode!.node_id, props.selectedNode!.status === "started" ? "stop" : "start")} disabled={Boolean(props.selectedNode.runtime_missing)}>{props.selectedNode.status === "started" ? "Stop" : "Start"}</button>
-                  <button className="icon-button" onClick={() => props.onNodeLifecycle(props.selectedNode!.node_id, "suspend")} disabled={props.selectedNode.status !== "started"} title="Suspend node" aria-label="Suspend node">Ⅱ</button>
-                  <button className="icon-button" onClick={() => props.onNodeLifecycle(props.selectedNode!.node_id, "reload")} disabled={props.selectedNode.status !== "started"} title="Restart node" aria-label="Restart node">↻</button>
-                </div>
-              </div>
-            </> : null}
-            {props.selectedLink ? <div className="selected-details"><div className="detail-icon link-detail-icon">⌁</div><div><b>Ethernet link</b><span>{props.selectedLink.nodes.length} endpoints</span><span className="detail-id">{props.selectedLink.link_id.slice(0, 8)}</span></div></div> : null}
-            {!selected && <div className="object-list">
-              {topology.nodes.slice(0, 8).map((node) => <button key={node.node_id} onClick={() => props.onNodeClick(node.node_id)}><span className="object-glyph">▦</span><span>{node.name}</span><i className={node.status === "started" ? "running-dot" : "stopped-dot"} /></button>)}
-              {topology.nodes.length > 8 && <span className="more-items">+{topology.nodes.length - 8} more nodes</span>}
-              {topology.nodes.length === 0 && <span className="muted-small">Add a Docker container or QEMU virtual machine to begin.</span>}
-            </div>}
-          </div>
-          <div className="inspector-divider" />
-          <div className="inspector-section"><div className="inspector-section-title">PROJECT INFO</div><div className="info-row"><span>Drawings</span><b>{topology.drawings.length}</b></div><div className="info-row"><span>Event cursor</span><b>#{topology.event_cursor}</b></div><div className="info-row"><span>Controller</span><b className="controller-ok">Connected</b></div></div>
-          {selected && <button className="danger-action" onClick={props.onDeleteSelection}>Delete selected item</button>}
-          <div className="inspector-footnote">Project changes sync to the local controller.</div>
-        </aside>
-      </div>
-    </section>
-  );
-}
-
-type CanvasProps = {
-  nodes: Node[];
-  links: Link[];
-  drawings: Drawing[];
-  zoom: number;
-  selection: Selection;
-  connecting: boolean;
-  firstEndpoint: string | null;
-  onNodeClick: (id: string) => void;
-  onLinkClick: (id: string) => void;
-  onNodeMove: (id: string, x: number, y: number) => void;
-  onNodeMoveEnd: (id: string, x: number, y: number) => void;
-};
-
-type DragState = { nodeId: string; pointerId: number };
-
-function TopologyCanvas(props: CanvasProps) {
-  const svgRef = useRef<SVGSVGElement | null>(null);
-  const dragRef = useRef<DragState | null>(null);
-  const movedRef = useRef(false);
-  const pendingPositionRef = useRef<{ nodeId: string; x: number; y: number } | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
-  const nodeMap = useMemo(() => new Map(props.nodes.map((node) => [node.node_id, node])), [props.nodes]);
-  const renderedDrawings = useMemo(() => props.drawings.flatMap((drawing) => {
-    const markup = typeof drawing.svg === "string" ? sanitizeDrawingSvg(drawing.svg) : "";
-    return markup ? [{ drawing, markup }] : [];
-  }), [props.drawings]);
-  const view = {
-    width: scene.width / props.zoom,
-    height: scene.height / props.zoom,
-    x: -scene.width / props.zoom / 2,
-    y: -scene.height / props.zoom / 2,
-  };
-
-  useEffect(() => () => {
-    if (animationFrameRef.current !== null) window.cancelAnimationFrame(animationFrameRef.current);
-  }, []);
-
-  const pointerScenePoint = (event: PointerEvent<SVGSVGElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const scale = Math.min(rect.width / view.width, rect.height / view.height);
-    const offsetX = (rect.width - view.width * scale) / 2;
-    const offsetY = (rect.height - view.height * scale) / 2;
-    return {
-      x: view.x + (event.clientX - rect.left - offsetX) / scale,
-      y: view.y + (event.clientY - rect.top - offsetY) / scale,
-    };
-  };
-
-  function startMove(event: PointerEvent<SVGGElement>, node: Node) {
-    if (props.connecting || event.button !== 0) return;
-    event.stopPropagation();
-    dragRef.current = { nodeId: node.node_id, pointerId: event.pointerId };
-    movedRef.current = false;
-    svgRef.current?.setPointerCapture(event.pointerId);
-  }
-
-  function moveNode(event: PointerEvent<SVGSVGElement>) {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    const point = pointerScenePoint(event);
-    const x = Math.round(point.x / 10) * 10;
-    const y = Math.round(point.y / 10) * 10;
-    movedRef.current = true;
-    pendingPositionRef.current = { nodeId: drag.nodeId, x, y };
-    if (animationFrameRef.current === null) {
-      animationFrameRef.current = window.requestAnimationFrame(() => {
-        animationFrameRef.current = null;
-        const pending = pendingPositionRef.current;
-        if (pending) props.onNodeMove(pending.nodeId, pending.x, pending.y);
-      });
-    }
-  }
-
-  function endMove(event: PointerEvent<SVGSVGElement>) {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    dragRef.current = null;
-    if (movedRef.current) {
-      const point = pointerScenePoint(event);
-      const x = Math.round(point.x / 10) * 10;
-      const y = Math.round(point.y / 10) * 10;
-      if (animationFrameRef.current !== null) {
-        window.cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-      pendingPositionRef.current = null;
-      props.onNodeMove(drag.nodeId, x, y);
-      props.onNodeMoveEnd(drag.nodeId, x, y);
-    }
-  }
-
-  return (
-    <div className={`topology-canvas ${props.connecting ? "connect-mode" : ""}`}>
-      <svg ref={svgRef} viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`} role="group" aria-label="Network topology canvas" onPointerMove={moveNode} onPointerUp={endMove} onPointerCancel={endMove}>
-        <defs><pattern id="grid-dots" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="#dce2ed" /></pattern></defs>
-        <rect x={view.x} y={view.y} width={view.width} height={view.height} fill="url(#grid-dots)" />
-        {renderedDrawings.map(({ drawing, markup }) => <g key={drawing.drawing_id} transform={`translate(${Number(drawing.x ?? 0)},${Number(drawing.y ?? 0)}) rotate(${Number(drawing.rotation ?? 0)})`} style={{ pointerEvents: "none" }} dangerouslySetInnerHTML={{ __html: markup }} />)}
-        {props.links.map((link) => {
-          const [source, target] = link.nodes ?? [];
-          const sourceNode = source && nodeMap.get(source.node_id);
-          const targetNode = target && nodeMap.get(target.node_id);
-          if (!sourceNode || !targetNode) return null;
-          const selected = props.selection?.kind === "link" && props.selection.id === link.link_id;
-          return <g key={link.link_id} className={`link-group ${selected ? "selected" : ""}`} onClick={() => props.onLinkClick(link.link_id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onLinkClick(link.link_id); } }} role="button" aria-label={`Link ${sourceNode.name} to ${targetNode.name}`} tabIndex={0}>
-            <line x1={Number(sourceNode.x ?? 0)} y1={Number(sourceNode.y ?? 0)} x2={Number(targetNode.x ?? 0)} y2={Number(targetNode.y ?? 0)} />
-            <line className="link-hit-area" x1={Number(sourceNode.x ?? 0)} y1={Number(sourceNode.y ?? 0)} x2={Number(targetNode.x ?? 0)} y2={Number(targetNode.y ?? 0)} />
-          </g>;
-        })}
-        {props.nodes.map((node) => {
-          const x = Number(node.x ?? 0);
-          const y = Number(node.y ?? 0);
-          const selected = props.selection?.kind === "node" && props.selection.id === node.node_id;
-          const connecting = props.firstEndpoint === node.node_id;
-          return <g key={node.node_id} transform={`translate(${x},${y})`} className={`topology-node ${selected ? "selected" : ""} ${connecting ? "connect-origin" : ""}`} onPointerDown={(event) => startMove(event, node)} onClick={(event) => { event.stopPropagation(); if (!movedRef.current) props.onNodeClick(node.node_id); movedRef.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onNodeClick(node.node_id); } }} role="button" aria-label={`Node ${node.name}`} tabIndex={0}>
-            <circle className="node-shadow" r="27" />
-            <circle className="node-shape" r="25" />
-            <text className="node-icon" x="0" y="6">▣</text>
-            <text className="node-name" x="0" y="48">{node.name}</text>
-            <circle className={`node-status ${node.status === "started" ? "running" : "stopped"}`} cx="18" cy="-18" r="4" />
-          </g>;
-        })}
-        {props.nodes.length === 0 && <g className="canvas-empty" transform="translate(0,0)"><circle r="38" /><text className="canvas-empty-icon" y="9">＋</text><text className="canvas-empty-title" y="74">Your canvas is ready</text><text className="canvas-empty-copy" y="98">Add a node to start mapping your network.</text></g>}
-      </svg>
-      <div className="canvas-coordinate">x {scene.x} — {scene.x + scene.width} · y {scene.y} — {scene.y + scene.height}</div>
-    </div>
+    </TooltipProvider>
   );
 }
 
 function errorMessage(reason: unknown): string {
   return reason instanceof Error ? reason.message : "Something went wrong. Please try again.";
+}
+
+function samePort(left: LinkEndpoint, right: LinkEndpoint) {
+  return left.node_id === right.node_id && left.adapter_number === right.adapter_number && left.port_number === right.port_number;
+}
+
+function generatedNodeName(template: RuntimeTemplate, nodes: Node[], pendingNames: ReadonlySet<string>) {
+  let base: string;
+  if (template.template_type === "vpcs") base = "VPCS";
+  else if (template.template_type === "dynamips") base = "Cisco Router";
+  else if (template.template_type === "qemu") {
+    const name = template.name.replace(/\.(?:qcow2?|raw|img|vmdk|vdi)$/i, "").replace(/\s+\d+(?:\.\d+)*.*$/, "").trim();
+    base = name || "QEMU VM";
+  } else {
+    const imageName = template.image.split("/").at(-1)?.split(":")[0] || template.name;
+    base = imageName.charAt(0).toUpperCase() + imageName.slice(1);
+  }
+  const usedNames = new Set(nodes.map((node) => node.name));
+  let next = 1;
+  while (usedNames.has(`${base} ${next}`) || pendingNames.has(`${base} ${next}`)) next += 1;
+  return `${base} ${next}`;
+}
+
+function upsertNode(nodes: Node[], node: Node) {
+  return nodes.some((item) => item.node_id === node.node_id)
+    ? nodes.map((item) => item.node_id === node.node_id ? node : item)
+    : [...nodes, node];
+}
+
+function upsertLink(links: TopologySnapshot["links"], link: TopologySnapshot["links"][number]) {
+  return links.some((item) => item.link_id === link.link_id)
+    ? links.map((item) => item.link_id === link.link_id ? link : item)
+    : [...links, link];
 }
 
 export default App;

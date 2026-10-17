@@ -141,6 +141,8 @@ impl DockerRuntime {
             "create".to_owned(),
             "--name".to_owned(),
             container_name,
+            "--interactive".to_owned(),
+            "--tty".to_owned(),
             "--network".to_owned(),
             node_network.clone(),
             "--label".to_owned(),
@@ -150,6 +152,11 @@ impl DockerRuntime {
             "--label".to_owned(),
             format!("network-simulator.node-name={name}"),
             "--init".to_owned(),
+            // Network simulator nodes need to configure their interfaces and
+            // run packet tools (for example `ip addr` and `ping`) against
+            // ports attached later through uBridge.
+            "--cap-add=NET_ADMIN".to_owned(),
+            "--cap-add=NET_RAW".to_owned(),
         ];
         if let Some(memory_mb) = memory_mb.filter(|memory| *memory > 0) {
             args.extend(["--memory".to_owned(), format!("{memory_mb}m")]);
@@ -254,6 +261,50 @@ impl DockerRuntime {
             )
             .await?;
         Ok(normalize_docker_state(status.trim()))
+    }
+
+    pub async fn container_pid(&self, container_id: &str) -> Result<u32, RuntimeError> {
+        let output = self
+            .command(
+                ["inspect", "--format", "{{.State.Pid}}", container_id],
+                DOCKER_TIMEOUT,
+            )
+            .await?;
+        output.trim().parse::<u32>().map_err(|_| {
+            RuntimeError::Failed(format!(
+                "Docker returned an invalid network namespace PID for container {container_id}"
+            ))
+        })
+    }
+
+    pub fn attach_process(
+        &self,
+        container_id: &str,
+    ) -> Result<tokio::process::Child, RuntimeError> {
+        if container_id.len() < 12 || !container_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(RuntimeError::Failed(
+                "Docker returned an invalid container ID".to_owned(),
+            ));
+        }
+        let docker_binary = self.binary.to_string_lossy();
+        let docker_binary = shlex::try_quote(&docker_binary).map_err(|_| {
+            RuntimeError::Failed("Docker CLI path cannot be quoted safely".to_owned())
+        })?;
+        let attach_command = format!(
+            "{docker_binary} attach --sig-proxy=false --detach-keys=ctrl-p,ctrl-q {container_id}"
+        );
+        let mut command = Command::new("script");
+        command
+            .args(["-qfc", attach_command.as_str(), "/dev/null"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        command.spawn().map_err(|error| {
+            RuntimeError::Unavailable(format!(
+                "Could not start the Docker console terminal for container '{container_id}': {error}"
+            ))
+        })
     }
 
     pub async fn create_link(
@@ -515,8 +566,11 @@ fn normalize_docker_state(state: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        NodeAction, network_name, node_network_name, normalize_docker_state, parse_start_command,
+        DockerRuntime, NodeAction, network_name, node_network_name, normalize_docker_state,
+        parse_start_command,
     };
+    use serde_json::json;
+    use uuid::Uuid;
 
     #[test]
     fn maps_docker_states_to_controller_states() {
@@ -539,5 +593,119 @@ mod tests {
             ["/bin/sh", "-c", "sleep 60"]
         );
         assert!(parse_start_command("/bin/sh -c 'sleep 60").is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running Docker daemon and the alpine:latest image"]
+    async fn alpine_containers_exchange_packets_over_a_real_link_network() {
+        let runtime = DockerRuntime::new();
+        let project_id = Uuid::new_v4().to_string();
+        let node_a = Uuid::new_v4().to_string();
+        let node_b = Uuid::new_v4().to_string();
+        let link_id = Uuid::new_v4().to_string();
+        let mut containers = Vec::new();
+
+        let run: Result<(), super::RuntimeError> = async {
+            let (container_a, _) = runtime
+                .create_container(
+                    &project_id,
+                    &node_a,
+                    "alpine:latest",
+                    "Alpine A",
+                    Some("/bin/sh -c 'sleep 3600'"),
+                    None,
+                    None,
+                )
+                .await?;
+            containers.push(container_a.clone());
+            let (container_b, _) = runtime
+                .create_container(
+                    &project_id,
+                    &node_b,
+                    "alpine:latest",
+                    "Alpine B",
+                    Some("/bin/sh -c 'sleep 3600'"),
+                    None,
+                    None,
+                )
+                .await?;
+            containers.push(container_b.clone());
+            runtime.lifecycle(&container_a, NodeAction::Start).await?;
+            runtime.lifecycle(&container_b, NodeAction::Start).await?;
+
+            runtime
+                .create_link(
+                    &project_id,
+                    &link_id,
+                    &[
+                        json!({"container_id": container_a}),
+                        json!({"container_id": container_b}),
+                    ],
+                )
+                .await?;
+            let network = network_name(&link_id);
+            let address_a = runtime
+                .command(
+                    [
+                        "inspect",
+                        "--format",
+                        &format!(
+                            "{{{{(index .NetworkSettings.Networks \"{network}\").IPAddress}}}}"
+                        ),
+                        &container_a,
+                    ],
+                    std::time::Duration::from_secs(30),
+                )
+                .await?;
+            let address_b = runtime
+                .command(
+                    [
+                        "inspect",
+                        "--format",
+                        &format!(
+                            "{{{{(index .NetworkSettings.Networks \"{network}\").IPAddress}}}}"
+                        ),
+                        &container_b,
+                    ],
+                    std::time::Duration::from_secs(30),
+                )
+                .await?;
+            assert!(!address_a.trim().is_empty());
+            assert!(!address_b.trim().is_empty());
+            runtime
+                .command(
+                    [
+                        "exec",
+                        &container_a,
+                        "ping",
+                        "-c",
+                        "3",
+                        "-W",
+                        "2",
+                        address_b.trim(),
+                    ],
+                    std::time::Duration::from_secs(20),
+                )
+                .await?;
+            Ok(())
+        }
+        .await;
+
+        let endpoints = containers
+            .iter()
+            .map(|container_id| json!({"container_id": container_id}))
+            .collect::<Vec<_>>();
+        let _ = runtime.remove_link(&link_id, &endpoints).await;
+        for container_id in containers {
+            let _ = runtime.remove_container(&container_id).await;
+        }
+        let _ = runtime.remove_node_resources(&node_a, None).await;
+        let _ = runtime.remove_node_resources(&node_b, None).await;
+        if let Err(error) = run {
+            panic!(
+                "real Docker Alpine connectivity check failed: {}",
+                error.message()
+            );
+        }
     }
 }

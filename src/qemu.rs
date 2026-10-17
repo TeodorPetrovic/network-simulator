@@ -1,6 +1,7 @@
 use std::{
     fs,
     io::ErrorKind,
+    net::Ipv4Addr,
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -37,6 +38,7 @@ pub struct QemuVm {
     pub image: PathBuf,
     pub overlay: PathBuf,
     pub qmp_socket: PathBuf,
+    pub serial_socket: PathBuf,
     pub pid_file: PathBuf,
     pub log_file: PathBuf,
     pub memory_mb: u64,
@@ -48,8 +50,9 @@ pub struct QemuVm {
 pub struct QemuLink {
     pub link_id: String,
     pub adapter_number: u32,
-    pub local_port: u16,
-    pub remote_port: u16,
+    pub multicast_address: Ipv4Addr,
+    pub multicast_port: u16,
+    pub tap: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -60,6 +63,8 @@ pub struct QemuRuntimeInfo {
     pub image_directory: String,
     pub image_count: usize,
     pub acceleration: String,
+    pub kvm_accessible: bool,
+    pub acceleration_error: Option<String>,
     pub error: Option<String>,
 }
 
@@ -75,9 +80,7 @@ impl QemuRuntime {
             qemu_img: std::env::var_os("NETWORK_SIMULATOR_QEMU_IMG")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("qemu-img")),
-            image_dir: std::env::var_os("NETWORK_SIMULATOR_QEMU_IMAGES")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("images/qemu")),
+            image_dir: crate::image_paths::qemu_images(),
             qmp_dir: std::env::var_os("NETWORK_SIMULATOR_QEMU_SOCKETS")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| std::env::temp_dir().join("network-simulator-qemu")),
@@ -134,13 +137,17 @@ impl QemuRuntime {
         } else {
             None
         };
+        let acceleration_error = kvm_access_error();
+        let kvm_accessible = acceleration_error.is_none();
         QemuRuntimeInfo {
             available: error.is_none(),
             version,
             qemu_img_available,
             image_directory,
             image_count: images.len(),
-            acceleration: if kvm_accessible() { "KVM" } else { "TCG" }.to_owned(),
+            acceleration: if kvm_accessible { "KVM" } else { "TCG" }.to_owned(),
+            kvm_accessible,
+            acceleration_error,
             error,
         }
     }
@@ -225,6 +232,7 @@ impl QemuRuntime {
             image,
             overlay: vm_dir.join(format!("{node_id}.qcow2")),
             qmp_socket: self.qmp_dir.join(format!("{node_id}.sock")),
+            serial_socket: self.qmp_dir.join(format!("{node_id}.serial.sock")),
             pid_file: vm_dir.join(format!("{node_id}.pid")),
             log_file: vm_dir.join(format!("{node_id}.log")),
             memory_mb,
@@ -297,7 +305,13 @@ impl QemuRuntime {
 
     pub async fn remove_vm(&self, vm: &QemuVm) -> Result<(), RuntimeError> {
         self.stop(vm).await?;
-        for path in [&vm.overlay, &vm.qmp_socket, &vm.pid_file, &vm.log_file] {
+        for path in [
+            &vm.overlay,
+            &vm.qmp_socket,
+            &vm.serial_socket,
+            &vm.pid_file,
+            &vm.log_file,
+        ] {
             match fs::remove_file(path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == ErrorKind::NotFound => {}
@@ -318,6 +332,10 @@ impl QemuRuntime {
         let image = required_path(node, "hda_disk_image")?;
         let overlay = required_path(node, "runtime_overlay")?;
         let qmp_socket = required_path(node, "runtime_qmp_socket")?;
+        let serial_socket = node["runtime_serial_socket"]
+            .as_str()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| qmp_socket.with_file_name(format!("{node_id}.serial.sock")));
         let pid_file = required_path(node, "runtime_pid_file")?;
         let log_file = required_path(node, "runtime_log_file")?;
         Ok(QemuVm {
@@ -325,6 +343,7 @@ impl QemuRuntime {
             image,
             overlay,
             qmp_socket,
+            serial_socket,
             pid_file,
             log_file,
             memory_mb: node["memory"].as_u64().unwrap_or(512).max(1),
@@ -338,42 +357,86 @@ impl QemuRuntime {
             "hda_disk_image": vm.image,
             "runtime_overlay": vm.overlay,
             "runtime_qmp_socket": vm.qmp_socket,
+            "runtime_serial_socket": vm.serial_socket,
             "runtime_pid_file": vm.pid_file,
             "runtime_log_file": vm.log_file
         })
     }
 
-    pub fn allocate_link_ports(&self) -> Result<(u16, u16), RuntimeError> {
-        // Port zero asks the kernel for two currently unused loopback UDP ports.
-        // They are persisted in the link record before either guest starts.
-        let local = std::net::UdpSocket::bind(("127.0.0.1", 0)).map_err(|error| {
-            RuntimeError::Unavailable(format!("Could not allocate a QEMU link port: {error}"))
+    pub fn multicast_endpoint(link_id: &str) -> Result<(Ipv4Addr, u16), RuntimeError> {
+        let id = parse_id(link_id)?;
+        let bytes = id.as_bytes();
+        let address = Ipv4Addr::new(239, bytes[0], bytes[1], bytes[2]);
+        let port_seed = u16::from_be_bytes([bytes[3], bytes[4]]);
+        let port = 1024 + (port_seed % (u16::MAX - 1024));
+        Ok((address, port))
+    }
+
+    pub fn prepare_upload_name(&self, file_name: &str) -> Result<(PathBuf, PathBuf), RuntimeError> {
+        let safe_name = safe_disk_image_name(file_name)?;
+        fs::create_dir_all(&self.image_dir).map_err(|error| {
+            RuntimeError::Failed(format!(
+                "Could not create QEMU image directory '{}': {error}",
+                self.image_dir.display()
+            ))
         })?;
-        let local_port = local
-            .local_addr()
-            .map_err(|error| {
-                RuntimeError::Unavailable(format!(
-                    "Could not read allocated QEMU link port: {error}"
-                ))
-            })?
-            .port();
-        drop(local);
-        let remote = std::net::UdpSocket::bind(("127.0.0.1", 0)).map_err(|error| {
-            RuntimeError::Unavailable(format!("Could not allocate a QEMU link port: {error}"))
+        let directory = self.image_dir.canonicalize().map_err(|error| {
+            RuntimeError::Failed(format!("Could not resolve QEMU image directory: {error}"))
         })?;
-        let remote_port = remote
-            .local_addr()
-            .map_err(|error| {
-                RuntimeError::Unavailable(format!(
-                    "Could not read allocated QEMU link port: {error}"
-                ))
-            })?
-            .port();
-        if local_port == remote_port {
-            return self.allocate_link_ports();
+        let final_path = directory.join(&safe_name);
+        if final_path.exists() {
+            return Err(RuntimeError::Failed(format!(
+                "A QEMU image named '{safe_name}' already exists"
+            )));
         }
-        drop(remote);
-        Ok((local_port, remote_port))
+        let temporary_path = directory.join(format!(".{}.{}.upload", Uuid::new_v4(), safe_name));
+        Ok((temporary_path, final_path))
+    }
+
+    pub async fn finalize_uploaded_image(
+        &self,
+        temporary_path: &Path,
+        final_path: &Path,
+    ) -> Result<PathBuf, RuntimeError> {
+        let metadata = fs::metadata(temporary_path).map_err(|error| {
+            RuntimeError::Failed(format!("Could not read uploaded QEMU image: {error}"))
+        })?;
+        if metadata.len() == 0 {
+            return Err(RuntimeError::Failed(
+                "QEMU image upload is empty".to_owned(),
+            ));
+        }
+        let output = self
+            .command(
+                &self.qemu_img,
+                [
+                    "info",
+                    "--output=json",
+                    temporary_path.to_str().ok_or_else(|| {
+                        RuntimeError::Failed("QEMU image path is not valid UTF-8".to_owned())
+                    })?,
+                ],
+                COMMAND_TIMEOUT,
+            )
+            .await?;
+        let info: Value = serde_json::from_str(&output).map_err(|error| {
+            RuntimeError::Failed(format!("qemu-img returned invalid image metadata: {error}"))
+        })?;
+        let format = info["format"].as_str().unwrap_or_default();
+        if !image_format_matches(final_path, format) {
+            return Err(RuntimeError::Failed(format!(
+                "QEMU image extension does not match detected format '{format}'"
+            )));
+        }
+        fs::hard_link(temporary_path, final_path).map_err(|error| {
+            RuntimeError::Failed(format!("Could not install QEMU image: {error}"))
+        })?;
+        fs::remove_file(temporary_path).map_err(|error| {
+            RuntimeError::Failed(format!("Could not finalize QEMU image upload: {error}"))
+        })?;
+        final_path.canonicalize().map_err(|error| {
+            RuntimeError::Failed(format!("Could not resolve installed QEMU image: {error}"))
+        })
     }
 
     fn image_files(&self) -> Result<Vec<PathBuf>, RuntimeError> {
@@ -466,6 +529,7 @@ impl QemuRuntime {
             }
         }
         let _ = fs::remove_file(&vm.qmp_socket);
+        let _ = fs::remove_file(&vm.serial_socket);
         let _ = fs::remove_file(&vm.pid_file);
         let _ = fs::remove_file(&vm.log_file);
         let mut command = Command::new(&self.binary);
@@ -484,8 +548,13 @@ impl QemuRuntime {
             .arg("none")
             .arg("-monitor")
             .arg("none")
+            .arg("-chardev")
+            .arg(format!(
+                "socket,id=serial0,path={},server=on,wait=off",
+                qemu_keyval_escape(&vm.serial_socket.display().to_string())
+            ))
             .arg("-serial")
-            .arg("none")
+            .arg("chardev:serial0")
             .arg("-no-reboot")
             .arg("-accel")
             .arg(if kvm_accessible() { "kvm" } else { "tcg" })
@@ -502,9 +571,7 @@ impl QemuRuntime {
             command.arg("-nic").arg("none");
         } else {
             for link in links {
-                if u32::from(link.local_port) == u32::from(link.remote_port)
-                    || link.adapter_number >= vm.adapters
-                {
+                if link.adapter_number >= vm.adapters {
                     return Err(RuntimeError::Failed(format!(
                         "Invalid QEMU link configuration for adapter {}",
                         link.adapter_number
@@ -513,10 +580,7 @@ impl QemuRuntime {
                 let net_id = format!("ns_{}", link.link_id.replace('-', ""));
                 command
                     .arg("-netdev")
-                    .arg(format!(
-                        "dgram,id={net_id},local.type=inet,local.host=127.0.0.1,local.port={},remote.type=inet,remote.host=127.0.0.1,remote.port={}",
-                        link.local_port, link.remote_port
-                    ))
+                    .arg(qemu_netdev_argument(link, &net_id))
                     .arg("-device")
                     .arg(format!(
                         "virtio-net-pci,netdev={net_id},mac={}",
@@ -589,6 +653,7 @@ impl QemuRuntime {
         }
         if !vm.qmp_socket.exists() {
             let _ = fs::remove_file(&vm.qmp_socket);
+            let _ = fs::remove_file(&vm.serial_socket);
             let _ = fs::remove_file(&vm.pid_file);
             return Ok("stopped".to_owned());
         }
@@ -600,6 +665,7 @@ impl QemuRuntime {
                 )));
             }
             let _ = fs::remove_file(&vm.qmp_socket);
+            let _ = fs::remove_file(&vm.serial_socket);
             let _ = fs::remove_file(&vm.pid_file);
             return Ok("stopped".to_owned());
         }
@@ -613,6 +679,7 @@ impl QemuRuntime {
             sleep(Duration::from_millis(100)).await;
         }
         let _ = fs::remove_file(&vm.qmp_socket);
+        let _ = fs::remove_file(&vm.serial_socket);
         let _ = fs::remove_file(&vm.pid_file);
         Ok("stopped".to_owned())
     }
@@ -761,6 +828,38 @@ fn is_disk_image(path: &Path) -> bool {
     )
 }
 
+fn safe_disk_image_name(file_name: &str) -> Result<String, RuntimeError> {
+    if file_name.is_empty()
+        || file_name.len() > 180
+        || file_name.starts_with('.')
+        || !file_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'+'))
+        || !is_disk_image(Path::new(file_name))
+    {
+        return Err(RuntimeError::Failed(
+            "QEMU image name must be a single supported disk-image filename".to_owned(),
+        ));
+    }
+    Ok(file_name.to_owned())
+}
+
+fn image_format_matches(path: &Path, format: &str) -> bool {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("qcow2") => format == "qcow2",
+        Some("qcow") => format == "qcow",
+        Some("raw" | "img") => format == "raw",
+        Some("vmdk") => format == "vmdk",
+        Some("vdi") => format == "vdi",
+        _ => false,
+    }
+}
+
 fn qemu_keyval_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace(',', "\\,")
 }
@@ -775,6 +874,17 @@ fn mac_address(node_id: &str, adapter_number: u32) -> String {
         bytes[14] ^ ((adapter_number >> 8) as u8),
         bytes[15] ^ (adapter_number as u8)
     )
+}
+
+fn qemu_netdev_argument(link: &QemuLink, net_id: &str) -> String {
+    if let Some(tap) = &link.tap {
+        format!("tap,id={net_id},ifname={tap},script=no,downscript=no")
+    } else {
+        format!(
+            "socket,id={net_id},mcast={}:{},localaddr=127.0.0.1",
+            link.multicast_address, link.multicast_port
+        )
+    }
 }
 
 fn process_matches(pid_file: &Path, qmp_socket: &Path) -> bool {
@@ -812,6 +922,19 @@ fn kvm_accessible() -> bool {
         .is_ok()
 }
 
+fn kvm_access_error() -> Option<String> {
+    match fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/kvm")
+    {
+        Ok(_) => None,
+        Err(error) => Some(format!(
+            "KVM is unavailable to this service account: {error}"
+        )),
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct ImageInfo {
     format: String,
@@ -830,7 +953,10 @@ mod tests {
     use serde_json::{Value, json};
     use tempfile::TempDir;
 
-    use super::{QemuRuntime, mac_address, qemu_keyval_escape, qmp_execute_inner};
+    use super::{
+        QemuLink, QemuRuntime, image_format_matches, mac_address, qemu_keyval_escape,
+        qemu_netdev_argument, qmp_execute_inner, safe_disk_image_name,
+    };
 
     #[test]
     fn qmp_process_fixture() {
@@ -911,6 +1037,53 @@ mod tests {
         );
     }
 
+    #[test]
+    fn mixed_runtime_qemu_links_use_the_shared_tap_device() {
+        let link = QemuLink {
+            link_id: "00000000-0000-0000-0000-000000000001".to_owned(),
+            adapter_number: 2,
+            multicast_address: "239.1.2.3".parse().unwrap(),
+            multicast_port: 20_000,
+            tap: Some("nst0123456789ab".to_owned()),
+        };
+        assert_eq!(
+            qemu_netdev_argument(&link, "ns_00000000000000000000000000000001"),
+            "tap,id=ns_00000000000000000000000000000001,ifname=nst0123456789ab,script=no,downscript=no"
+        );
+    }
+
+    #[test]
+    fn serial_socket_is_persisted_and_derived_for_older_qemu_nodes() {
+        let directory = TempDir::new().expect("temporary QEMU directory");
+        let runtime = QemuRuntime::with_paths(
+            "qemu-system-x86_64",
+            "qemu-img",
+            directory.path().join("images"),
+            directory.path().join("state"),
+            directory.path().join("sockets"),
+        );
+        let node = json!({
+            "project_id": "00000000-0000-4000-8000-000000000001",
+            "node_id": "00000000-0000-4000-8000-000000000002",
+            "hda_disk_image": "/tmp/router.qcow2",
+            "runtime_overlay": "/tmp/router-overlay.qcow2",
+            "runtime_qmp_socket": "/tmp/controller/node.sock",
+            "runtime_pid_file": "/tmp/node.pid",
+            "runtime_log_file": "/tmp/node.log"
+        });
+        let vm = runtime.vm_from_node(&node).expect("node runtime is valid");
+        assert_eq!(
+            vm.serial_socket,
+            std::path::Path::new(
+                "/tmp/controller/00000000-0000-4000-8000-000000000002.serial.sock",
+            )
+        );
+        assert_eq!(
+            runtime.runtime_fields(&vm)["runtime_serial_socket"],
+            vm.serial_socket.display().to_string()
+        );
+    }
+
     #[tokio::test]
     async fn performs_qmp_handshake_and_skips_events_before_matching_reply() {
         let directory = TempDir::new().expect("temporary QMP directory");
@@ -977,5 +1150,28 @@ mod tests {
         assert_eq!(templates[0]["template_type"], "qemu");
         assert_eq!(templates[0]["name"], "router.qcow2");
         assert!(templates[0]["template_id"].as_str().is_some());
+    }
+
+    #[test]
+    fn qemu_upload_names_and_formats_are_checked_before_becoming_templates() {
+        assert_eq!(
+            safe_disk_image_name("router.qcow2").unwrap(),
+            "router.qcow2"
+        );
+        assert!(safe_disk_image_name("../router.qcow2").is_err());
+        assert!(safe_disk_image_name("router.iso").is_err());
+        assert!(safe_disk_image_name(".hidden.qcow2").is_err());
+        assert!(image_format_matches(
+            std::path::Path::new("router.qcow2"),
+            "qcow2"
+        ));
+        assert!(image_format_matches(
+            std::path::Path::new("router.img"),
+            "raw"
+        ));
+        assert!(!image_format_matches(
+            std::path::Path::new("router.qcow2"),
+            "raw"
+        ));
     }
 }

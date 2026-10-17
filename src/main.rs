@@ -1,7 +1,12 @@
 mod api;
+mod dynamips;
+mod image_paths;
+mod marketplace;
 mod qemu;
 mod runtime;
 mod storage;
+mod ubridge;
+mod vpcs;
 
 use std::{env, net::SocketAddr, path::Path};
 
@@ -23,6 +28,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
+    image_paths::create_default_directories()?;
+
     let bind_address: SocketAddr = env::var("NETWORK_SIMULATOR_BIND")
         .unwrap_or_else(|_| "127.0.0.1:3080".to_owned())
         .parse()?;
@@ -30,7 +37,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let app = api::router(api::AppState::new(store));
     let listener = tokio::net::TcpListener::bind(bind_address).await?;
 
-    tracing::info!(%bind_address, %database_path, "network simulator controller listening");
+    tracing::info!(
+        %bind_address,
+        %database_path,
+        qemu_images = %image_paths::qemu_images().display(),
+        dynamips_images = %image_paths::dynamips_images().display(),
+        appliance_definitions = %image_paths::appliance_definitions().display(),
+        "network simulator controller listening"
+    );
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
