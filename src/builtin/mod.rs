@@ -19,7 +19,9 @@ use crate::{links::AdapterNio, runtime::RuntimeError};
 
 const DEFAULT_PORTS: usize = 8;
 const MAX_PORTS: usize = 256;
+const MAX_FDB_ENTRIES: usize = 8192;
 const FDB_AGE: Duration = Duration::from_secs(300);
+const FDB_AGE_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SwitchPortMode {
@@ -67,6 +69,10 @@ pub struct BuiltinRuntime {
 }
 
 impl BuiltinRuntime {
+    pub fn validate_host_interfaces(node: &Value) -> Result<(), String> {
+        crate::builtin::validate_host_interfaces(node)
+    }
+
     pub fn templates() -> Vec<Value> {
         let switch_id = builtin_template_id("ethernet_switch");
         let hub_id = builtin_template_id("ethernet_hub");
@@ -190,6 +196,11 @@ impl BuiltinRuntime {
         object.entry("locked").or_insert(json!(false));
         object.entry("properties").or_insert(json!({}));
 
+        if matches!(node_type.as_str(), "cloud" | "nat") {
+            let allowed = normalize_host_interface_allowlist(object.get("allow_host_interfaces"))?;
+            object.insert("allow_host_interfaces".into(), json!(allowed));
+        }
+
         let mapping = object.get("ports_mapping").cloned();
         let ports_mapping = match node_type.as_str() {
             "ethernet_switch" => normalize_switch_ports(mapping)?,
@@ -241,14 +252,13 @@ impl BuiltinRuntime {
                 "name",
                 "usage",
                 "ports_mapping",
+                "allow_host_interfaces",
                 "remote_console_host",
                 "remote_console_port",
                 "remote_console_type",
                 "remote_console_http_path",
             ],
-            // NAT's port mapping is fixed by its host NAT interface, matching
-            // the upstream NAT configurator, which exposes only its name.
-            "nat" => &["name", "usage"],
+            "nat" => &["name", "usage", "allow_host_interfaces"],
             _ => return Err(format!("Unsupported builtin node type '{node_type}'")),
         };
 
@@ -363,6 +373,10 @@ impl BuiltinRuntime {
         }
         let node_id = node["node_id"].as_str().unwrap_or_default().to_owned();
         let port_number = endpoint["port_number"].as_u64().unwrap_or_default() as u16;
+        let key = (node_id.clone(), port_number);
+        if self.state.lock().await.active_ports.contains_key(&key) {
+            return Ok(());
+        }
         let adapter_port = port_from_endpoint(endpoint, "runtime_adapter_port")?;
         let runtime_port = port_from_endpoint(endpoint, "runtime_udp_port")?;
         let local = SocketAddr::from((Ipv4Addr::LOCALHOST, runtime_port));
@@ -377,12 +391,8 @@ impl BuiltinRuntime {
         } else {
             None
         };
-        let key = (node_id.clone(), port_number);
         let forwarding = {
             let mut state = self.state.lock().await;
-            if let Some(existing) = state.active_ports.get(&key) {
-                existing.task.abort();
-            }
             let instance = state
                 .forwarding
                 .entry(node_id.clone())
@@ -419,15 +429,20 @@ impl BuiltinRuntime {
         let task_socket = socket.clone();
         let task = tokio::spawn(async move {
             let mut buffer = vec![0u8; 65_536];
+            let mut aging = tokio::time::interval(FDB_AGE_INTERVAL);
+            aging.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
-                let Ok((length, _)) = task_socket.recv_from(&mut buffer).await else {
-                    break;
-                };
-                let frame = buffer[..length].to_vec();
-                for (target_socket, target_address, output) in
-                    forward_frame(&forwarding, port_number, frame).await
-                {
-                    let _ = target_socket.send_to(&output, target_address).await;
+                tokio::select! {
+                    received = task_socket.recv_from(&mut buffer) => {
+                        let Ok((length, _)) = received else { break; };
+                        let frame = buffer[..length].to_vec();
+                        for (target_socket, target_address, output) in
+                            forward_frame(&forwarding, port_number, frame).await
+                        {
+                            let _ = target_socket.send_to(&output, target_address).await;
+                        }
+                    }
+                    _ = aging.tick() => age_forwarding_table(&forwarding).await,
                 }
             }
         });
@@ -527,6 +542,7 @@ fn default_nat_interface() -> String {
 }
 
 fn default_host_interfaces() -> Vec<Value> {
+    let uplinks = default_route_interfaces();
     let Ok(entries) = std::fs::read_dir("/sys/class/net") else {
         return Vec::new();
     };
@@ -540,6 +556,7 @@ fn default_host_interfaces() -> Vec<Value> {
                 && !name.starts_with("veth")
                 && !name.starts_with("ns")
                 && !name.starts_with("gns3")
+                && !uplinks.contains(name)
         })
         .collect::<Vec<_>>();
     interfaces.sort();
@@ -715,6 +732,143 @@ fn normalize_nat_ports(
     Ok(vec![
         json!({"name":"nat0","port_number":0,"type":"ethernet","interface":interface}),
     ])
+}
+
+/// Validate Cloud/NAT host interfaces against the actual host and controller
+/// safety policy. A node's `allow_host_interfaces` array and the optional
+/// `NETWORK_SIMULATOR_ALLOW_HOST_INTERFACES` operator allowlist grant explicit
+/// exceptions. NAT always permits its configured default (`virbr0` by default);
+/// Cloud requires an allowlist entry for loopback and default-route interfaces.
+pub fn validate_host_interfaces(node: &Value) -> Result<(), String> {
+    let node_type = node["node_type"].as_str().unwrap_or_default();
+    if node_type != "cloud" && node_type != "nat" {
+        return Ok(());
+    }
+    let mut allowed = configured_allowed_host_interfaces()?;
+    allowed.extend(normalize_host_interface_allowlist(
+        node.get("allow_host_interfaces"),
+    )?);
+    let default_routes = default_route_interfaces();
+    let mappings = node["ports_mapping"]
+        .as_array()
+        .ok_or_else(|| "Builtin host node has no port mappings".to_owned())?;
+    for mapping in mappings {
+        let kind = mapping["type"].as_str().unwrap_or_default();
+        if !matches!(kind, "ethernet" | "tap") {
+            continue;
+        }
+        let interface = safe_interface_name(mapping["interface"].as_str())?;
+        if !std::path::Path::new("/sys/class/net")
+            .join(&interface)
+            .exists()
+        {
+            return Err(format!("Host interface '{interface}' does not exist"));
+        }
+        validate_host_interface_policy(
+            node_type,
+            &interface,
+            &default_nat_interface(),
+            &allowed,
+            &default_routes,
+            is_loopback_interface(&interface),
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_host_interface_policy(
+    node_type: &str,
+    interface: &str,
+    nat_default: &str,
+    allowed: &HashSet<String>,
+    default_routes: &HashSet<String>,
+    loopback: bool,
+) -> Result<(), String> {
+    if node_type == "nat" {
+        if interface != nat_default && !allowed.contains(interface) {
+            return Err(format!(
+                "NAT interface '{interface}' is not the configured default; add it to allow_host_interfaces to permit it"
+            ));
+        }
+    } else {
+        let protected = loopback || default_routes.contains(interface);
+        if protected && !allowed.contains(interface) {
+            return Err(format!(
+                "Cloud interface '{interface}' is the controller loopback or default-route interface; add it to allow_host_interfaces to permit it"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn configured_allowed_host_interfaces() -> Result<HashSet<String>, String> {
+    let mut allowed = HashSet::new();
+    if let Some(configured) = std::env::var_os("NETWORK_SIMULATOR_ALLOW_HOST_INTERFACES") {
+        for interface in configured.to_string_lossy().split(',').map(str::trim) {
+            if interface.is_empty() {
+                continue;
+            }
+            allowed.insert(safe_interface_name(Some(interface))?);
+        }
+    }
+    Ok(allowed)
+}
+
+fn normalize_host_interface_allowlist(value: Option<&Value>) -> Result<HashSet<String>, String> {
+    let Some(value) = value else {
+        return Ok(HashSet::new());
+    };
+    let interfaces = value.as_array().ok_or_else(|| {
+        "allow_host_interfaces must be an array of host interface names".to_owned()
+    })?;
+    interfaces
+        .iter()
+        .map(|interface| {
+            let interface = interface.as_str().ok_or_else(|| {
+                "allow_host_interfaces entries must be host interface names".to_owned()
+            })?;
+            safe_interface_name(Some(interface))
+        })
+        .collect()
+}
+
+fn default_route_interfaces() -> HashSet<String> {
+    let mut interfaces = HashSet::new();
+    if let Ok(routes) = std::fs::read_to_string("/proc/net/route") {
+        for line in routes.lines().skip(1) {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            if fields.len() < 4 || fields[1] != "00000000" {
+                continue;
+            }
+            if u32::from_str_radix(fields[3], 16).is_ok_and(|flags| flags & 1 != 0) {
+                interfaces.insert(fields[0].to_owned());
+            }
+        }
+    }
+    if let Ok(routes) = std::fs::read_to_string("/proc/net/ipv6_route") {
+        for line in routes.lines() {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            if fields.len() >= 10 && fields[0].bytes().all(|byte| byte == b'0') && fields[1] == "00"
+            {
+                interfaces.insert(fields[9].to_owned());
+            }
+        }
+    }
+    interfaces
+}
+
+fn is_loopback_interface(interface: &str) -> bool {
+    if interface == "lo" {
+        return true;
+    }
+    std::fs::read_to_string(
+        std::path::Path::new("/sys/class/net")
+            .join(interface)
+            .join("flags"),
+    )
+    .ok()
+    .and_then(|flags| u32::from_str_radix(flags.trim().trim_start_matches("0x"), 16).ok())
+    .is_some_and(|flags| flags & 0x8 != 0)
 }
 
 fn normalize_cloud_console(object: &mut serde_json::Map<String, Value>) -> Result<(), String> {
@@ -895,17 +1049,11 @@ async fn forward_frame(
     }
     let source_mac: [u8; 6] = frame[6..12].try_into().unwrap_or([0; 6]);
     let destination_mac: [u8; 6] = frame[0..6].try_into().unwrap_or([0; 6]);
+    let now = Instant::now();
+    age_forwarding_node(&mut node, now);
     if !is_multicast(source_mac) && source_mac != [0; 6] {
-        node.learned.insert(
-            (vlan, source_mac),
-            LearnedAddress {
-                port: source_port,
-                learned_at: Instant::now(),
-            },
-        );
+        learn_address(&mut node, vlan, source_mac, source_port, now);
     }
-    node.learned
-        .retain(|_, learned| learned.learned_at.elapsed() < FDB_AGE);
 
     let known_destination = (!is_multicast(destination_mac))
         .then(|| {
@@ -929,6 +1077,37 @@ async fn forward_frame(
             Some((target.socket.clone(), target.relay_address, output))
         })
         .collect()
+}
+
+async fn age_forwarding_table(forwarding: &Arc<Mutex<ForwardingNode>>) {
+    age_forwarding_node(&mut *forwarding.lock().await, Instant::now());
+}
+
+fn age_forwarding_node(node: &mut ForwardingNode, now: Instant) {
+    node.learned
+        .retain(|_, learned| now.saturating_duration_since(learned.learned_at) < FDB_AGE);
+}
+
+fn learn_address(
+    node: &mut ForwardingNode,
+    vlan: u16,
+    mac: [u8; 6],
+    port: u16,
+    learned_at: Instant,
+) {
+    let key = (vlan, mac);
+    if !node.learned.contains_key(&key) && node.learned.len() >= MAX_FDB_ENTRIES {
+        if let Some(oldest) = node
+            .learned
+            .iter()
+            .min_by_key(|(_, learned)| learned.learned_at)
+            .map(|(key, _)| *key)
+        {
+            node.learned.remove(&oldest);
+        }
+    }
+    node.learned
+        .insert(key, LearnedAddress { port, learned_at });
 }
 
 fn is_multicast(mac: [u8; 6]) -> bool {
@@ -1130,6 +1309,86 @@ mod tests {
         assert!(invalid_interface.is_err());
     }
 
+    #[test]
+    fn host_interface_policy_requires_allowlisting_protected_and_nondefault_nat_ports() {
+        let routes = HashSet::from(["ens33".to_owned()]);
+        let no_allowlist = HashSet::new();
+        assert!(
+            validate_host_interface_policy(
+                "cloud",
+                "ens33",
+                "virbr0",
+                &no_allowlist,
+                &routes,
+                false,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_host_interface_policy("cloud", "lo", "virbr0", &no_allowlist, &routes, true,)
+                .is_err()
+        );
+        let allowed = HashSet::from(["ens33".to_owned(), "lo".to_owned(), "ens34".to_owned()]);
+        assert!(
+            validate_host_interface_policy("cloud", "ens33", "virbr0", &allowed, &routes, false,)
+                .is_ok()
+        );
+        assert!(
+            validate_host_interface_policy("cloud", "lo", "virbr0", &allowed, &routes, true,)
+                .is_ok()
+        );
+        assert!(
+            validate_host_interface_policy(
+                "nat",
+                "virbr0",
+                "virbr0",
+                &no_allowlist,
+                &routes,
+                false,
+            )
+            .is_ok()
+        );
+        assert!(validate_host_interface_policy(
+            "nat",
+            "ens34",
+            "virbr0",
+            &no_allowlist,
+            &routes,
+            false,
+        )
+        .is_err());
+        assert!(
+            validate_host_interface_policy("nat", "ens34", "virbr0", &allowed, &routes, false,)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn node_allow_host_interfaces_is_a_validated_explicit_exception_list() {
+        let cloud = BuiltinRuntime::normalize_node(json!({
+            "name":"Cloud1",
+            "node_type":"cloud",
+            "ports_mapping":[{"type":"ethernet","interface":"ens33"}],
+            "allow_host_interfaces":["ens33"]
+        }))
+        .expect("valid allowlist normalizes");
+        assert_eq!(cloud["allow_host_interfaces"], json!(["ens33"]));
+        let patch = BuiltinRuntime::normalize_configuration_patch(
+            &cloud,
+            json!({"allow_host_interfaces":["lo"]}),
+        )
+        .expect("allowlist is editable as a node setting");
+        assert_eq!(patch["allow_host_interfaces"], json!(["lo"]));
+
+        let invalid = BuiltinRuntime::normalize_node(json!({
+            "name":"Cloud2",
+            "node_type":"cloud",
+            "ports_mapping":[{"type":"ethernet","interface":"ens33"}],
+            "allow_host_interfaces":["ens33\nstop"]
+        }));
+        assert!(invalid.is_err());
+    }
+
     #[tokio::test]
     async fn hub_floods_every_frame_to_all_other_active_ports() {
         let mut ports = HashMap::new();
@@ -1216,6 +1475,57 @@ mod tests {
         )
         .await;
         assert!(isolated.is_empty());
+    }
+
+    #[test]
+    fn switch_forwarding_table_is_bounded_and_evicts_the_oldest_entry() {
+        let mut node = ForwardingNode {
+            node_type: "ethernet_switch".to_owned(),
+            modes: HashMap::new(),
+            ports: HashMap::new(),
+            learned: HashMap::new(),
+        };
+        let start = Instant::now();
+        let mac_for = |index: u64| {
+            [
+                0x02,
+                (index >> 32) as u8,
+                (index >> 24) as u8,
+                (index >> 16) as u8,
+                (index >> 8) as u8,
+                index as u8,
+            ]
+        };
+        let oldest = mac_for(0);
+        for index in 0..=MAX_FDB_ENTRIES {
+            learn_address(
+                &mut node,
+                1,
+                mac_for(index as u64),
+                0,
+                start + Duration::from_millis(index as u64),
+            );
+        }
+        assert_eq!(node.learned.len(), MAX_FDB_ENTRIES);
+        assert!(!node.learned.contains_key(&(1, oldest)));
+        assert!(
+            node.learned
+                .contains_key(&(1, mac_for(MAX_FDB_ENTRIES as u64)))
+        );
+    }
+
+    #[test]
+    fn switch_forwarding_entries_age_after_the_configured_lifetime() {
+        let mut node = ForwardingNode {
+            node_type: "ethernet_switch".to_owned(),
+            modes: HashMap::new(),
+            ports: HashMap::new(),
+            learned: HashMap::new(),
+        };
+        let now = Instant::now();
+        learn_address(&mut node, 1, [2, 0, 0, 0, 0, 1], 0, now);
+        age_forwarding_node(&mut node, now + FDB_AGE);
+        assert!(node.learned.is_empty());
     }
 
     #[tokio::test]
@@ -1350,7 +1660,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires Docker, alpine:latest, an active libvirt NAT network, and capable uBridge"]
+    #[ignore = "requires Docker with alpine:latest, capable uBridge, and active libvirt default NAT network 'default' bridged as virbr0 with 192.168.122.1/24"]
     async fn nat_live_routes_docker_traffic_through_libvirt() {
         use std::{env, path::PathBuf};
 
@@ -1359,7 +1669,10 @@ mod tests {
             runtime::{DockerRuntime, NodeAction},
             ubridge::UbridgeRuntime,
         };
-        use tokio::{process::Command, time::timeout};
+        use tokio::{
+            process::Command,
+            time::{sleep, timeout},
+        };
 
         let ubridge_binary = env::var_os("NETWORK_SIMULATOR_TEST_UBRIDGE")
             .expect("NETWORK_SIMULATOR_TEST_UBRIDGE names a capable upstream uBridge");
@@ -1418,6 +1731,49 @@ mod tests {
         let mut container_id = None;
 
         let run: Result<(), String> = async {
+            let network = Command::new("virsh")
+                .args(["net-info", "default"])
+                .output()
+                .await
+                .map_err(|error| format!("Could not inspect libvirt default network: {error}"))?;
+            let network_info = String::from_utf8_lossy(&network.stdout);
+            let network_field = |name: &str| {
+                network_info.lines().any(|line| {
+                    line.split_once(':')
+                        .is_some_and(|(key, value)| key.trim() == name && value.trim() == "yes")
+                })
+            };
+            if !network.status.success()
+                || !network_field("Active")
+                || !network_info.lines().any(|line| {
+                    line.split_once(':').is_some_and(|(key, value)| {
+                        key.trim() == "Bridge" && value.trim() == "virbr0"
+                    })
+                })
+            {
+                return Err(format!(
+                    "libvirt default network 'default' must be active and use virbr0; virsh net-info returned: {}{}",
+                    network_info,
+                    String::from_utf8_lossy(&network.stderr)
+                ));
+            }
+            let bridge_address = Command::new("ip")
+                .args(["-o", "-4", "addr", "show", "dev", "virbr0"])
+                .output()
+                .await
+                .map_err(|error| format!("Could not inspect virbr0 address: {error}"))?;
+            let bridge_address_text = String::from_utf8_lossy(&bridge_address.stdout);
+            if !bridge_address.status.success()
+                || !bridge_address_text.contains("192.168.122.1/24")
+            {
+                return Err(format!(
+                    "libvirt default network 'default' must configure 192.168.122.1/24 on virbr0; ip addr returned: {}{}",
+                    bridge_address_text,
+                    String::from_utf8_lossy(&bridge_address.stderr)
+                ));
+            }
+            BuiltinRuntime::validate_host_interfaces(&nat)
+                .map_err(|error| format!("configured NAT interface failed validation: {error}"))?;
             let (created, _) = docker
                 .create_container(
                     &project_id,
@@ -1477,6 +1833,30 @@ mod tests {
                     String::from_utf8_lossy(&bridge_ports.stdout)
                 ));
             }
+            // The active libvirt bridge has STP enabled with a 2 s forward
+            // delay. A newly attached port passes through listening and
+            // learning first; the guest's default ARP retries can all expire
+            // before that transition completes. Wait for the observed bridge
+            // state (measured at 4.6 s from TAP attach here), with one bounded
+            // STP convergence window, before sending test traffic.
+            let bridge_state_path = format!("/sys/class/net/{nat_tap}/brport/state");
+            let forward_deadline = Instant::now() + Duration::from_secs(8);
+            loop {
+                let bridge_state = std::fs::read_to_string(&bridge_state_path)
+                    .map_err(|error| {
+                        format!("Could not read bridge state for {nat_tap}: {error}")
+                    })?;
+                if bridge_state.trim() == "3" {
+                    break;
+                }
+                if Instant::now() >= forward_deadline {
+                    return Err(format!(
+                        "libvirt bridge port {nat_tap} did not reach forwarding state within 8 seconds (state {})",
+                        bridge_state.trim()
+                    ));
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
             let docker_nio = docker
                 .adapter_nio(&docker_endpoint)
                 .map_err(|error| error.message().to_owned())?;
@@ -1484,6 +1864,31 @@ mod tests {
                 .attach_endpoint(&docker_endpoint, docker_nio, &json!({}), false, None)
                 .await
                 .map_err(|error| error.message().to_owned())?;
+            let capture_paths = [
+                (
+                    nat_endpoint["runtime_endpoint_id"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                    directory.path().join("nat-endpoint.pcap"),
+                ),
+                (
+                    docker_endpoint["runtime_endpoint_id"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                    directory.path().join("docker-endpoint.pcap"),
+                ),
+            ];
+            for (endpoint_id, path) in &capture_paths {
+                engine
+                    .start_capture(
+                        &json!({"runtime_endpoint_id": endpoint_id}),
+                        &path.to_string_lossy(),
+                    )
+                    .await
+                    .map_err(|error| error.message().to_owned())?;
+            }
 
             for arguments in [
                 vec!["ip", "link", "set", "eth0", "up"],
@@ -1529,8 +1934,53 @@ mod tests {
                         .await
                         .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
                         .unwrap_or_default();
+                    let tap_stats = Command::new("ip")
+                        .args(["-s", "link", "show", "dev", &nat_tap])
+                        .output()
+                        .await
+                        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+                        .unwrap_or_default();
+                    let bridge_stats = Command::new("ip")
+                        .args(["-s", "link", "show", "dev", "virbr0"])
+                        .output()
+                        .await
+                        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+                        .unwrap_or_default();
+                    let host_neighbors = Command::new("ip")
+                        .args(["neigh", "show", "dev", "virbr0"])
+                        .output()
+                        .await
+                        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+                        .unwrap_or_default();
+                    let fdb = Command::new("bridge")
+                        .args(["fdb", "show", "br", "virbr0"])
+                        .output()
+                        .await
+                        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+                        .unwrap_or_default();
+                    let mut capture_output = String::new();
+                    for (endpoint_id, path) in &capture_paths {
+                        let _ = engine
+                            .stop_capture(&json!({"runtime_endpoint_id": endpoint_id}))
+                            .await;
+                        let capture = Command::new("tcpdump")
+                            .args(["-nn", "-e", "-tt", "-r"])
+                            .arg(path)
+                            .arg("arp or icmp")
+                            .output()
+                            .await
+                            .map(|output| {
+                                format!(
+                                    "{}{}",
+                                    String::from_utf8_lossy(&output.stdout),
+                                    String::from_utf8_lossy(&output.stderr)
+                                )
+                            })
+                            .unwrap_or_else(|error| format!("capture decode failed: {error}"));
+                        capture_output.push_str(&format!("\n{endpoint_id}:\n{capture}"));
+                    }
                     return Err(format!(
-                        "Alpine could not ping {destination}: {}{}; neighbors={neighbors}; tap={tap_state}",
+                        "Alpine could not ping {destination}: {}{}; guest_neighbors={neighbors}; host_virbr0_neighbors={host_neighbors}; tap={tap_state}; tap_stats={tap_stats}; virbr0_stats={bridge_stats}; virbr0_fdb={fdb}; captures={capture_output}",
                         String::from_utf8_lossy(&output.stdout),
                         String::from_utf8_lossy(&output.stderr)
                     ));

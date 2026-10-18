@@ -26,6 +26,35 @@ pub struct ProjectEvent {
 
 impl Store {
     pub async fn connect(path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let store = Self::connect_unseeded(path).await?;
+        // Production start-up calls `auth::initialize` with the bind-derived
+        // policy and treats a missing row as fail-closed. API test fixtures build
+        // stores directly and exercise the routes with authentication disabled,
+        // which still needs a settings row and an active super administrator.
+        #[cfg(test)]
+        {
+            sqlx::query(
+                "INSERT OR IGNORE INTO auth_config (singleton, auth_enabled, jwt_signing_key)
+                 VALUES (1, 0, 'test-only-signing-key')",
+            )
+            .execute(&store.pool)
+            .await?;
+            sqlx::query(
+                "INSERT OR IGNORE INTO auth_users
+                 (user_id, username, full_name, password_hash, is_superadmin)
+                 VALUES ('00000000-0000-0000-0000-00000000ad01', 'admin',
+                         'Test Super Administrator', '!unusable', 1)",
+            )
+            .execute(&store.pool)
+            .await?;
+        }
+        Ok(store)
+    }
+
+    /// Connect and migrate without any auth bootstrap rows.
+    pub(crate) async fn connect_unseeded(
+        path: &str,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true)

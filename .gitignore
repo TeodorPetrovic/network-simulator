@@ -1,8 +1,13 @@
 /target/
 /data/
+/images/
 frontend/node_modules/
 frontend/dist/
 .env
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+# IOS base images must live in the global image library, never in source control.
+*.image
+# Dynamips writes <platform>_i<N>_log.txt into its working directory.
+*_i[0-9]*_log.txt

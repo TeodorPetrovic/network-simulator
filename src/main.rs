@@ -38,22 +38,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .unwrap_or_else(|_| "127.0.0.1:3080".to_owned())
         .parse()?;
     let store = storage::Store::connect(&database_path).await?;
+    let auth_override = env::var("NETWORK_SIMULATOR_AUTH_ENABLED")
+        .ok()
+        .and_then(|value| api::auth::parse_bool(&value));
+    let auth_enabled = auth_override.unwrap_or(!bind_address.ip().is_loopback());
+    let data_dir = Path::new(&database_path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let initial_password_path = data_dir.join("initial-admin-password.txt");
+    api::auth::initialize(store.pool(), auth_enabled, &initial_password_path).await?;
+    if let Some(enabled) = auth_override {
+        api::auth::set_auth_enabled(store.pool(), enabled).await?;
+    }
+    let auth_enabled =
+        api::auth::enforce_bind_auth_floor(store.pool(), !bind_address.ip().is_loopback()).await?;
     let state = api::AppState::new(store);
+    state.reap_orphaned_runtimes();
     state.reattach_running_links().await;
-    let app = api::router(state);
     let listener = tokio::net::TcpListener::bind(bind_address).await?;
+    let bind_address = listener.local_addr()?;
+    let state = state.with_bind_address(bind_address);
+    let shutdown_state = state.clone();
+    let app = api::router(state);
 
     tracing::info!(
         %bind_address,
+        auth_enabled,
         %database_path,
         qemu_images = %image_paths::qemu_images().display(),
         dynamips_images = %image_paths::dynamips_images().display(),
         appliance_definitions = %image_paths::appliance_definitions().display(),
         "network simulator controller listening"
     );
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
+    shutdown_state.shutdown_runtimes().await;
 
     Ok(())
 }

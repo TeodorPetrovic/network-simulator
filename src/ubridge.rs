@@ -30,6 +30,7 @@ pub struct UbridgeRuntime {
     daemon: Arc<Mutex<Option<Child>>>,
     link_bridges: Arc<Mutex<HashMap<String, String>>>,
     host_bridge_taps: Arc<Mutex<HashMap<String, (String, String)>>>,
+    allocated_udp_ports: Arc<Mutex<HashMap<u16, String>>>,
 }
 
 #[derive(Serialize)]
@@ -54,6 +55,7 @@ impl UbridgeRuntime {
             daemon: Arc::new(Mutex::new(None)),
             link_bridges: Arc::new(Mutex::new(HashMap::new())),
             host_bridge_taps: Arc::new(Mutex::new(HashMap::new())),
+            allocated_udp_ports: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -65,6 +67,7 @@ impl UbridgeRuntime {
             daemon: Arc::new(Mutex::new(None)),
             link_bridges: Arc::new(Mutex::new(HashMap::new())),
             host_bridge_taps: Arc::new(Mutex::new(HashMap::new())),
+            allocated_udp_ports: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -184,7 +187,52 @@ impl UbridgeRuntime {
     }
 
     pub async fn reserve_udp_port(&self) -> Result<u16, RuntimeError> {
-        available_udp_port().await
+        self.reserve_udp_port_for(&uuid::Uuid::new_v4().to_string())
+            .await
+    }
+
+    pub async fn reserve_udp_port_for(&self, owner: &str) -> Result<u16, RuntimeError> {
+        let mut allocated = self.allocated_udp_ports.lock().await;
+        for _ in 0..128 {
+            let port = available_udp_port().await?;
+            if !allocated.contains_key(&port) {
+                allocated.insert(port, owner.to_owned());
+                return Ok(port);
+            }
+        }
+        Err(RuntimeError::Unavailable(
+            "Could not reserve a unique UDP port".to_owned(),
+        ))
+    }
+
+    /// Claim a persisted port during startup reconciliation so new links do
+    /// not reuse ports that belong to links created by an earlier process.
+    pub async fn claim_udp_port(&self, owner: &str, port: u16) -> Result<(), RuntimeError> {
+        if port == 0 {
+            return Err(RuntimeError::Failed(
+                "Cannot reserve UDP port zero".to_owned(),
+            ));
+        }
+        let mut allocated = self.allocated_udp_ports.lock().await;
+        match allocated.get(&port) {
+            Some(current) if current == owner => Ok(()),
+            Some(_) => Err(RuntimeError::Failed(format!(
+                "UDP port {port} is already reserved by another link"
+            ))),
+            None => {
+                allocated.insert(port, owner.to_owned());
+                Ok(())
+            }
+        }
+    }
+
+    pub async fn release_udp_ports(&self, owner: &str, ports: impl IntoIterator<Item = u16>) {
+        let mut allocated = self.allocated_udp_ports.lock().await;
+        for port in ports {
+            if allocated.get(&port).is_some_and(|current| current == owner) {
+                allocated.remove(&port);
+            }
+        }
     }
 
     /// Attach one endpoint of a point-to-point link to a runtime adapter.
@@ -299,6 +347,11 @@ impl UbridgeRuntime {
         suspended: bool,
         capture_file: Option<&str>,
     ) -> Result<(), RuntimeError> {
+        if capture_file.is_some_and(|path| path.chars().any(char::is_control)) {
+            return Err(RuntimeError::Failed(
+                "uBridge capture paths cannot contain control characters".to_owned(),
+            ));
+        }
         let bridge = endpoint_name(endpoint_id)?;
         if self.link_bridges.lock().await.get(endpoint_id) == Some(&bridge) {
             self.update_link_endpoint(endpoint_id, filters, suspended)
@@ -419,66 +472,73 @@ impl UbridgeRuntime {
         filters: &serde_json::Value,
         suspended: bool,
     ) -> Result<(), RuntimeError> {
-        self.command(&format!("bridge reset_packet_filters {bridge}"))
-            .await?;
+        let mut commands = Vec::new();
         if suspended {
-            self.command(&format!(
+            commands.push(format!(
                 "bridge add_packet_filter {bridge} suspended frequency_drop -1"
-            ))
-            .await?;
-            return Ok(());
-        }
-        let Some(filters) = filters.as_object() else {
-            return Ok(());
-        };
-        let mut index = 0usize;
-        for (kind, values) in filters {
-            if !matches!(kind.as_str(), "delay" | "packet_loss" | "corrupt" | "bpf") {
-                return Err(RuntimeError::Failed(format!(
-                    "Unsupported uBridge link filter '{kind}'"
-                )));
-            }
-            let Some(values) = values.as_array() else {
-                return Err(RuntimeError::Failed(format!(
-                    "Link filter '{kind}' must contain an array of values"
-                )));
-            };
-            if kind == "bpf" {
-                let Some(expression) = values.first().and_then(serde_json::Value::as_str) else {
-                    return Err(RuntimeError::Failed(
-                        "BPF link filter must begin with a text expression".to_owned(),
-                    ));
+            ));
+        } else if let Some(filters) = filters.as_object() {
+            let mut index = 0usize;
+            for (kind, values) in filters {
+                if !matches!(
+                    kind.as_str(),
+                    "delay" | "frequency_drop" | "packet_loss" | "corrupt" | "bpf"
+                ) {
+                    return Err(RuntimeError::Failed(format!(
+                        "Unsupported uBridge link filter '{kind}'"
+                    )));
+                }
+                let Some(values) = values.as_array() else {
+                    return Err(RuntimeError::Failed(format!(
+                        "Link filter '{kind}' must contain an array of values"
+                    )));
                 };
-                for line in expression
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                {
-                    let extra = values
+                validate_filter_values(kind, values)?;
+                if kind == "bpf" {
+                    let Some(expression) = values.first().and_then(serde_json::Value::as_str)
+                    else {
+                        return Err(RuntimeError::Failed(
+                            "BPF link filter must begin with a text expression".to_owned(),
+                        ));
+                    };
+                    if expression.chars().any(char::is_control) {
+                        return Err(RuntimeError::Failed(
+                            "BPF link filters cannot contain control characters".to_owned(),
+                        ));
+                    }
+                    let expression = expression.trim();
+                    if !expression.is_empty() {
+                        commands.push(format!(
+                            "bridge add_packet_filter {bridge} filter{index} bpf \"{}\"",
+                            escape_ubridge_arg(expression)
+                        ));
+                    }
+                    index += 1;
+                } else {
+                    let arguments = values
                         .iter()
-                        .skip(1)
                         .map(filter_value)
                         .collect::<Result<Vec<_>, _>>()?
                         .join(" ");
-                    self.command(&format!(
-                        "bridge add_packet_filter {bridge} filter{index} bpf \"{}\" {extra}",
-                        escape_ubridge_arg(line)
-                    ))
-                    .await?;
+                    commands.push(format!(
+                        "bridge add_packet_filter {bridge} filter{index} {kind} {arguments}"
+                    ));
                     index += 1;
                 }
-            } else {
-                let arguments = values
-                    .iter()
-                    .map(filter_value)
-                    .collect::<Result<Vec<_>, _>>()?
-                    .join(" ");
-                self.command(&format!(
-                    "bridge add_packet_filter {bridge} filter{index} {kind} {arguments}"
-                ))
-                .await?;
-                index += 1;
             }
+        } else {
+            return Err(RuntimeError::Failed(
+                "Link filters must be an object".to_owned(),
+            ));
+        }
+        // Validate the complete replacement before clearing the currently
+        // working filters. uBridge applies rules one command at a time, so
+        // keeping preparation separate prevents invalid updates from losing
+        // the active set.
+        self.command(&format!("bridge reset_packet_filters {bridge}"))
+            .await?;
+        for command in commands {
+            self.command(&command).await?;
         }
         Ok(())
     }
@@ -488,6 +548,11 @@ impl UbridgeRuntime {
         endpoint_id: &str,
         capture_file: &str,
     ) -> Result<(), RuntimeError> {
+        if capture_file.chars().any(char::is_control) {
+            return Err(RuntimeError::Failed(
+                "uBridge capture paths cannot contain control characters".to_owned(),
+            ));
+        }
         if !self.link_bridges.lock().await.contains_key(endpoint_id) {
             return Err(RuntimeError::Failed(
                 "Link capture requires a running endpoint".to_owned(),
@@ -539,7 +604,49 @@ impl UbridgeRuntime {
         Ok(())
     }
 
+    /// Release relays and stop the uBridge daemon owned by this controller.
+    pub async fn shutdown(&self) {
+        let endpoint_ids = self
+            .link_bridges
+            .lock()
+            .await
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        if UnixStream::connect(&self.socket).await.is_ok() {
+            for endpoint_id in endpoint_ids {
+                if let Err(error) = self.delete_link_endpoint(&endpoint_id).await {
+                    tracing::warn!(error = error.message(), %endpoint_id, "could not detach uBridge endpoint during shutdown");
+                }
+            }
+        }
+        self.link_bridges.lock().await.clear();
+        self.host_bridge_taps.lock().await.clear();
+
+        let mut daemon = self.daemon.lock().await;
+        if let Some(mut child) = daemon.take() {
+            if child.try_wait().ok().flatten().is_none() {
+                if let Err(error) = child.start_kill() {
+                    tracing::warn!(%error, "could not stop controller-owned uBridge daemon");
+                }
+                if let Err(error) = timeout(Duration::from_secs(3), child.wait()).await {
+                    tracing::warn!(%error, "timed out waiting for controller-owned uBridge daemon");
+                }
+            }
+            if let Err(error) = fs::remove_file(&self.socket)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(%error, socket = %self.socket.display(), "could not remove uBridge control socket");
+            }
+        }
+    }
+
     async fn command(&self, command: &str) -> Result<String, RuntimeError> {
+        if command.chars().any(char::is_control) {
+            return Err(RuntimeError::Failed(
+                "uBridge commands cannot contain control characters".to_owned(),
+            ));
+        }
         self.ensure_started().await?;
         timeout(COMMAND_TIMEOUT, async {
             let stream = UnixStream::connect(&self.socket).await.map_err(|error| {
@@ -601,17 +708,35 @@ impl UbridgeRuntime {
     }
 
     async fn ensure_started(&self) -> Result<(), RuntimeError> {
-        if UnixStream::connect(&self.socket).await.is_ok() {
-            return Ok(());
-        }
         let mut daemon = self.daemon.lock().await;
-        if let Some(child) = daemon.as_mut()
-            && child.try_wait().ok().flatten().is_none()
-        {
+        let owned_daemon_running = match daemon.as_mut() {
+            Some(child) => match child.try_wait() {
+                Ok(None) => true,
+                Ok(Some(_)) => {
+                    daemon.take();
+                    false
+                }
+                Err(error) => {
+                    return Err(RuntimeError::Unavailable(format!(
+                        "Could not inspect the uBridge process: {error}"
+                    )));
+                }
+            },
+            None => false,
+        };
+        if owned_daemon_running {
+            if UnixStream::connect(&self.socket).await.is_ok() {
+                return Ok(());
+            }
             wait_for_socket(&self.socket).await?;
             return Ok(());
         }
-        self.link_bridges.lock().await.clear();
+
+        if UnixStream::connect(&self.socket).await.is_ok() {
+            stop_existing_ubridge(&self.socket).await?;
+            self.link_bridges.lock().await.clear();
+            self.host_bridge_taps.lock().await.clear();
+        }
         if let Some(parent) = self.socket.parent() {
             fs::create_dir_all(parent).map_err(|error| {
                 RuntimeError::Failed(format!("Could not create uBridge state directory: {error}"))
@@ -671,6 +796,64 @@ async fn wait_for_socket(socket: &PathBuf) -> Result<(), RuntimeError> {
     }
 }
 
+/// Stop a uBridge process left behind by a previous controller instance. The
+/// old process has no child handle here, so rebuilding requires asking the
+/// daemon itself to stop before launching a fresh process.
+async fn stop_existing_ubridge(socket: &PathBuf) -> Result<(), RuntimeError> {
+    let mut stream = UnixStream::connect(socket).await.map_err(|error| {
+        RuntimeError::Unavailable(format!(
+            "Could not connect to the existing uBridge socket '{}': {error}",
+            socket.display()
+        ))
+    })?;
+    stream
+        .write_all(b"hypervisor stop\n")
+        .await
+        .map_err(|error| {
+            RuntimeError::Unavailable(format!(
+                "Could not stop the existing uBridge daemon: {error}"
+            ))
+        })?;
+    let _ = timeout(Duration::from_secs(2), async {
+        let mut reader = BufReader::new(stream);
+        let mut reply = String::new();
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).await? == 0 {
+                break;
+            }
+            reply.push_str(&line);
+            if is_final_reply(&line) {
+                break;
+            }
+        }
+        Ok::<(), std::io::Error>(())
+    })
+    .await;
+
+    let deadline = tokio::time::Instant::now() + START_TIMEOUT;
+    loop {
+        if UnixStream::connect(socket).await.is_err() {
+            match fs::remove_file(socket) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(RuntimeError::Failed(format!(
+                        "Could not remove stopped uBridge socket: {error}"
+                    )));
+                }
+            }
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(RuntimeError::Unavailable(
+                "The existing uBridge daemon did not stop during startup recovery".to_owned(),
+            ));
+        }
+        sleep(Duration::from_millis(40)).await;
+    }
+}
+
 fn validate_interface_name(name: &str) -> Result<(), RuntimeError> {
     if name.is_empty()
         || name.len() > 15
@@ -702,7 +885,7 @@ fn validate_remote_host(host: &str) -> Result<(), RuntimeError> {
 fn filter_value(value: &serde_json::Value) -> Result<String, RuntimeError> {
     match value {
         serde_json::Value::Number(number) => Ok(number.to_string()),
-        serde_json::Value::String(text) if !text.contains(['\n', '\r']) && !text.is_empty() => {
+        serde_json::Value::String(text) if !text.chars().any(char::is_control) => {
             Ok(format!("\"{}\"", escape_ubridge_arg(text)))
         }
         _ => Err(RuntimeError::Failed(
@@ -711,8 +894,60 @@ fn filter_value(value: &serde_json::Value) -> Result<String, RuntimeError> {
     }
 }
 
+fn validate_filter_values(kind: &str, values: &[serde_json::Value]) -> Result<(), RuntimeError> {
+    let invalid = || RuntimeError::Failed(format!("Link filter '{kind}' has invalid values"));
+    let integer = |index: usize, min: i64, max: i64| {
+        values
+            .get(index)
+            .and_then(|value| match value {
+                serde_json::Value::Number(number) => number.as_i64(),
+                serde_json::Value::String(text) => text.trim().parse::<i64>().ok(),
+                _ => None,
+            })
+            .filter(|value| (min..=max).contains(value))
+    };
+    match kind {
+        "frequency_drop" if values.len() == 1 && integer(0, -1, 32767).is_some() => Ok(()),
+        "packet_loss" | "corrupt" if values.len() == 1 && integer(0, 0, 100).is_some() => Ok(()),
+        "delay"
+            if (1..=3).contains(&values.len())
+                && integer(0, 1, 32767).is_some()
+                && (values.len() < 2 || integer(1, 0, 32767).is_some())
+                && (values.len() < 3
+                    || values[2].as_str().is_some_and(|distribution| {
+                        matches!(
+                            distribution.trim().to_ascii_lowercase().as_str(),
+                            "" | "uniform" | "normal" | "pareto" | "paretonormal"
+                        )
+                    })) =>
+        {
+            Ok(())
+        }
+        "bpf"
+            if values.len() == 1
+                && values[0].as_str().is_some_and(|expression| {
+                    expression.len() <= 4096 && !expression.chars().any(char::is_control)
+                }) =>
+        {
+            Ok(())
+        }
+        _ => Err(invalid()),
+    }
+}
+
 fn escape_ubridge_arg(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_control() {
+            escaped.push_str(&format!("%{:02X}", character as u32));
+        } else {
+            if matches!(character, '\\' | '"') {
+                escaped.push('\\');
+            }
+            escaped.push(character);
+        }
+    }
+    escaped
 }
 
 pub fn host_veth_name(endpoint_id: &str) -> Result<String, RuntimeError> {
@@ -765,15 +1000,20 @@ async fn available_udp_port() -> Result<u16, RuntimeError> {
 
 #[cfg(test)]
 mod tests {
-    use std::{env, path::PathBuf, time::Duration};
+    use std::{env, fs, path::PathBuf, time::Duration};
 
     use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
+        io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+        net::UnixListener,
         process::Command,
+        sync::Mutex,
         time::timeout,
     };
 
-    use super::{UbridgeRuntime, endpoint_name, guest_veth_name, host_veth_name, is_final_reply};
+    use super::{
+        UbridgeRuntime, endpoint_name, escape_ubridge_arg, guest_veth_name, host_veth_name,
+        is_final_reply, stop_existing_ubridge,
+    };
     use crate::{
         runtime::{DockerRuntime, NodeAction, RuntimeError},
         vpcs::VpcsRuntime,
@@ -801,6 +1041,168 @@ mod tests {
         assert!(!is_final_reply("101 bridge is running\n"));
         assert!(is_final_reply("100-bridge started\n"));
         assert!(is_final_reply("206-Could not create bridge\n"));
+    }
+
+    #[tokio::test]
+    async fn ubridge_arguments_cannot_inject_a_second_command_line() {
+        let runtime = UbridgeRuntime::with_paths("unused-ubridge", "/tmp/unused-ubridge.sock");
+        let error = runtime
+            .command("x\nhypervisor stop\n")
+            .await
+            .expect_err("control characters must be rejected before connecting");
+        assert!(error.message().contains("control characters"));
+        assert_eq!(
+            escape_ubridge_arg("x\nhypervisor stop\n"),
+            "x%0Ahypervisor stop%0A"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_filter_replacement_does_not_reset_active_rules_and_frequency_drop_works() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("ubridge.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let commands = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let received = commands.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let (read, mut write) = stream.into_split();
+                let mut reader = BufReader::new(read);
+                let mut command = String::new();
+                if reader.read_line(&mut command).await.unwrap_or_default() == 0 {
+                    continue;
+                }
+                received.lock().await.push(command.trim().to_owned());
+                let _ = write.write_all(b"100-OK\n").await;
+            }
+        });
+        let runtime = UbridgeRuntime::with_paths("unused-ubridge", &socket);
+        let child = Command::new("sleep")
+            .arg("60")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        *runtime.daemon.lock().await = Some(child);
+        let endpoint_id = "01234567-89ab-cdef-0123-456789abcdef";
+        runtime
+            .link_bridges
+            .lock()
+            .await
+            .insert(endpoint_id.to_owned(), endpoint_name(endpoint_id).unwrap());
+
+        runtime
+            .update_link_endpoint(
+                endpoint_id,
+                &serde_json::json!({"packet_loss": [25]}),
+                false,
+            )
+            .await
+            .expect("initial filter set is installed");
+        let working_commands = commands.lock().await.clone();
+        assert_eq!(working_commands.len(), 2);
+
+        let invalid = runtime
+            .update_link_endpoint(endpoint_id, &serde_json::json!({"unsupported": [1]}), false)
+            .await;
+        assert!(invalid.is_err());
+        assert_eq!(*commands.lock().await, working_commands);
+
+        runtime
+            .update_link_endpoint(
+                endpoint_id,
+                &serde_json::json!({"frequency_drop": [3]}),
+                false,
+            )
+            .await
+            .expect("frequency_drop is a supported uBridge rule");
+        assert_eq!(
+            *commands.lock().await,
+            vec![
+                format!(
+                    "bridge reset_packet_filters {}",
+                    endpoint_name(endpoint_id).unwrap()
+                ),
+                format!(
+                    "bridge add_packet_filter {} filter0 packet_loss 25",
+                    endpoint_name(endpoint_id).unwrap()
+                ),
+                format!(
+                    "bridge reset_packet_filters {}",
+                    endpoint_name(endpoint_id).unwrap()
+                ),
+                format!(
+                    "bridge add_packet_filter {} filter0 frequency_drop 3",
+                    endpoint_name(endpoint_id).unwrap()
+                )
+            ]
+        );
+
+        runtime.shutdown().await;
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn persisted_udp_port_claims_are_idempotent_and_owner_scoped() {
+        let runtime = UbridgeRuntime::with_paths("unused-ubridge", "/tmp/unused-ubridge.sock");
+        let (allocated_a, allocated_b) = tokio::join!(
+            runtime.reserve_udp_port_for("allocated-a"),
+            runtime.reserve_udp_port_for("allocated-b")
+        );
+        let allocated_a = allocated_a.unwrap();
+        let allocated_b = allocated_b.unwrap();
+        assert_ne!(allocated_a, allocated_b);
+        runtime
+            .release_udp_ports("allocated-a", [allocated_a])
+            .await;
+        runtime
+            .release_udp_ports("allocated-b", [allocated_b])
+            .await;
+
+        runtime.claim_udp_port("link-a", 39001).await.unwrap();
+        runtime.claim_udp_port("link-a", 39001).await.unwrap();
+        assert!(runtime.claim_udp_port("link-b", 39001).await.is_err());
+        runtime.release_udp_ports("link-b", [39001]).await;
+        assert!(runtime.claim_udp_port("link-b", 39001).await.is_err());
+        runtime.release_udp_ports("link-a", [39001]).await;
+        runtime.claim_udp_port("link-b", 39001).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn startup_recovery_stops_a_surviving_unowned_daemon() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("ubridge.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut reader = BufReader::new(read);
+            let mut command = String::new();
+            reader.read_line(&mut command).await.unwrap();
+            assert_eq!(command, "hypervisor stop\n");
+            write.write_all(b"100-OK\n").await.unwrap();
+        });
+
+        stop_existing_ubridge(&socket).await.unwrap();
+        server.await.unwrap();
+        assert!(!socket.exists());
+    }
+
+    #[tokio::test]
+    async fn shutdown_kills_owned_daemon_and_removes_its_socket() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("run/ubridge.sock");
+        fs::create_dir_all(socket.parent().unwrap()).unwrap();
+        fs::write(&socket, b"stale control socket").unwrap();
+        let runtime = UbridgeRuntime::with_paths("unused-ubridge", &socket);
+        let child = Command::new("sleep").arg("60").spawn().unwrap();
+        let pid = child.id().unwrap();
+        *runtime.daemon.lock().await = Some(child);
+
+        runtime.shutdown().await;
+
+        assert!(!socket.exists());
+        assert!(!PathBuf::from(format!("/proc/{pid}")).exists());
+        assert!(runtime.daemon.lock().await.is_none());
     }
 
     #[tokio::test]

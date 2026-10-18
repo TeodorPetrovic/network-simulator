@@ -1,5 +1,7 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
 use std::path::{Component, Path as FsPath, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 
 use axum::{
@@ -17,7 +19,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sqlx::{Row, SqlitePool};
-use tokio::sync::broadcast;
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, broadcast};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpStream, UnixStream},
@@ -30,6 +32,8 @@ use tower_http::{
 };
 use uuid::Uuid;
 
+#[path = "auth/mod.rs"]
+pub(crate) mod auth;
 #[path = "api/controller_routes.rs"]
 mod controller_routes;
 
@@ -62,7 +66,9 @@ pub struct AppState {
     builtin: BuiltinRuntime,
     ubridge: UbridgeRuntime,
     marketplace: MarketplaceCatalog,
+    bind_address: SocketAddr,
     started_at: Instant,
+    project_operation_locks: Arc<StdMutex<HashMap<String, Arc<AsyncMutex<()>>>>>,
 }
 
 impl AppState {
@@ -76,7 +82,12 @@ impl AppState {
             builtin: BuiltinRuntime::default(),
             ubridge: UbridgeRuntime::new(),
             marketplace: MarketplaceCatalog::new(),
+            bind_address: std::env::var("NETWORK_SIMULATOR_BIND")
+                .ok()
+                .and_then(|address| address.parse().ok())
+                .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 3080))),
             started_at: Instant::now(),
+            project_operation_locks: Arc::new(StdMutex::new(HashMap::new())),
         }
     }
 
@@ -119,13 +130,45 @@ impl AppState {
             builtin: BuiltinRuntime::default(),
             ubridge,
             marketplace,
+            bind_address: SocketAddr::from(([127, 0, 0, 1], 3080)),
             started_at: Instant::now(),
+            project_operation_locks: Arc::new(StdMutex::new(HashMap::new())),
         }
+    }
+
+    pub fn with_bind_address(mut self, bind_address: SocketAddr) -> Self {
+        self.bind_address = bind_address;
+        self
+    }
+
+    async fn lock_project_operations(&self, project_id: &str) -> OwnedMutexGuard<()> {
+        let lock = self
+            .project_operation_locks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(project_id.to_owned())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone();
+        lock.lock_owned().await
     }
 
     /// Reattach links for runtimes that survived a controller restart. Nodes
     /// that were stopped with the controller are attached later by their
     /// normal start lifecycle path.
+    /// Kill runtime processes a previous controller run left behind.
+    pub fn reap_orphaned_runtimes(&self) {
+        let killed = self.vpcs.reap_orphans();
+        if killed > 0 {
+            tracing::warn!(killed, "killed orphaned VPCS processes from an earlier run");
+        }
+    }
+
+    /// Terminate processes this controller owns that cannot outlive it.
+    pub async fn shutdown_runtimes(&self) {
+        self.ubridge.shutdown().await;
+        self.vpcs.kill_all().await;
+    }
+
     pub async fn reattach_running_links(&self) {
         let rows = match sqlx::query(
             "SELECT project_id, object_json FROM topology_objects WHERE kind = 'link'",
@@ -148,6 +191,14 @@ impl AppState {
                     continue;
                 }
             };
+            let _project_lock = self.lock_project_operations(&project_id).await;
+            if let Err(error) = LinkEngine::new(self.ubridge.clone())
+                .claim_link_ports(&link)
+                .await
+            {
+                tracing::warn!(error = error.message(), %project_id, link_id = %link["link_id"], "could not reserve persisted UDP ports during runtime reconciliation");
+                continue;
+            }
             let endpoints = match link_runtime_endpoints(self.store.pool(), &project_id, &link)
                 .await
             {
@@ -351,13 +402,50 @@ pub fn router(state: AppState) -> Router {
     let qemu_image_upload = Router::new()
         .route("/v3/qemu/images/{file_name}", post(upload_qemu_image))
         .layer(RequestBodyLimitLayer::new(MAX_QEMU_IMAGE_BYTES));
-    Router::new()
-        .merge(api)
-        .merge(controller_routes::router())
-        .merge(image_upload)
-        .merge(qemu_image_upload)
-        .layer(TraceLayer::new_for_http())
-        .with_state(state)
+    auth::protect(
+        Router::new()
+            .merge(api)
+            .merge(controller_routes::router())
+            .merge(auth::router())
+            .merge(image_upload)
+            .merge(qemu_image_upload)
+            .layer(TraceLayer::new_for_http().make_span_with(request_span)),
+        state.clone(),
+    )
+    .with_state(state)
+}
+
+fn request_trace_path<B>(request: &axum::http::Request<B>) -> &str {
+    request.uri().path()
+}
+
+fn request_span<B>(request: &axum::http::Request<B>) -> tracing::Span {
+    tracing::info_span!(
+        "http_request",
+        method = %request.method(),
+        path = %request_trace_path(request),
+        version = ?request.version(),
+    )
+}
+
+#[cfg(test)]
+mod request_trace_tests {
+    use super::*;
+
+    #[test]
+    fn request_span_uses_only_the_path_and_drops_query_credentials() {
+        let request = axum::http::Request::builder()
+            .uri("/v3/projects/p1/notifications/ws?ticket=secret-ticket&after=12")
+            .body(())
+            .unwrap();
+        assert_eq!(
+            request_trace_path(&request),
+            "/v3/projects/p1/notifications/ws"
+        );
+        let span = request_span(&request);
+        assert!(span.metadata().unwrap().fields().field("path").is_some());
+        assert!(!request_trace_path(&request).contains("secret-ticket"));
+    }
 }
 
 async fn health(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
@@ -372,6 +460,7 @@ struct ErrorMessage {
     message: String,
 }
 
+#[derive(Debug)]
 struct ApiError {
     status: StatusCode,
     message: String,
@@ -1826,6 +1915,7 @@ async fn delete_project(
     Path(project_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
     let project_id = project_id.to_string();
+    let _project_lock = state.lock_project_operations(&project_id).await;
     ensure_project_exists_pool(state.store.pool(), &project_id).await?;
     let links = list_objects(state.store.pool(), &project_id, "link")
         .await?
@@ -1855,6 +1945,10 @@ async fn delete_project(
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
+    let link_engine = LinkEngine::new(state.ubridge.clone());
+    for link in &links {
+        link_engine.release_link_ports(link).await;
+    }
     state.store.publish(event);
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1879,6 +1973,7 @@ async fn set_project_status(
     status: &str,
 ) -> Result<Json<Value>, ApiError> {
     let project_id = project_id.to_string();
+    let _project_lock = state.lock_project_operations(&project_id).await;
     let mut tx = state.store.pool().begin().await?;
     let row = sqlx::query("SELECT project_json FROM projects WHERE project_id = ?")
         .bind(&project_id)
@@ -2015,6 +2110,7 @@ async fn create_builtin_node(
     object.insert("node_id".into(), json!(node_id));
     object.insert("project_id".into(), json!(project_id.clone()));
     let node = BuiltinRuntime::normalize_node(node).map_err(ApiError::bad_request)?;
+    BuiltinRuntime::validate_host_interfaces(&node).map_err(ApiError::bad_request)?;
     create_topology_object(state, &project_id, "node", "node_id", node).await
 }
 
@@ -2023,13 +2119,24 @@ async fn create_node_from_template(
     Path((project_id, template_id)): Path<(Uuid, Uuid)>,
     Json(usage): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let templates = available_templates(&state).await?;
-    let template = templates
-        .into_iter()
-        .find(|template| {
-            template.get("template_id").and_then(Value::as_str) == Some(&template_id.to_string())
-        })
-        .ok_or_else(|| ApiError::not_found(format!("Template {template_id} does not exist")))?;
+    let template_id_string = template_id.to_string();
+    let template = if let Some(row) =
+        sqlx::query("SELECT template_json FROM controller_templates WHERE template_id = ?")
+            .bind(&template_id_string)
+            .fetch_optional(state.store.pool())
+            .await?
+    {
+        decode_json(row.get::<String, _>("template_json"))?
+    } else {
+        available_templates(&state)
+            .await?
+            .into_iter()
+            .find(|template| {
+                template.get("template_id").and_then(Value::as_str)
+                    == Some(template_id_string.as_str())
+            })
+            .ok_or_else(|| ApiError::not_found(format!("Template {template_id} does not exist")))?
+    };
     let name = usage
         .get("name")
         .and_then(Value::as_str)
@@ -2100,13 +2207,23 @@ async fn create_node_from_template(
             "hda_disk_interface": template["hda_disk_interface"],
             "boot_priority": template["boot_priority"],
             "linked_clone": template["linked_clone"],
-            "maxcpus": template["maxcpus"],
+            "maxcpus": template
+                .get("maxcpus")
+                .filter(|value| !value.is_null())
+                .cloned()
+                .or_else(|| template.get("cpus").cloned())
+                .unwrap_or(json!(1)),
             "hdb_disk_image": template["hdb_disk_image"],
             "hdb_disk_interface": template["hdb_disk_interface"],
+            "hdb_disk_image_backing_file": template["hdb_disk_image_backing_file"],
             "hdc_disk_image": template["hdc_disk_image"],
             "hdc_disk_interface": template["hdc_disk_interface"],
+            "hdc_disk_image_backing_file": template["hdc_disk_image_backing_file"],
             "hdd_disk_image": template["hdd_disk_image"],
             "hdd_disk_interface": template["hdd_disk_interface"],
+            "hdd_disk_image_backing_file": template["hdd_disk_image_backing_file"],
+            "hda_disk_image_backing_file": template["hda_disk_image_backing_file"],
+            "disk_images_to_reset": template["disk_images_to_reset"],
             "cdrom_image": template["cdrom_image"],
             "bios_image": template["bios_image"],
             "kernel_image": template["kernel_image"],
@@ -2133,7 +2250,12 @@ async fn create_node_from_template(
             "adapters": 1,
             "memory": 0,
             "cpus": 0,
-            "startup_script": usage.get("startup_script").cloned().unwrap_or(json!("")),
+            "startup_script": usage
+                .get("startup_script")
+                .filter(|value| !value.is_null())
+                .cloned()
+                .or_else(|| template.get("startup_script").cloned())
+                .unwrap_or(json!("")),
             "base_script_file": template["base_script_file"],
             "console_type": template["console_type"],
             "console_auto_start": template["console_auto_start"],
@@ -2154,7 +2276,12 @@ async fn create_node_from_template(
             "nvram": template["nvram"],
             "dynamips_id": template["dynamips_id"],
             "idlepc": usage.get("idlepc").cloned().unwrap_or(template["idlepc"].clone()),
-            "startup_config": usage.get("startup_config").cloned().unwrap_or(json!("")),
+            "startup_config": usage
+                .get("startup_config")
+                .filter(|value| !value.is_null())
+                .cloned()
+                .or_else(|| template.get("startup_config").cloned())
+                .unwrap_or(json!("")),
             "private_config": template["private_config"],
             "mmap": template["mmap"],
             "sparsemem": template["sparsemem"],
@@ -2857,34 +2984,7 @@ async fn create_dynamips_node(
         .filter(|identifier| (1..=4096).contains(identifier))
         .ok_or_else(|| ApiError::conflict("No free Dynamips internal identifier is available"))?
         as u32;
-    let mut dynamips_options: DynamipsOptions =
-        serde_json::from_value(Value::Object(object.clone()))
-            .map_err(|_| ApiError::bad_request("Dynamips runtime settings are invalid"))?;
-    dynamips_options.dynamips_id = dynamips_id;
-    dynamips_options.mac_addr = dynamips_options
-        .mac_addr
-        .take()
-        .filter(|value| !value.trim().is_empty());
-    dynamips_options.system_id = dynamips_options
-        .system_id
-        .take()
-        .filter(|value| !value.trim().is_empty());
-    dynamips_options.slots = (0..7)
-        .map(|index| {
-            object
-                .get(format!("slot{index}").as_str())
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .collect();
-    dynamips_options.wics = (0..3)
-        .map(|index| {
-            object
-                .get(format!("wic{index}").as_str())
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .collect();
+    let dynamips_options = dynamips_options_from_template(object, dynamips_id)?;
 
     object.insert("name".into(), json!(name));
     object.insert("node_id".into(), json!(node_id));
@@ -2975,12 +3075,54 @@ async fn create_dynamips_node(
     }
 }
 
+fn dynamips_options_from_template(
+    object: &mut Map<String, Value>,
+    dynamips_id: u32,
+) -> Result<DynamipsOptions, ApiError> {
+    // Appliance templates do not carry a runtime ID. `json!` in
+    // `create_node_from_template` turns that absent field into `null`, which
+    // fails to deserialize as `DynamipsOptions::dynamips_id: u32` before the
+    // allocator's value can be applied. Normalize it before deserializing.
+    object.insert("dynamips_id".into(), json!(dynamips_id));
+    let mut options: DynamipsOptions = serde_json::from_value(Value::Object(object.clone()))
+        .map_err(|error| {
+            ApiError::bad_request(format!("Dynamips runtime settings are invalid: {error}"))
+        })?;
+    options.dynamips_id = dynamips_id;
+    options.mac_addr = options
+        .mac_addr
+        .take()
+        .filter(|value| !value.trim().is_empty());
+    options.system_id = options
+        .system_id
+        .take()
+        .filter(|value| !value.trim().is_empty());
+    options.slots = (0..7)
+        .map(|index| {
+            object
+                .get(format!("slot{index}").as_str())
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect();
+    options.wics = (0..3)
+        .map(|index| {
+            object
+                .get(format!("wic{index}").as_str())
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect();
+    Ok(options)
+}
+
 async fn create_link(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     Json(mut link): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
     let project_id = project_id.to_string();
+    let _project_lock = state.lock_project_operations(&project_id).await;
     let object = as_object_mut(&mut link, "link body must be an object")?;
     let link_id = parse_or_generate_uuid(object.get("link_id"), "link_id")?;
     let endpoints = object
@@ -3008,7 +3150,7 @@ async fn create_link(
     set_default(object, "suspend", json!(false));
     set_default(object, "filters", json!({}));
     set_default(object, "link_style", json!({}));
-    set_default(object, "capturing", json!(false));
+    object.insert("capturing".into(), json!(false));
     let filters = validate_link_filters(object.get("filters").unwrap_or(&Value::Null))?;
     object.insert("filters".into(), filters);
     if !object.get("suspend").is_some_and(Value::is_boolean) {
@@ -3017,10 +3159,10 @@ async fn create_link(
     if !object.get("link_style").is_some_and(Value::is_object) {
         return Err(ApiError::bad_request("link_style must be an object"));
     }
-    set_default(object, "capture_file_name", Value::Null);
-    set_default(object, "capture_file_path", Value::Null);
-    set_default(object, "capture_endpoint_id", Value::Null);
-    set_default(object, "wireshark", json!(false));
+    object.insert("capture_file_name".into(), Value::Null);
+    object.insert("capture_file_path".into(), Value::Null);
+    object.insert("capture_endpoint_id".into(), Value::Null);
+    object.insert("wireshark".into(), json!(false));
     if let Some(row) = sqlx::query(
         "SELECT object_json FROM topology_objects
          WHERE project_id = ? AND kind = 'link' AND object_id = ?",
@@ -3039,39 +3181,49 @@ async fn create_link(
     let runtime_endpoints = link_runtime_endpoints(state.store.pool(), &project_id, &link).await?;
     let endpoints = link["nodes"].as_array_mut().expect("validated nodes array");
     for (endpoint, runtime_endpoint) in endpoints.iter_mut().zip(&runtime_endpoints) {
+        if let Some(object) = endpoint.as_object_mut() {
+            object.retain(|key, _| !key.starts_with("runtime_"));
+        }
         endpoint["node_type"] = runtime_endpoint["node_type"].clone();
+    }
+    let mut should_attach = Vec::with_capacity(runtime_endpoints.len());
+    for runtime_endpoint in &runtime_endpoints {
+        should_attach.push(
+            runtime_endpoint_status(&state, &project_id, runtime_endpoint).await? != "stopped",
+        );
+    }
+    for endpoint in link["nodes"].as_array_mut().expect("validated nodes array") {
+        if endpoint["node_type"].as_str() == Some("vpcs")
+            && let Some(node_id) = endpoint["node_id"].as_str().map(str::to_owned)
+            && let (Some(adapter_port), Some(runtime_port)) = (
+                state.vpcs.adapter_udp_port(&node_id).await,
+                state.vpcs.active_udp_port(&node_id).await,
+            )
+        {
+            endpoint["runtime_adapter_port"] = json!(adapter_port);
+            endpoint["runtime_udp_port"] = json!(runtime_port);
+        }
     }
     let engine = LinkEngine::new(state.ubridge.clone());
     engine
         .reserve_pair(&mut link)
         .await
         .map_err(runtime_api_error)?;
-    for endpoint in link["nodes"].as_array_mut().expect("validated nodes array") {
-        if endpoint["node_type"].as_str() == Some("vpcs")
-            && let Some(node_id) = endpoint["node_id"].as_str().map(str::to_owned)
-            && let Some(adapter_port) = state.vpcs.adapter_udp_port(&node_id).await
-        {
-            endpoint["runtime_adapter_port"] = json!(adapter_port);
-            if let Some(local_port) = state.vpcs.active_udp_port(&node_id).await {
-                endpoint["runtime_udp_port"] = json!(local_port);
-            }
-        }
-    }
+    link["filter_endpoint_id"] = link["nodes"][0]["runtime_endpoint_id"].clone();
     for endpoint in link["nodes"].as_array_mut().expect("validated nodes array") {
         if let Some(object) = endpoint.as_object_mut() {
             object.remove("node_type");
         }
     }
     let mut attached = Vec::new();
-    for endpoint in link["nodes"].as_array().expect("validated nodes array") {
-        let Some(node_id) = endpoint["node_id"].as_str() else {
-            continue;
-        };
-        let runtime_endpoint = runtime_endpoints
-            .iter()
-            .find(|runtime_endpoint| runtime_endpoint["node_id"].as_str() == Some(node_id))
-            .ok_or_else(|| ApiError::bad_request("Link endpoint runtime is missing"))?;
-        if runtime_endpoint_status(&state, &project_id, runtime_endpoint).await? != "stopped" {
+    for ((endpoint, runtime_endpoint), should_attach) in link["nodes"]
+        .as_array()
+        .expect("validated nodes array")
+        .iter()
+        .zip(&runtime_endpoints)
+        .zip(should_attach)
+    {
+        if should_attach {
             if let Err(error) =
                 attach_runtime_link_endpoint(&state, &project_id, &link, endpoint, runtime_endpoint)
                     .await
@@ -3085,6 +3237,7 @@ async fn create_link(
                     )
                     .await;
                 }
+                engine.release_link_ports(&link).await;
                 return Err(error);
             }
             attached.push((endpoint.clone(), runtime_endpoint.clone()));
@@ -3109,6 +3262,7 @@ async fn create_link(
                     .await;
                 }
             }
+            engine.release_link_ports(&link).await;
             Err(error)
         }
     }
@@ -3260,12 +3414,19 @@ async fn attach_runtime_link_endpoint(
     let node_id = endpoint["node_id"].as_str().unwrap_or_default();
     let node = load_topology_node(state.store.pool(), project_id, node_id).await?;
     let engine = LinkEngine::new(state.ubridge.clone());
-    let filters = link.get("filters").cloned().unwrap_or_else(|| json!({}));
+    let filters = link_filters_for_endpoint(link, endpoint);
     let suspended = link["suspend"].as_bool().unwrap_or(false);
+    if matches!(
+        runtime_endpoint["node_type"].as_str(),
+        Some("cloud" | "nat")
+    ) {
+        BuiltinRuntime::validate_host_interfaces(&node).map_err(ApiError::bad_request)?;
+    }
     let endpoint_id = endpoint["runtime_endpoint_id"].as_str().unwrap_or_default();
+    let relay_already_exists = state.ubridge.has_link_endpoint(endpoint_id).await;
     let capture_selected = link["capturing"].as_bool().unwrap_or(false)
         && link["capture_endpoint_id"].as_str() == Some(endpoint_id);
-    let capture_needed = capture_selected && !state.ubridge.has_link_endpoint(endpoint_id).await;
+    let capture_needed = capture_selected && !relay_already_exists;
     let mut endpoint = endpoint.clone();
     match runtime_endpoint["node_type"].as_str().unwrap_or_default() {
         "docker" => {
@@ -3341,15 +3502,29 @@ async fn attach_runtime_link_endpoint(
                 .qemu
                 .adapter_nio(&endpoint)
                 .map_err(runtime_api_error)?;
-            state
-                .qemu
-                .attach_nio(&vm, &qemu_link_from_endpoint(&endpoint)?)
-                .await
-                .map_err(runtime_api_error)?;
-            engine
-                .attach_endpoint(&endpoint, adapter, &filters, suspended, None)
-                .await
-                .map_err(runtime_api_error)?;
+            let qemu_link = qemu_link_from_endpoint(&endpoint)?;
+            attach_runtime_nio_with_rollback(
+                !relay_already_exists,
+                || async {
+                    state
+                        .qemu
+                        .attach_nio(&vm, &qemu_link)
+                        .await
+                        .map_err(runtime_api_error)
+                },
+                || async {
+                    engine
+                        .attach_endpoint(&endpoint, adapter, &filters, suspended, None)
+                        .await
+                        .map_err(runtime_api_error)
+                },
+                || async {
+                    if !relay_already_exists {
+                        let _ = state.qemu.detach_nio(&vm, &qemu_link).await;
+                    }
+                },
+            )
+            .await?;
         }
         "vpcs" => {
             if let Some(port) = state.vpcs.adapter_udp_port(node_id).await {
@@ -3383,21 +3558,33 @@ async fn attach_runtime_link_endpoint(
             else {
                 unreachable!()
             };
-            state
-                .dynamips
-                .attach_nio(
-                    &vm,
-                    endpoint["adapter_number"].as_u64().unwrap_or_default() as u32,
-                    endpoint["port_number"].as_u64().unwrap_or_default() as u32,
-                    runtime_port,
-                    adapter_port,
-                )
-                .await
-                .map_err(runtime_api_error)?;
-            engine
-                .attach_endpoint(&endpoint, adapter, &filters, suspended, None)
-                .await
-                .map_err(runtime_api_error)?;
+            let adapter_number = endpoint["adapter_number"].as_u64().unwrap_or_default() as u32;
+            let port_number = endpoint["port_number"].as_u64().unwrap_or_default() as u32;
+            attach_runtime_nio_with_rollback(
+                !relay_already_exists,
+                || async {
+                    state
+                        .dynamips
+                        .attach_nio(&vm, adapter_number, port_number, runtime_port, adapter_port)
+                        .await
+                        .map_err(runtime_api_error)
+                },
+                || async {
+                    engine
+                        .attach_endpoint(&endpoint, adapter, &filters, suspended, None)
+                        .await
+                        .map_err(runtime_api_error)
+                },
+                || async {
+                    if !relay_already_exists {
+                        let _ = state
+                            .dynamips
+                            .detach_nio(&vm, adapter_number, port_number)
+                            .await;
+                    }
+                },
+            )
+            .await?;
         }
         "ethernet_switch" | "ethernet_hub" | "cloud" | "nat" => {
             let adapter =
@@ -3428,15 +3615,67 @@ async fn attach_runtime_link_endpoint(
         }
     }
     if capture_needed {
-        let capture_path = link["capture_file_path"]
+        let capture_file_name = safe_capture_file_name(
+            link["capture_file_name"]
+                .as_str()
+                .ok_or_else(|| ApiError::conflict("Capturing link has no capture file name"))?,
+        )?;
+        let stored_path = link["capture_file_path"]
             .as_str()
             .ok_or_else(|| ApiError::conflict("Capturing link has no capture file path"))?;
+        let capture_path =
+            canonical_capture_file_path(project_id, &capture_file_name, Some(stored_path), false)?;
         engine
-            .start_capture(&endpoint, capture_path)
+            .start_capture(&endpoint, &capture_path.to_string_lossy())
             .await
             .map_err(runtime_api_error)?;
     }
     Ok(())
+}
+
+async fn attach_runtime_nio_with_rollback<
+    Attach,
+    AttachFuture,
+    Relay,
+    RelayFuture,
+    Cleanup,
+    CleanupFuture,
+>(
+    cleanup_runtime_on_relay_failure: bool,
+    attach: Attach,
+    attach_relay: Relay,
+    cleanup: Cleanup,
+) -> Result<(), ApiError>
+where
+    Attach: FnOnce() -> AttachFuture,
+    AttachFuture: std::future::Future<Output = Result<(), ApiError>>,
+    Relay: FnOnce() -> RelayFuture,
+    RelayFuture: std::future::Future<Output = Result<(), ApiError>>,
+    Cleanup: FnOnce() -> CleanupFuture,
+    CleanupFuture: std::future::Future<Output = ()>,
+{
+    attach().await?;
+    if let Err(error) = attach_relay().await {
+        if cleanup_runtime_on_relay_failure {
+            cleanup().await;
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn link_filters_for_endpoint(link: &Value, endpoint: &Value) -> Value {
+    let selected = link["filter_endpoint_id"].as_str().or_else(|| {
+        link["nodes"]
+            .as_array()
+            .and_then(|nodes| nodes.first())
+            .and_then(|first| first["runtime_endpoint_id"].as_str())
+    });
+    if selected == endpoint["runtime_endpoint_id"].as_str() {
+        link.get("filters").cloned().unwrap_or_else(|| json!({}))
+    } else {
+        json!({})
+    }
 }
 
 async fn detach_runtime_link_endpoint(
@@ -3991,6 +4230,27 @@ async fn update_node(
     Path((project_id, node_id)): Path<(Uuid, Uuid)>,
     Json(patch): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
+    if let Some(idle_pc) = patch.get("idlepc").and_then(Value::as_str) {
+        let node = get_topology_object(
+            state.store.pool(),
+            &project_id.to_string(),
+            "node",
+            &node_id.to_string(),
+        )
+        .await?
+        .0;
+        if node["node_type"].as_str() == Some("dynamips") && !idle_pc.is_empty() {
+            let vm = state
+                .dynamips
+                .vm_from_node(&node)
+                .map_err(runtime_api_error)?;
+            state
+                .dynamips
+                .set_idle_pc(&vm, idle_pc)
+                .await
+                .map_err(runtime_api_error)?;
+        }
+    }
     update_topology_object(
         state,
         project_id.to_string(),
@@ -4009,6 +4269,7 @@ async fn update_node_configuration(
 ) -> Result<Json<Value>, ApiError> {
     let project_id = project_id.to_string();
     let node_id = node_id.to_string();
+    let _project_lock = state.lock_project_operations(&project_id).await;
     let node = get_topology_object(state.store.pool(), &project_id, "node", &node_id)
         .await?
         .0;
@@ -4021,6 +4282,7 @@ async fn update_node_configuration(
             updated[key] = value.clone();
         }
         updated = BuiltinRuntime::normalize_node(updated).map_err(ApiError::bad_request)?;
+        BuiltinRuntime::validate_host_interfaces(&updated).map_err(ApiError::bad_request)?;
         validate_builtin_configuration_links(
             state.store.pool(),
             &project_id,
@@ -4591,6 +4853,7 @@ async fn change_node_runtime_state(
 ) -> Result<Json<Value>, ApiError> {
     let project_id = project_id.to_string();
     let node_id = node_id.to_string();
+    let _project_lock = state.lock_project_operations(&project_id).await;
     let mut node = get_topology_object(state.store.pool(), &project_id, "node", &node_id)
         .await?
         .0;
@@ -4632,6 +4895,7 @@ async fn update_link(
 ) -> Result<Json<Value>, ApiError> {
     let project_id = project_id.to_string();
     let link_id = link_id.to_string();
+    let _project_lock = state.lock_project_operations(&project_id).await;
     let current = get_topology_object(state.store.pool(), &project_id, "link", &link_id)
         .await?
         .0;
@@ -4645,7 +4909,6 @@ async fn update_link(
     if patch.get("filters").is_some() || patch.get("suspend").is_some() {
         let runtime_endpoints =
             link_runtime_endpoints(state.store.pool(), &project_id, &candidate).await?;
-        let engine = LinkEngine::new(state.ubridge.clone());
         for endpoint in candidate["nodes"].as_array().into_iter().flatten() {
             let Some(runtime_endpoint) = runtime_endpoints
                 .iter()
@@ -4664,14 +4927,6 @@ async fn update_link(
                 runtime_endpoint,
             )
             .await?;
-            engine
-                .update_endpoint(
-                    endpoint,
-                    &candidate["filters"],
-                    candidate["suspend"].as_bool().unwrap_or(false),
-                )
-                .await
-                .map_err(runtime_api_error)?;
         }
     }
     update_topology_object(state, project_id, link_id, "link", "link_id", patch).await
@@ -4832,9 +5087,9 @@ fn validate_link_filters(filters: &Value) -> Result<Value, ApiError> {
                 let expression = values[0]
                     .as_str()
                     .ok_or_else(|| ApiError::bad_request("bpf expression must be text"))?;
-                if expression.len() > 4096 || expression.contains('\0') {
+                if expression.len() > 4096 || expression.chars().any(char::is_control) {
                     return Err(ApiError::bad_request(
-                        "bpf expression is too long or invalid",
+                        "bpf expression is too long or contains a control character",
                     ));
                 }
                 if !expression.trim().is_empty() {
@@ -4910,6 +5165,7 @@ async fn start_link_capture(
     }
     let project_id = project_id.to_string();
     let link_id = link_id.to_string();
+    let _project_lock = state.lock_project_operations(&project_id).await;
     let link = get_topology_object(state.store.pool(), &project_id, "link", &link_id)
         .await?
         .0;
@@ -4929,7 +5185,7 @@ async fn start_link_capture(
             format!("Could not create capture directory: {error}"),
         )
     })?;
-    let path = directory.join(&file_name);
+    let path = canonical_capture_file_path(&project_id, &file_name, None, false)?;
     let path_text = path.to_string_lossy().into_owned();
     let runtimes = link_runtime_endpoints(state.store.pool(), &project_id, &link).await?;
     let mut selected = None;
@@ -4975,6 +5231,7 @@ async fn stop_link_capture(
 ) -> Result<StatusCode, ApiError> {
     let project_id = project_id.to_string();
     let link_id = link_id.to_string();
+    let _project_lock = state.lock_project_operations(&project_id).await;
     let link = get_topology_object(state.store.pool(), &project_id, "link", &link_id)
         .await?
         .0;
@@ -5028,16 +5285,18 @@ async fn link_capture_response(
     if require_active && !link["capturing"].as_bool().unwrap_or(false) {
         return Err(ApiError::conflict("This link has no active packet capture"));
     }
-    let path = link["capture_file_path"]
+    let file_name = safe_capture_file_name(
+        link["capture_file_name"]
+            .as_str()
+            .ok_or_else(|| ApiError::not_found("Link has no capture file name"))?,
+    )?;
+    let stored_path = link["capture_file_path"]
         .as_str()
         .ok_or_else(|| ApiError::not_found("Link has no capture file"))?;
-    if !require_active && !std::path::Path::new(path).is_file() {
-        return Err(ApiError::not_found(format!(
-            "Capture file is not available: {path}"
-        )));
-    }
+    let path =
+        canonical_capture_file_path(project_id, &file_name, Some(stored_path), !require_active)?;
     let body = capture_file_body(
-        PathBuf::from(path),
+        path,
         require_active.then(|| {
             (
                 state.store.pool().clone(),
@@ -5053,10 +5312,7 @@ async fn link_capture_response(
             .parse()
             .expect("valid media type"),
     );
-    if !require_active
-        && let Some(file_name) = link["capture_file_name"].as_str()
-        && let Ok(value) = format!("attachment; filename=\"{file_name}\"").parse()
-    {
+    if !require_active && let Ok(value) = format!("attachment; filename=\"{file_name}\"").parse() {
         response
             .headers_mut()
             .insert(axum::http::header::CONTENT_DISPOSITION, value);
@@ -5146,6 +5402,64 @@ fn capture_directory(project_id: &str) -> std::path::PathBuf {
         .join(project_id)
 }
 
+fn canonical_capture_file_path(
+    project_id: &str,
+    file_name: &str,
+    stored_path: Option<&str>,
+    require_exists: bool,
+) -> Result<PathBuf, ApiError> {
+    canonical_capture_file_path_in(
+        &capture_directory(project_id),
+        file_name,
+        stored_path,
+        require_exists,
+    )
+}
+
+fn canonical_capture_file_path_in(
+    directory: &FsPath,
+    file_name: &str,
+    stored_path: Option<&str>,
+    require_exists: bool,
+) -> Result<PathBuf, ApiError> {
+    let file_name = safe_capture_file_name(file_name)?;
+    let directory = directory
+        .canonicalize()
+        .map_err(|_| ApiError::not_found("Project capture directory is not available"))?;
+    let expected = directory.join(&file_name);
+    let candidate = stored_path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| expected.clone());
+    let canonical = match candidate.canonicalize() {
+        Ok(path) => path,
+        Err(error)
+            if !require_exists
+                && error.kind() == std::io::ErrorKind::NotFound
+                && std::fs::symlink_metadata(&candidate).is_err() =>
+        {
+            let parent = candidate
+                .parent()
+                .and_then(|parent| parent.canonicalize().ok())
+                .ok_or_else(|| ApiError::not_found("Capture file path is not available"))?;
+            parent.join(
+                candidate
+                    .file_name()
+                    .ok_or_else(|| ApiError::not_found("Capture file path is invalid"))?,
+            )
+        }
+        Err(_) => return Err(ApiError::not_found("Capture file is not available")),
+    };
+    if canonical != expected || !canonical.starts_with(&directory) {
+        return Err(ApiError::not_found(
+            "Capture file path is outside the project capture directory",
+        ));
+    }
+    if require_exists && !canonical.is_file() {
+        return Err(ApiError::not_found("Capture file is not available"));
+    }
+    Ok(canonical)
+}
+
 fn safe_capture_file_name(file_name: &str) -> Result<String, ApiError> {
     let path = FsPath::new(file_name);
     if file_name.is_empty()
@@ -5153,6 +5467,7 @@ fn safe_capture_file_name(file_name: &str) -> Result<String, ApiError> {
         || path.file_name().and_then(|name| name.to_str()) != Some(file_name)
         || file_name == "."
         || file_name == ".."
+        || file_name.chars().any(char::is_control)
     {
         return Err(ApiError::bad_request(
             "capture_file_name must be a simple file name",
@@ -5167,11 +5482,16 @@ async fn delete_link(
 ) -> Result<StatusCode, ApiError> {
     let project_id = project_id.to_string();
     let link_id = link_id.to_string();
+    let _project_lock = state.lock_project_operations(&project_id).await;
     let link = get_topology_object(state.store.pool(), &project_id, "link", &link_id)
         .await?
         .0;
     cleanup_link_runtime(&state, &project_id, &link).await?;
-    delete_topology_object(state, project_id, link_id, "link").await
+    let response = delete_topology_object(state.clone(), project_id, link_id, "link").await?;
+    LinkEngine::new(state.ubridge.clone())
+        .release_link_ports(&link)
+        .await;
+    Ok(response)
 }
 
 async fn get_drawing(
@@ -5444,6 +5764,7 @@ async fn delete_node_and_connected_links(
     project_id: String,
     node_id: String,
 ) -> Result<StatusCode, ApiError> {
+    let _project_lock = state.lock_project_operations(&project_id).await;
     let mut tx = state.store.pool().begin().await?;
     ensure_project_exists(&mut tx, &project_id).await?;
     let node_row = sqlx::query(
@@ -5477,9 +5798,11 @@ async fn delete_node_and_connected_links(
     }
     cleanup_node_runtime(&state, &node).await?;
     let mut events = Vec::new();
+    let mut removed_links = Vec::new();
     for row in link_rows {
         let link_id: String = row.get("object_id");
         let link = decode_json(row.get::<String, _>("object_json"))?;
+        removed_links.push(link.clone());
         sqlx::query("DELETE FROM link_endpoints WHERE project_id = ? AND link_id = ?")
             .bind(&project_id)
             .bind(&link_id)
@@ -5510,6 +5833,10 @@ async fn delete_node_and_connected_links(
     .await?;
     events.push(Store::append_event(&mut tx, &project_id, "node.deleted", &node).await?);
     tx.commit().await?;
+    let link_engine = LinkEngine::new(state.ubridge.clone());
+    for link in &removed_links {
+        link_engine.release_link_ports(link).await;
+    }
     for event in events {
         state.store.publish(event);
     }
@@ -6365,10 +6692,13 @@ mod tests {
     use http_body_util::BodyExt;
     use serde_json::Value;
     use tempfile::TempDir;
+    use tokio::time::timeout;
     use tower::ServiceExt;
 
     use super::{
-        AppState, parse_docker_resize_control, router, validate_node_configuration_patch,
+        ApiError, AppState, attach_runtime_nio_with_rollback, canonical_capture_file_path_in,
+        dynamips_options_from_template, link_filters_for_endpoint, parse_docker_resize_control,
+        router, safe_capture_file_name, validate_link_filters, validate_node_configuration_patch,
         vpcs_startup_script,
     };
     use crate::storage::Store;
@@ -6377,6 +6707,10 @@ mod tests {
     };
 
     async fn test_router() -> (axum::Router, TempDir) {
+        test_router_with_vpcs(false).await
+    }
+
+    async fn test_router_with_vpcs(vpcs_available: bool) -> (axum::Router, TempDir) {
         let directory = TempDir::new().expect("temporary test directory");
         let database = directory.path().join("controller.sqlite");
         let store = Store::connect(database.to_str().expect("UTF-8 temporary path"))
@@ -6386,7 +6720,7 @@ mod tests {
         let state_file = directory.path().join("container-state");
         let docker_arguments = directory.path().join("docker-arguments.log");
         let script = format!(
-            "#!/bin/sh\nstate_file='{}'\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1\" in\n  info) echo 29.6.2 ;;\n  image) if [ \"$2\" = ls ]; then printf '{{\"Repository\":\"alpine\",\"Tag\":\"latest\",\"ID\":\"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}}\\n'; else echo sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef; fi ;;\n  create) echo 0123456789abcdef; echo created > \"$state_file\" ;;\n  inspect) cat \"$state_file\" ;;\n  start|unpause) echo running > \"$state_file\" ;;\n  stop|restart) echo exited > \"$state_file\" ;;\n  pause) echo paused > \"$state_file\" ;;\n  network) if [ \"$2\" = create ]; then echo test-network-id; fi; exit 0 ;;\n  ps) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+            "#!/bin/sh\nstate_file='{}'\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1\" in\n  info) echo 29.6.2 ;;\n  image) if [ \"$2\" = ls ]; then printf '{{\"Repository\":\"alpine\",\"Tag\":\"latest\",\"ID\":\"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}}\\n'; else echo sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef; fi ;;\n  create) echo 0123456789abcdef; echo created > \"$state_file\" ;;\n  inspect) cat \"$state_file\" ;;\n  start|unpause|restart) echo running > \"$state_file\" ;;\n  stop) echo exited > \"$state_file\" ;;\n  pause) echo paused > \"$state_file\" ;;\n  network) if [ \"$2\" = create ]; then echo test-network-id; fi; exit 0 ;;\n  ps) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
             state_file.display(),
             docker_arguments.display()
         );
@@ -6402,7 +6736,7 @@ mod tests {
         std::fs::create_dir_all(&qemu_images).expect("QEMU image directory exists");
         std::fs::write(qemu_images.join("router.qcow2"), b"base disk")
             .expect("QEMU base disk exists");
-        let qemu = directory.path().join("qemu-system-test-double");
+        let qemu = directory.path().join("qemu-system-x86_64");
         let qemu_img = directory.path().join("qemu-img-test-double");
         let argument_log = directory.path().join("qemu-arguments.log");
         let test_binary = std::env::current_exe().expect("Rust test executable is available");
@@ -6418,6 +6752,21 @@ mod tests {
             .expect("make QEMU test double executable");
         std::fs::set_permissions(&qemu_img, std::fs::Permissions::from_mode(0o755))
             .expect("make qemu-img test double executable");
+        let vpcs_binary = if vpcs_available {
+            let binary = directory.path().join("vpcs-test-double");
+            std::fs::write(
+                &binary,
+                "#!/bin/sh\nif [ \"$1\" = -v ]; then echo 'VPCS version 0.8.5'; exit 0; fi\nexit 1\n",
+            )
+            .expect("write VPCS test double");
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
+                .expect("make VPCS test double executable");
+            binary
+        } else {
+            std::env::var_os("NETWORK_SIMULATOR_TEST_VPCS")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| directory.path().join("vpcs-test-double-not-installed"))
+        };
         (
             router(AppState::with_runtimes(
                 store,
@@ -6429,12 +6778,7 @@ mod tests {
                     directory.path().join("qemu-state"),
                     directory.path().join("qemu-sockets"),
                 ),
-                VpcsRuntime::with_paths(
-                    std::env::var_os("NETWORK_SIMULATOR_TEST_VPCS")
-                        .map(std::path::PathBuf::from)
-                        .unwrap_or_else(|| directory.path().join("vpcs-test-double-not-installed")),
-                    directory.path().join("vpcs-state"),
-                ),
+                VpcsRuntime::with_paths(vpcs_binary, directory.path().join("vpcs-state")),
                 DynamipsRuntime::with_paths(
                     directory.path().join("dynamips-test-double-not-installed"),
                     directory.path().join("dynamips-images"),
@@ -6446,6 +6790,38 @@ mod tests {
             )),
             directory,
         )
+    }
+
+    #[tokio::test]
+    async fn project_operation_locks_serialize_one_project_without_blocking_another() {
+        let directory = TempDir::new().expect("temporary lock-test directory");
+        let store = Store::connect(
+            directory
+                .path()
+                .join("lock-test.sqlite")
+                .to_str()
+                .expect("UTF-8 database path"),
+        )
+        .await
+        .expect("test database connects");
+        let state = AppState::new(store);
+        let first = state.lock_project_operations("project-a").await;
+        let _other_project = state.lock_project_operations("project-b").await;
+        assert!(
+            timeout(
+                std::time::Duration::from_millis(20),
+                state.lock_project_operations("project-a")
+            )
+            .await
+            .is_err()
+        );
+        drop(first);
+        let _released = timeout(
+            std::time::Duration::from_secs(1),
+            state.lock_project_operations("project-a"),
+        )
+        .await
+        .expect("same-project lock becomes available after release");
     }
 
     #[tokio::test]
@@ -6543,7 +6919,11 @@ mod tests {
             None,
         )
         .await;
-        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "appliance manager response: {manager}"
+        );
         let source_template_id =
             manager["custom_image_options"]
                 .as_array()
@@ -6658,7 +7038,16 @@ mod tests {
             )
             .await
             .expect("unknown API route returns a response");
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        // Unclassified /v3 paths are denied before routing (deny-by-default auth
+        // classification), so an unknown API path yields a JSON 403, never the SPA shell.
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.starts_with("application/json"))
+        );
     }
 
     #[tokio::test]
@@ -6717,7 +7106,10 @@ mod tests {
                 "nodes": endpoints,
                 "suspend": true,
                 "filters": { "delay": [10, 5, "normal"], "packet_loss": [10] },
-                "link_style": { "width": 2 }
+                "link_style": { "width": 2 },
+                "capturing": true,
+                "capture_file_name": "client-controlled.pcap",
+                "capture_file_path": "/etc/passwd"
             })),
         )
         .await;
@@ -6734,11 +7126,25 @@ mod tests {
         assert_eq!(link["nodes"][0]["label"]["text"], "A");
         assert_eq!(link["nodes"][1]["label"]["text"], "B");
         assert_eq!(link["suspend"], true);
+        assert_eq!(link["capturing"], false);
+        assert!(link["capture_file_name"].is_null());
+        assert!(link["capture_file_path"].is_null());
         assert_eq!(
             link["filters"]["delay"],
             serde_json::json!([10, 5, "normal"])
         );
         assert_eq!(link["link_style"]["width"], 2);
+        let (status, _) = request(
+            &app,
+            Method::PUT,
+            format!(
+                "/v3/projects/{project_id}/links/{}",
+                link["link_id"].as_str().unwrap()
+            ),
+            Some(serde_json::json!({ "capture_file_path": "/etc/passwd" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 
         let (status, conflict) = request(
             &app,
@@ -6906,6 +7312,259 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(node["status"], "stopped");
+    }
+
+    #[tokio::test]
+    async fn saved_runtime_templates_create_nodes_with_their_settings() {
+        let (app, directory) = test_router_with_vpcs(true).await;
+        let (_, project) = request(
+            &app,
+            Method::POST,
+            "/v3/projects".into(),
+            Some(serde_json::json!({ "name": "Saved template lab" })),
+        )
+        .await;
+        let project_id = project["project_id"].as_str().unwrap();
+        let qemu_image = directory.path().join("qemu-images/router.qcow2");
+
+        let (status, vpcs_template) = request(
+            &app,
+            Method::POST,
+            "/v3/templates".into(),
+            Some(serde_json::json!({
+                "name": "Saved VPCS",
+                "template_type": "vpcs",
+                "adapters": 1,
+                "startup_script": "ip 192.0.2.10/24",
+                "base_script_file": "configs/base.vpc",
+                "console_type": "telnet",
+                "console_auto_start": true
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+
+        let (status, docker_template) = request(
+            &app,
+            Method::POST,
+            "/v3/templates".into(),
+            Some(serde_json::json!({
+                "name": "Saved Docker",
+                "template_type": "docker",
+                "image": "alpine:latest",
+                "start_command": "sleep 321",
+                "adapters": 3,
+                "memory": 256,
+                "cpus": 1.5,
+                "environment": "ROLE=router",
+                "extra_hosts": "gateway:192.0.2.1",
+                "extra_volumes": ["/etc/lab"],
+                "console_type": "telnet",
+                "console_resolution": "1280x720",
+                "console_http_port": 8080,
+                "console_http_path": "/console",
+                "aux_type": "none",
+                "custom_adapters": []
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+
+        let (status, qemu_template) = request(
+            &app,
+            Method::POST,
+            "/v3/templates".into(),
+            Some(serde_json::json!({
+                "name": "Saved QEMU",
+                "template_type": "qemu",
+                "hda_disk_image": qemu_image,
+                "adapters": 2,
+                "memory": 96,
+                "cpus": 2,
+                "platform": "x86_64",
+                "adapter_type": "e1000",
+                "hda_disk_interface": "ide",
+                "boot_priority": "c",
+                "linked_clone": false
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+
+        let (status, vpcs_node) = request(
+            &app,
+            Method::POST,
+            format!(
+                "/v3/projects/{project_id}/templates/{}",
+                vpcs_template["template_id"].as_str().unwrap()
+            ),
+            Some(serde_json::json!({ "name": "Map VPCS", "x": 12, "y": 34 })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(vpcs_node["startup_script"], "ip 192.0.2.10/24");
+        assert_eq!(vpcs_node["base_script_file"], "configs/base.vpc");
+        assert_eq!(vpcs_node["console_auto_start"], true);
+        assert_eq!(vpcs_node["x"], 12);
+
+        let (status, docker_node) = request(
+            &app,
+            Method::POST,
+            format!(
+                "/v3/projects/{project_id}/templates/{}",
+                docker_template["template_id"].as_str().unwrap()
+            ),
+            Some(serde_json::json!({ "name": "Map Docker" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(docker_node["image"], "alpine:latest");
+        assert_eq!(docker_node["start_command"], "sleep 321");
+        assert_eq!(docker_node["adapters"], 3);
+        assert_eq!(docker_node["memory"], 256);
+        assert_eq!(docker_node["cpus"], 1.5);
+        assert_eq!(docker_node["environment"], "ROLE=router");
+        assert_eq!(docker_node["extra_hosts"], "gateway:192.0.2.1");
+        assert_eq!(
+            docker_node["extra_volumes"],
+            serde_json::json!(["/etc/lab"])
+        );
+        assert_eq!(docker_node["console_resolution"], "1280x720");
+
+        let (status, qemu_node) = request(
+            &app,
+            Method::POST,
+            format!(
+                "/v3/projects/{project_id}/templates/{}",
+                qemu_template["template_id"].as_str().unwrap()
+            ),
+            Some(serde_json::json!({ "name": "Map QEMU" })),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "QEMU template add: {qemu_node}"
+        );
+        assert_eq!(
+            qemu_node["hda_disk_image"].as_str(),
+            Some(qemu_image.to_str().unwrap())
+        );
+        assert_eq!(qemu_node["adapters"], 2);
+        assert_eq!(qemu_node["memory"], 96);
+        assert_eq!(qemu_node["cpus"], 2);
+        assert_eq!(qemu_node["maxcpus"], 2);
+        assert_eq!(qemu_node["linked_clone"], false);
+    }
+
+    #[tokio::test]
+    async fn project_lifecycle_batches_skip_inapplicable_nodes_and_continue_after_failures() {
+        let (app, directory) = test_router().await;
+        let (_, project) = request(
+            &app,
+            Method::POST,
+            "/v3/projects".into(),
+            Some(serde_json::json!({ "name": "Batch lifecycle lab" })),
+        )
+        .await;
+        let project_id = project["project_id"].as_str().unwrap();
+        let (_, templates) = request(&app, Method::GET, "/v3/templates".into(), None).await;
+        for (node_type, name) in [
+            ("ethernet_switch", "A switch"),
+            ("ethernet_hub", "B hub"),
+            ("cloud", "C cloud"),
+            ("nat", "D NAT"),
+        ] {
+            let template = templates
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|template| template["template_type"] == node_type)
+                .unwrap();
+            let (status, _) = request(
+                &app,
+                Method::POST,
+                format!(
+                    "/v3/projects/{project_id}/templates/{}",
+                    template["template_id"].as_str().unwrap()
+                ),
+                Some(serde_json::json!({ "name": name, "x": 0, "y": 0 })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::CREATED, "create {node_type}");
+        }
+
+        let (status, _docker_node) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/nodes"),
+            Some(serde_json::json!({
+                "name": "Z Docker",
+                "node_type": "docker",
+                "image": "alpine:latest",
+                "adapters": 1
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+
+        for (action, expected_runtime_state) in [
+            ("start", "running"),
+            ("suspend", "paused"),
+            ("start", "running"),
+            ("reload", "running"),
+            ("stop", "exited"),
+        ] {
+            let (status, _) = request(
+                &app,
+                Method::POST,
+                format!("/v3/projects/{project_id}/nodes/{action}"),
+                Some(serde_json::json!({})),
+            )
+            .await;
+            assert_eq!(status, StatusCode::NO_CONTENT, "project {action} all");
+            let runtime_state = std::fs::read_to_string(directory.path().join("container-state"))
+                .expect("Docker test runtime state is written");
+            assert_eq!(
+                runtime_state.trim(),
+                expected_runtime_state,
+                "Docker after {action} all"
+            );
+        }
+
+        let (status, missing_qemu) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/nodes"),
+            Some(serde_json::json!({
+                "name": "Y missing QEMU",
+                "node_type": "qemu",
+                "hda_disk_image": directory.path().join("qemu-images/router.qcow2"),
+                "adapters": 0,
+                "memory": 64,
+                "cpus": 1
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        std::fs::remove_file(missing_qemu["runtime_overlay"].as_str().unwrap()).unwrap();
+
+        let (status, error) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/nodes/start"),
+            Some(serde_json::json!({})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(error["message"].as_str().unwrap().contains("overlay"));
+        let runtime_state = std::fs::read_to_string(directory.path().join("container-state"))
+            .expect("Docker test runtime state is written after the batch failure");
+        assert_eq!(runtime_state.trim(), "running");
+        assert!(!super::controller_routes::bulk_node_action_applies(
+            &serde_json::json!({ "node_type": "vpcs", "status": "started" }),
+            crate::runtime::NodeAction::Suspend
+        ));
     }
 
     #[tokio::test]
@@ -8076,6 +8735,17 @@ mod tests {
         )
         .await
         .expect("test database connects");
+        sqlx::query("UPDATE auth_config SET auth_enabled = 0 WHERE singleton = 1")
+            .execute(store.pool())
+            .await
+            .expect("keep test authentication disabled");
+        sqlx::query(
+            "INSERT INTO auth_users (user_id, username, full_name, password_hash, is_superadmin) VALUES (?, 'live-test-admin', 'Live test administrator', 'unused', 1)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .execute(store.pool())
+        .await
+        .expect("seed loopback superadmin principal for the auth middleware");
         let qemu = QemuRuntime::new();
         let docker = DockerRuntime::new();
         let vpcs_binary = env::var_os("NETWORK_SIMULATOR_TEST_VPCS")
@@ -8104,6 +8774,9 @@ mod tests {
         let mut vpcs_node_id: Option<String> = None;
         let mut docker_node_id: Option<String> = None;
         let mut link_endpoints = Vec::<Value>::new();
+        let test_started_at = std::time::Instant::now();
+        let mut links_created_at_ms = None;
+        let mut chr_start_returned_at_ms = None;
 
         let run: Result<(), String> = async {
             create_custom_from_runtime(&app, "qemu", "Live CHR").await;
@@ -8215,6 +8888,7 @@ mod tests {
                 return Err(format!("CHR↔Docker link returned {status}: {docker_link}"));
             }
             link_endpoints.extend(docker_link["nodes"].as_array().into_iter().flatten().cloned());
+            links_created_at_ms = Some(test_started_at.elapsed().as_millis());
 
             for node in [&chr, &vpcs_node, &docker_node] {
                 let node_id = node["node_id"].as_str().ok_or("node has no ID")?;
@@ -8227,6 +8901,9 @@ mod tests {
                 if status != StatusCode::OK || started["status"] != "started" {
                     return Err(format!("node start returned {status}: {started}"));
                 }
+                if node_id == chr_node_id {
+                    chr_start_returned_at_ms = Some(test_started_at.elapsed().as_millis());
+                }
             }
 
             let vm = qemu_vm.as_ref().ok_or("CHR runtime model missing")?;
@@ -8235,6 +8912,7 @@ mod tests {
                 .map_err(|error| format!("CHR serial socket did not open: {error}"))?;
             let mut serial = BufReader::new(serial_socket);
             read_until(&mut serial, "CHR Login:", Duration::from_secs(180)).await?;
+            let chr_login_prompt_at_ms = test_started_at.elapsed().as_millis();
             serial.write_all(b"admin\r").await.map_err(|error| error.to_string())?;
             read_until(&mut serial, "Password:", Duration::from_secs(10)).await?;
             serial.write_all(b"\r").await.map_err(|error| error.to_string())?;
@@ -8281,18 +8959,170 @@ mod tests {
                     return Err(format!("could not configure Alpine eth0: {}", String::from_utf8_lossy(&output.stderr).trim()));
                 }
             }
-            let output = Command::new(&docker_binary)
-                .args(["exec", container_id, "ping", "-c", "1", "-W", "4", "10.0.2.1"])
-                .output()
-                .await
-                .map_err(|error| format!("could not ping CHR from Alpine: {error}"))?;
-            let docker_ping_ok = output.status.success()
-                && String::from_utf8_lossy(&output.stdout).contains("1 packets received");
-            let docker_ping_output = format!(
-                "{}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let capture_paths = link_endpoints
+                .iter()
+                .filter(|endpoint| {
+                    endpoint["node_id"].as_str()
+                        == Some(docker_node_id.as_deref().unwrap_or_default())
+                        || (endpoint["node_id"].as_str() == Some(chr_node_id)
+                            && endpoint["adapter_number"].as_u64() == Some(1))
+                })
+                .map(|endpoint| {
+                    let endpoint_id = endpoint["runtime_endpoint_id"]
+                        .as_str()
+                        .unwrap_or_default();
+                    (
+                        endpoint_id.to_owned(),
+                        directory.path().join(format!("{endpoint_id}.pcap")),
+                    )
+                })
+                .collect::<Vec<_>>();
+            for (endpoint_id, path) in &capture_paths {
+                ubridge
+                    .start_link_capture(endpoint_id, &path.to_string_lossy())
+                    .await
+                    .map_err(|error| {
+                        format!("could not capture CHR/Docker link: {}", error.message())
+                    })?;
+            }
+            let first_alpine_probe_at_ms = test_started_at.elapsed().as_millis();
+            // A live CHR run can drop the first echo immediately after fresh
+            // ARP resolution even though the ARP exchange and later echoes are
+            // valid. Bound this reachability check to three one-packet probes;
+            // each probe has a four-second deadline.
+            let mut docker_ping_ok = false;
+            let mut docker_ping_attempts = 0;
+            let mut docker_ping_output = String::new();
+            let mut first_docker_ping_output = String::new();
+            for attempt in 0..3 {
+                docker_ping_attempts = attempt + 1;
+                let output = Command::new(&docker_binary)
+                    .args([
+                        "exec",
+                        container_id,
+                        "ping",
+                        "-c",
+                        "1",
+                        "-W",
+                        "4",
+                        "10.0.2.1",
+                    ])
+                    .output()
+                    .await
+                    .map_err(|error| format!("could not ping CHR from Alpine: {error}"))?;
+                docker_ping_output = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                if attempt == 0 {
+                    first_docker_ping_output.clone_from(&docker_ping_output);
+                }
+                docker_ping_ok = output.status.success()
+                    && docker_ping_output.contains("1 packets received");
+                if docker_ping_ok {
+                    break;
+                }
+            }
+            let mut network_debug = String::new();
+            if !docker_ping_ok {
+                network_debug.push_str(&format!(
+                    "\nAlpine used {docker_ping_attempts} bounded probes; first probe output:\n{first_docker_ping_output}\nTest timing from setup: CHR/VPCS/Docker links created +{} ms; CHR start request returned +{} ms; CHR login prompt +{} ms; first Alpine probe +{} ms. Link records existed before startup, but the API launches QEMU with no NIC and hot-attaches link NIOs over QMP before the start request returns.\nQEMU NIC model: virtio-net-pci; expected adapter MACs: {}, {}",
+                    links_created_at_ms.unwrap_or_default(),
+                    chr_start_returned_at_ms.unwrap_or_default(),
+                    chr_login_prompt_at_ms,
+                    first_alpine_probe_at_ms,
+                    qemu_test_mac(chr_node_id, 0)?,
+                    qemu_test_mac(chr_node_id, 1)?
+                ));
+                let retry = Command::new(&docker_binary)
+                    .args(["exec", container_id, "ping", "-c", "3", "-W", "1", "10.0.2.1"])
+                    .output()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                network_debug.push_str(&format!(
+                    "\nAlpine three-packet retry:\n{}{}",
+                    String::from_utf8_lossy(&retry.stdout),
+                    String::from_utf8_lossy(&retry.stderr)
+                ));
+                let chr_arp = routeros_command(&mut serial, "/ip arp print detail").await?;
+                let chr_interfaces =
+                    routeros_command(&mut serial, "/interface ethernet print detail").await?;
+                let chr_stats = routeros_command(&mut serial, "/interface ethernet print stats").await?;
+                let chr_firewall = routeros_command(
+                    &mut serial,
+                    "/ip firewall filter print detail stats",
+                )
+                .await?;
+                let chr_interface_lists =
+                    routeros_command(&mut serial, "/interface list member print detail").await?;
+                network_debug.push_str(&format!(
+                    "\nCHR ARP before reverse ping:\n{chr_arp}\nCHR interfaces:\n{chr_interfaces}\nCHR interface stats:\n{chr_stats}\nCHR IPv4 firewall rules and counters:\n{chr_firewall}\nCHR interface list members:\n{chr_interface_lists}"
+                ));
+                for endpoint in link_endpoints.iter().filter(|endpoint| {
+                    endpoint["node_id"].as_str()
+                        == Some(docker_node_id.as_deref().unwrap_or_default())
+                }) {
+                    let endpoint_id = endpoint["runtime_endpoint_id"].as_str().unwrap_or_default();
+                    let host = crate::ubridge::host_veth_name(endpoint_id)
+                        .map_err(|error| error.message().to_owned())?;
+                    let link = Command::new("ip")
+                        .args(["-s", "-d", "link", "show", "dev", &host])
+                        .output()
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    let offloads = Command::new("ethtool")
+                        .args(["-k", &host])
+                        .output()
+                        .await
+                        .map(|output| {
+                            format!(
+                                "{}{}",
+                                String::from_utf8_lossy(&output.stdout),
+                                String::from_utf8_lossy(&output.stderr)
+                            )
+                        })
+                        .unwrap_or_else(|error| format!("ethtool unavailable: {error}"));
+                    let fdb = Command::new("bridge")
+                        .args(["fdb", "show", "dev", &host])
+                        .output()
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    let guest = Command::new(&docker_binary)
+                        .args([
+                            "exec",
+                            container_id,
+                            "sh",
+                            "-c",
+                            "ip link show dev eth0; ip -s link show dev eth0; ip neigh show dev eth0",
+                        ])
+                        .output()
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    network_debug.push_str(&format!(
+                        "\nHost veth {host}:\n{}\nHost veth offloads:\n{offloads}\nDocker eth0/link neighbors:\n{}{}\nLinux bridge FDB for this endpoint:\n{}",
+                        String::from_utf8_lossy(&link.stdout),
+                        String::from_utf8_lossy(&guest.stdout),
+                        String::from_utf8_lossy(&guest.stderr),
+                        String::from_utf8_lossy(&fdb.stdout)
+                    ));
+                }
+                for (endpoint_id, path) in &capture_paths {
+                    let _ = ubridge.stop_link_capture(endpoint_id).await;
+                    let capture = Command::new("tcpdump")
+                        .args(["-nn", "-e", "-tt", "-vvv", "-xx", "-r"])
+                        .arg(path)
+                        .arg("arp or icmp")
+                        .output()
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    network_debug.push_str(&format!(
+                        "\nuBridge capture {endpoint_id}:\n{}{}",
+                        String::from_utf8_lossy(&capture.stdout),
+                        String::from_utf8_lossy(&capture.stderr)
+                    ));
+                }
+            }
             let chr_ping_output = routeros_command(&mut serial, "/ping 10.0.2.2 count=1").await?;
 
             let mut vpcs_console = vpcs.connect_console(vpcs_node["node_id"].as_str().ok_or("VPCS node has no ID")?)
@@ -8331,8 +9161,8 @@ mod tests {
             }
             if !docker_ping_ok || !chr_ping_output.contains("received=1") || !vpcs_ping_ok {
                 return Err(format!(
-                    "QEMU connectivity failed; Alpine ping: {docker_ping_output}; CHR ping: {chr_ping_output}; VPCS ping: {}",
-                    String::from_utf8_lossy(&vpcs_output)
+                    "QEMU connectivity failed; Alpine ping: {docker_ping_output}; CHR ping: {chr_ping_output}; VPCS ping: {}{network_debug}",
+                    String::from_utf8_lossy(&vpcs_output),
                 ));
             }
             Ok(())
@@ -8859,7 +9689,7 @@ mod tests {
             Some(serde_json::json!({
                 "name": "Cloud1",
                 "node_type": "cloud",
-                "ports_mapping": [{"type":"ethernet","interface":"ens33"}]
+                "ports_mapping": [{"type":"ethernet","interface":"virbr0"}]
             })),
         )
         .await;
@@ -8922,6 +9752,99 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(error["message"].as_str().unwrap().contains("remote host"));
+
+        let (status, error) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/nodes"),
+            Some(serde_json::json!({
+                "name":"Loopback cloud",
+                "node_type":"cloud",
+                "ports_mapping":[{"type":"ethernet","interface":"lo"}]
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("allow_host_interfaces")
+        );
+
+        let (status, allowlisted_cloud) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/nodes"),
+            Some(serde_json::json!({
+                "name":"Explicit loopback cloud",
+                "node_type":"cloud",
+                "ports_mapping":[{"type":"ethernet","interface":"lo"}],
+                "allow_host_interfaces":["lo"]
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(
+            allowlisted_cloud["allow_host_interfaces"],
+            serde_json::json!(["lo"])
+        );
+
+        let (status, error) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/nodes"),
+            Some(serde_json::json!({
+                "name":"Missing host interface",
+                "node_type":"cloud",
+                "ports_mapping":[{"type":"ethernet","interface":"nosuch0"}]
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("does not exist")
+        );
+
+        let (status, error) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/nodes"),
+            Some(serde_json::json!({
+                "name":"Unapproved NAT interface",
+                "node_type":"nat",
+                "ports_mapping":[{"type":"ethernet","interface":"lo"}]
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("configured default")
+        );
+
+        let (status, allowlisted_nat) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/nodes"),
+            Some(serde_json::json!({
+                "name":"Explicit interface NAT",
+                "node_type":"nat",
+                "ports_mapping":[{"type":"ethernet","interface":"lo"}],
+                "allow_host_interfaces":["lo"]
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(
+            allowlisted_nat["allow_host_interfaces"],
+            serde_json::json!(["lo"])
+        );
     }
 
     #[tokio::test]
@@ -9111,6 +10034,34 @@ mod tests {
     }
 
     #[test]
+    fn dynamips_template_creation_replaces_null_runtime_id_before_deserialization() {
+        let mut template = serde_json::json!({
+            "dynamips_id": null,
+            "platform": "c3725",
+            "slot0": "GT96100-FE",
+            "slot1": null,
+            "wic0": null,
+            "mac_addr": "",
+            "system_id": "FTX0945W0MY",
+            "iomem": null
+        })
+        .as_object()
+        .expect("template JSON is an object")
+        .clone();
+
+        let options = dynamips_options_from_template(&mut template, 7).unwrap_or_else(|_| {
+            panic!("allocated runtime ID should make the template settings valid")
+        });
+
+        assert_eq!(options.dynamips_id, 7);
+        assert_eq!(template["dynamips_id"], 7);
+        assert_eq!(options.slots[0].as_deref(), Some("GT96100-FE"));
+        assert_eq!(options.wics[0], None);
+        assert_eq!(options.mac_addr, None);
+        assert_eq!(options.iomem, None);
+    }
+
+    #[test]
     fn parses_docker_console_resize_control_frames() {
         assert_eq!(
             parse_docker_resize_control(r#"{"type":"resize","rows":40,"columns":120}"#),
@@ -9125,6 +10076,114 @@ mod tests {
             None
         );
         assert_eq!(parse_docker_resize_control("show version"), None);
+    }
+
+    #[test]
+    fn capture_paths_are_canonicalized_inside_the_project_directory() {
+        let directory = TempDir::new().expect("temporary capture root");
+        let project_dir = directory.path().join("project");
+        std::fs::create_dir_all(&project_dir).expect("create project capture directory");
+        let capture = project_dir.join("traffic.pcap");
+        std::fs::write(&capture, b"pcap").expect("write capture");
+        let outside = directory.path().join("outside.pcap");
+        std::fs::write(&outside, b"private").expect("write outside file");
+        assert_eq!(
+            canonical_capture_file_path_in(
+                &project_dir,
+                "traffic.pcap",
+                Some(capture.to_str().unwrap()),
+                true,
+            )
+            .unwrap(),
+            capture.canonicalize().unwrap()
+        );
+        assert!(
+            canonical_capture_file_path_in(
+                &project_dir,
+                "traffic.pcap",
+                Some(outside.to_str().unwrap()),
+                true,
+            )
+            .is_err()
+        );
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, project_dir.join("linked.pcap"))
+                .expect("create capture symlink");
+            assert!(
+                canonical_capture_file_path_in(
+                    &project_dir,
+                    "linked.pcap",
+                    Some(project_dir.join("linked.pcap").to_str().unwrap()),
+                    true,
+                )
+                .is_err()
+            );
+        }
+        assert!(safe_capture_file_name("x\nhypervisor stop\n").is_err());
+    }
+
+    #[test]
+    fn frequency_drop_is_normalized_and_filters_select_one_relay_endpoint() {
+        let filters = validate_link_filters(&serde_json::json!({ "frequency_drop": [3] }))
+            .expect("frequency_drop is supported");
+        assert_eq!(filters["frequency_drop"], serde_json::json!([3]));
+        assert!(validate_link_filters(&serde_json::json!({ "bpf": ["ip\ntcp"] })).is_err());
+
+        let link = serde_json::json!({
+            "filters": { "packet_loss": [10] },
+            "nodes": [
+                { "runtime_endpoint_id": "first" },
+                { "runtime_endpoint_id": "second" }
+            ]
+        });
+        assert_eq!(
+            link_filters_for_endpoint(&link, &link["nodes"][0]),
+            serde_json::json!({ "packet_loss": [10] })
+        );
+        assert_eq!(
+            link_filters_for_endpoint(&link, &link["nodes"][1]),
+            serde_json::json!({})
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_relay_attach_runs_runtime_nio_cleanup() {
+        let attach_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cleanup_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cleanup = cleanup_count.clone();
+        let result = attach_runtime_nio_with_rollback(
+            true,
+            || {
+                let attach_count = attach_count.clone();
+                async move {
+                    attach_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(())
+                }
+            },
+            || async { Err(ApiError::conflict("uBridge attach failed")) },
+            || async move {
+                cleanup.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            },
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(attach_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(cleanup_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let cleanup = cleanup_count.clone();
+        let result = attach_runtime_nio_with_rollback(
+            false,
+            || async { Ok(()) },
+            || async { Err(ApiError::conflict("uBridge update failed")) },
+            || async move {
+                cleanup.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(cleanup_count.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }
 

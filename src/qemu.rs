@@ -1673,7 +1673,7 @@ impl QemuRuntime {
                 .arg("-serial")
                 .arg("chardev:serial0");
         }
-        command.arg("-no-reboot");
+        // QEMU treats QMP system_reset as a shutdown when -no-reboot is set.
         command.args(runtime_arguments);
         // TODO(RUNTIME-NET QEMU custom adapter hook): materialize adapter
         // counts without links, custom_adapters, configured MAC addresses, and
@@ -3391,7 +3391,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires qemu-system-x86_64 and qemu-img; set NETWORK_SIMULATOR_TEST_QEMU and NETWORK_SIMULATOR_TEST_QEMU_IMG"]
-    async fn qemu_live_vm_launches_and_stops_through_qmp() {
+    async fn qemu_live_vm_launches_reloads_and_stops_through_qmp() {
         let qemu = std::env::var_os("NETWORK_SIMULATOR_TEST_QEMU")
             .expect("NETWORK_SIMULATOR_TEST_QEMU is set for the live test");
         let qemu_img = std::env::var_os("NETWORK_SIMULATOR_TEST_QEMU_IMG")
@@ -3402,7 +3402,7 @@ mod tests {
         let image_creation = std::process::Command::new(&qemu_img)
             .args(["create", "-f", "qcow2"])
             .arg(images.join("router.qcow2"))
-            .arg("64M")
+            .arg("16M")
             .status()
             .expect("qemu-img executable runs");
         assert!(
@@ -3435,6 +3435,17 @@ mod tests {
                 .unwrap(),
             "started"
         );
+        let reload_status = runtime
+            .lifecycle(&vm, crate::runtime::NodeAction::Reload, &[])
+            .await;
+        if let Err(error) = reload_status {
+            let _ = runtime
+                .lifecycle(&vm, crate::runtime::NodeAction::Stop, &[])
+                .await;
+            panic!("live QEMU reload failed: {}", error.message());
+        }
+        assert_eq!(reload_status.unwrap(), "started");
+        assert_eq!(runtime.status(&vm).await.unwrap(), "started");
         assert_eq!(
             runtime
                 .lifecycle(&vm, crate::runtime::NodeAction::Stop, &[])

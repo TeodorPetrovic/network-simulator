@@ -108,16 +108,66 @@ impl LinkEngine {
     pub async fn reserve_pair(&self, link: &mut Value) -> Result<(), RuntimeError> {
         let link_id = required_text(link, "link_id")?;
         let endpoints = link
-            .get_mut("nodes")
-            .and_then(Value::as_array_mut)
+            .get("nodes")
+            .and_then(Value::as_array)
             .filter(|endpoints| endpoints.len() == 2)
             .ok_or_else(|| {
                 RuntimeError::Failed("Ethernet links require exactly two endpoints".to_owned())
             })?;
-        let mut ports = Vec::with_capacity(2);
-        for _ in 0..2 {
-            ports.push(self.ubridge.reserve_udp_port().await?);
+        let mut need_runtime_ports = Vec::with_capacity(2);
+        let mut preassigned_ports = Vec::new();
+        for endpoint in endpoints {
+            required_text(endpoint, "node_id")?;
+            let needs_runtime_ports =
+                endpoint.get("node_type").and_then(Value::as_str) != Some("docker");
+            let assigned = ["runtime_adapter_port", "runtime_udp_port"]
+                .iter()
+                .map(|key| {
+                    endpoint
+                        .get(*key)
+                        .and_then(Value::as_u64)
+                        .and_then(|port| u16::try_from(port).ok())
+                        .filter(|port| *port != 0)
+                })
+                .collect::<Vec<_>>();
+            let has_assigned = assigned.iter().all(Option::is_some);
+            if needs_runtime_ports && has_assigned {
+                preassigned_ports.extend(assigned.into_iter().flatten());
+                need_runtime_ports.push(false);
+            } else {
+                need_runtime_ports.push(needs_runtime_ports);
+            }
         }
+        let mut claimed_ports = Vec::new();
+        for port in preassigned_ports {
+            if let Err(error) = self.ubridge.claim_udp_port(&link_id, port).await {
+                self.ubridge
+                    .release_udp_ports(&link_id, claimed_ports)
+                    .await;
+                return Err(error);
+            }
+            claimed_ports.push(port);
+        }
+        let required_ports = 2 + need_runtime_ports.iter().filter(|needed| **needed).count() * 2;
+        let mut ports = Vec::with_capacity(required_ports);
+        for _ in 0..required_ports {
+            match self.ubridge.reserve_udp_port_for(&link_id).await {
+                Ok(port) => ports.push(port),
+                Err(error) => {
+                    self.ubridge.release_udp_ports(&link_id, ports).await;
+                    self.ubridge
+                        .release_udp_ports(&link_id, claimed_ports)
+                        .await;
+                    return Err(error);
+                }
+            }
+        }
+
+        let endpoints = link
+            .get_mut("nodes")
+            .and_then(Value::as_array_mut)
+            .expect("endpoint list was validated above");
+        let mut next_port = 2;
         for (index, endpoint) in endpoints.iter_mut().enumerate() {
             let endpoint_object = endpoint.as_object_mut().ok_or_else(|| {
                 RuntimeError::Failed("Link endpoints must be JSON objects".to_owned())
@@ -140,14 +190,39 @@ impl LinkEngine {
             endpoint_object.insert("runtime_endpoint_id".into(), json!(endpoint_id));
             endpoint_object.insert("runtime_link_port".into(), json!(ports[index]));
             endpoint_object.insert("runtime_peer_link_port".into(), json!(ports[1 - index]));
-            if endpoint_object.get("node_type").and_then(Value::as_str) != Some("docker") {
-                let adapter_port = self.ubridge.reserve_udp_port().await?;
-                let runtime_port = self.ubridge.reserve_udp_port().await?;
+            if need_runtime_ports[index] {
+                let adapter_port = ports[next_port];
+                let runtime_port = ports[next_port + 1];
+                next_port += 2;
                 endpoint_object.insert("runtime_adapter_port".into(), json!(adapter_port));
                 endpoint_object.insert("runtime_udp_port".into(), json!(runtime_port));
             }
         }
         Ok(())
+    }
+
+    /// Reserve persisted link ports before startup reconciliation attaches the
+    /// corresponding NIOs. Port fields can repeat for reciprocal endpoints,
+    /// so each numeric port is claimed once.
+    pub async fn claim_link_ports(&self, link: &Value) -> Result<(), RuntimeError> {
+        let link_id = required_text(link, "link_id")?;
+        let ports = link_udp_ports(link);
+        let mut claimed = Vec::new();
+        for port in ports {
+            if let Err(error) = self.ubridge.claim_udp_port(&link_id, port).await {
+                self.ubridge.release_udp_ports(&link_id, claimed).await;
+                return Err(error);
+            }
+            claimed.push(port);
+        }
+        Ok(())
+    }
+
+    pub async fn release_link_ports(&self, link: &Value) {
+        let owner = required_text(link, "link_id").unwrap_or_default();
+        self.ubridge
+            .release_udp_ports(&owner, link_udp_ports(link))
+            .await;
     }
 
     pub async fn attach_endpoint(
@@ -251,4 +326,25 @@ impl LinkEngine {
         let endpoint_id = required_text(endpoint, "runtime_endpoint_id")?;
         self.ubridge.delete_link_endpoint(&endpoint_id).await
     }
+}
+
+fn link_udp_ports(link: &Value) -> Vec<u16> {
+    let mut ports = std::collections::HashSet::new();
+    for endpoint in link["nodes"].as_array().into_iter().flatten() {
+        for key in [
+            "runtime_link_port",
+            "runtime_adapter_port",
+            "runtime_udp_port",
+        ] {
+            if let Some(port) = endpoint
+                .get(key)
+                .and_then(Value::as_u64)
+                .and_then(|port| u16::try_from(port).ok())
+                .filter(|port| *port != 0)
+            {
+                ports.insert(port);
+            }
+        }
+    }
+    ports.into_iter().collect()
 }

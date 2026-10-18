@@ -478,15 +478,26 @@ async fn update_settings(
     Ok(Json(settings))
 }
 
-fn local_compute() -> Value {
-    json!({"compute_id":"local","name":"Local","host":"127.0.0.1","port":3080,"protocol":"http","auto_connect":true,"connected":true})
+fn local_compute(state: &AppState) -> Value {
+    json!({
+        "compute_id": "local",
+        "name": "Local",
+        "host": state.bind_address.ip().to_string(),
+        "port": state.bind_address.port(),
+        "protocol": "http",
+        "auto_connect": true,
+        "connected": true
+    })
 }
-async fn list_computes() -> Json<Vec<Value>> {
-    Json(vec![local_compute()])
+async fn list_computes(State(state): State<AppState>) -> Json<Vec<Value>> {
+    Json(vec![local_compute(&state)])
 }
-async fn get_compute(AxumPath(compute_id): AxumPath<String>) -> Result<Json<Value>, ApiError> {
+async fn get_compute(
+    State(state): State<AppState>,
+    AxumPath(compute_id): AxumPath<String>,
+) -> Result<Json<Value>, ApiError> {
     if compute_id == "local" {
-        Ok(Json(local_compute()))
+        Ok(Json(local_compute(&state)))
     } else {
         Err(ApiError::not_found(format!(
             "Compute {compute_id} does not exist"
@@ -1035,15 +1046,50 @@ async fn bulk_nodes(
 ) -> Result<StatusCode, ApiError> {
     let pid = project_id.to_string();
     let nodes = list_objects(state.store.pool(), &pid, "node").await?.0;
+    let mut first_error = None;
     for node in nodes {
+        if !bulk_node_action_applies(&node, action) {
+            continue;
+        }
         let id = node["node_id"]
             .as_str()
             .and_then(|s| Uuid::parse_str(s).ok())
             .ok_or_else(|| ApiError::bad_request("node has invalid ID"))?;
-        change_node_runtime_state(state.clone(), project_id, id, action).await?;
+        if let Err(error) = change_node_runtime_state(state.clone(), project_id, id, action).await {
+            if first_error.is_none() {
+                first_error = Some(error);
+            }
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(error);
     }
     Ok(StatusCode::NO_CONTENT)
 }
+
+pub(super) fn bulk_node_action_applies(node: &Value, action: NodeAction) -> bool {
+    let node_type = node
+        .get("node_type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let status = node
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("stopped");
+
+    match node_type {
+        "ethernet_switch" | "ethernet_hub" => false,
+        "cloud" | "nat" if !matches!(action, NodeAction::Start) => false,
+        "vpcs" if matches!(action, NodeAction::Suspend) => false,
+        "docker" | "qemu" | "vpcs" | "dynamips" | "cloud" | "nat" => match action {
+            NodeAction::Start => status != "started",
+            NodeAction::Stop => status == "started" || status == "suspended",
+            NodeAction::Suspend | NodeAction::Reload => status == "started",
+        },
+        _ => false,
+    }
+}
+
 async fn start_all_nodes(
     State(s): State<AppState>,
     AxumPath(p): AxumPath<Uuid>,
@@ -1413,6 +1459,15 @@ async fn auto_idlepc(
         .auto_idlepc(&vm)
         .await
         .map_err(runtime_api_error)?;
+    let _ = update_topology_object(
+        state,
+        project_id.to_string(),
+        node_id.to_string(),
+        "node",
+        "node_id",
+        json!({"idlepc": idlepc.clone()}),
+    )
+    .await?;
     Ok(Json(json!({"idlepc":idlepc})))
 }
 async fn idlepc_proposals(
@@ -2292,7 +2347,9 @@ mod route_tests {
         let store = Store::connect(dir.path().join("api.sqlite").to_str().unwrap())
             .await
             .unwrap();
-        (router(AppState::new(store.clone())), dir, store)
+        let state =
+            AppState::new(store.clone()).with_bind_address("127.0.0.1:3182".parse().unwrap());
+        (router(state), dir, store)
     }
 
     async fn mock_dynamips(commands: Vec<(&'static str, &'static str)>) -> u16 {
@@ -3311,15 +3368,15 @@ mod route_tests {
                 ["console_start_port_range"],
             5000
         );
-        assert_eq!(
-            json_body(send(&app, Method::GET, "/v3/computes", Body::empty(), None).await).await[0]
-                ["compute_id"],
-            "local"
-        );
+        let computes =
+            json_body(send(&app, Method::GET, "/v3/computes", Body::empty(), None).await).await;
+        assert_eq!(computes[0]["compute_id"], "local");
+        assert_eq!(computes[0]["host"], "127.0.0.1");
+        assert_eq!(computes[0]["port"], 3182);
         assert_eq!(
             json_body(send(&app, Method::GET, "/v3/computes/local", Body::empty(), None).await)
-                .await["connected"],
-            true
+                .await["port"],
+            3182
         );
         assert!(
             json_body(
@@ -3744,10 +3801,12 @@ mod route_tests {
         let auto_node = uuid::Uuid::new_v4();
         let proposals_port = mock_dynamips(vec![
             ("vm get_status \"R1\"", "100 2\r\n100-OK\r\n"),
+            ("vm set_idle_pc_online \"R1\" 0 0x0", "100-OK\r\n"),
             (
                 "vm get_idle_pc_prop \"R1\" 0",
                 "100 0x1234abcd 90%\r\n100-OK\r\n",
             ),
+            ("vm set_idle_pc_online \"R1\" 0 0x0", "100-OK\r\n"),
         ])
         .await;
         let auto_port = mock_dynamips(vec![
@@ -3759,7 +3818,7 @@ mod route_tests {
             ),
             ("vm set_idle_pc_online \"R2\" 0 0x1234abcd", "100-OK\r\n"),
             ("vm cpu_usage \"R2\" 0", "100 100\r\n100-OK\r\n"),
-            ("vm cpu_usage \"R2\" 0", "100 102\r\n100-OK\r\n"),
+            ("vm cpu_usage \"R2\" 0", "100 101\r\n100-OK\r\n"),
         ])
         .await;
         for (node_id, name, port) in [
@@ -3824,6 +3883,16 @@ mod route_tests {
         .await;
         assert_eq!(auto.status(), StatusCode::OK);
         assert_eq!(json_body(auto).await, json!({"idlepc":"0x1234abcd"}));
+        let stored_node: String = sqlx::query_scalar(
+            "SELECT object_json FROM topology_objects WHERE project_id = ? AND kind = 'node' AND object_id = ?",
+        )
+        .bind(project_id.to_string())
+        .bind(auto_node.to_string())
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        let stored_node: Value = serde_json::from_str(&stored_node).unwrap();
+        assert_eq!(stored_node["idlepc"], "0x1234abcd");
     }
 
     #[tokio::test]
