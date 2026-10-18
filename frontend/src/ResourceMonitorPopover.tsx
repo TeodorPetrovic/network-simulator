@@ -13,12 +13,14 @@ export function ResourceMonitorPopover({
   error,
   refreshing,
   onRefresh,
+  compact = false,
 }: {
   resources: ResourceMonitor | null;
   runtimeInfo: RuntimeInfo | null;
   error: string;
   refreshing: boolean;
   onRefresh: () => void;
+  compact?: boolean;
 }) {
   const cpu = resources?.host.cpu_usage_percent;
   const memoryUsed = resources?.host.memory_used_bytes;
@@ -33,14 +35,14 @@ export function ResourceMonitorPopover({
   ] as const : [];
 
   return <Popover>
-    <PopoverTrigger asChild><Button variant="outline" size="sm" className="sim-resource-trigger"><Activity />Resources{cpu != null && <Badge variant="secondary">{Math.round(cpu)}%</Badge>}</Button></PopoverTrigger>
-    <PopoverContent align="end" sideOffset={9} className="w-[360px] p-0">
-      <div className="flex items-center justify-between px-4 py-3">
+    <PopoverTrigger asChild><Button variant="outline" size={compact ? "icon-sm" : "sm"} className="sim-resource-trigger" aria-label={compact ? "Resources" : undefined} title={compact ? "Resource monitor" : undefined}><Activity />{!compact && <>Resources{cpu != null && <Badge variant="secondary">{Math.round(cpu)}%</Badge>}</>}</Button></PopoverTrigger>
+    <PopoverContent align="end" sideOffset={9} className={`${compact ? "w-[320px]" : "w-[360px]"} p-0`}>
+      <div className="flex items-center justify-between px-3 py-2.5">
         <div><p className="text-sm font-semibold">Resource monitor</p><p className="text-xs text-muted-foreground">Live host and controller usage</p></div>
         <Button variant="ghost" size="icon-sm" disabled={refreshing} onClick={onRefresh} aria-label="Refresh resource monitor"><RefreshCw className={refreshing ? "animate-spin" : ""} /></Button>
       </div>
       <Separator />
-      <div className="space-y-4 p-4">
+      <div className="space-y-3 p-3">
         {resources ? <>
           <Metric label="Host CPU" icon={<Cpu />} value={cpu == null ? "Unavailable" : `${cpu.toFixed(1)}%`} progress={cpu} detail={resources.host.cpu_count ? `${resources.host.cpu_count} logical CPUs` : "CPU count unavailable"} />
           <Metric label="Host memory" icon={<HardDrive />} value={memoryPercent == null ? "Unavailable" : `${memoryPercent.toFixed(1)}%`} progress={memoryPercent} detail={memoryUsed == null || memoryTotal == null ? "Memory data unavailable" : `${formatBytes(memoryUsed)} of ${formatBytes(memoryTotal)}`} />

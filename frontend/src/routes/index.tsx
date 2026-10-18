@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { AppRoute } from "../AppRoute";
+import { ProjectsPage } from "../ProjectsPage";
 
 export const Route = createFileRoute("/")({
   component: ProjectsRoute,
@@ -17,5 +17,5 @@ function ProjectsRoute() {
     }
   }, [navigate]);
 
-  return <AppRoute projectId={null} />;
+  return <ProjectsPage />;
 }

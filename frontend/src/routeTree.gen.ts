@@ -10,11 +10,55 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AppliancesRouteImport } from './routes/appliances'
+import { Route as ComputesRouteImport } from './routes/computes'
+import { Route as InstalledSoftwareRouteImport } from './routes/installed-software'
+import { Route as PreferencesRouteImport } from './routes/preferences'
+import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as SystemStatusRouteImport } from './routes/system-status'
+import { Route as NodeEditorsNodeTypeRouteImport } from './routes/node-editors.$nodeType'
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects.$projectId'
+import { Route as TemplatesNewRouteImport } from './routes/templates.new'
+import { Route as ProjectsProjectIdSnapshotsRouteImport } from './routes/projects.$projectId.snapshots'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppliancesRoute = AppliancesRouteImport.update({
+  id: '/appliances',
+  path: '/appliances',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ComputesRoute = ComputesRouteImport.update({
+  id: '/computes',
+  path: '/computes',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InstalledSoftwareRoute = InstalledSoftwareRouteImport.update({
+  id: '/installed-software',
+  path: '/installed-software',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PreferencesRoute = PreferencesRouteImport.update({
+  id: '/preferences',
+  path: '/preferences',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SystemStatusRoute = SystemStatusRouteImport.update({
+  id: '/system-status',
+  path: '/system-status',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NodeEditorsNodeTypeRoute = NodeEditorsNodeTypeRouteImport.update({
+  id: '/node-editors/$nodeType',
+  path: '/node-editors/$nodeType',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsProjectIdRoute = ProjectsProjectIdRouteImport.update({
@@ -22,31 +66,111 @@ const ProjectsProjectIdRoute = ProjectsProjectIdRouteImport.update({
   path: '/projects/$projectId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TemplatesNewRoute = TemplatesNewRouteImport.update({
+  id: '/templates/new',
+  path: '/templates/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsProjectIdSnapshotsRoute =
+  ProjectsProjectIdSnapshotsRouteImport.update({
+    id: '/snapshots',
+    path: '/snapshots',
+    getParentRoute: () => ProjectsProjectIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/projects/$projectId': typeof ProjectsProjectIdRoute
+  '/appliances': typeof AppliancesRoute
+  '/computes': typeof ComputesRoute
+  '/installed-software': typeof InstalledSoftwareRoute
+  '/preferences': typeof PreferencesRoute
+  '/settings': typeof SettingsRoute
+  '/system-status': typeof SystemStatusRoute
+  '/node-editors/$nodeType': typeof NodeEditorsNodeTypeRoute
+  '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
+  '/templates/new': typeof TemplatesNewRoute
+  '/projects/$projectId/snapshots': typeof ProjectsProjectIdSnapshotsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/projects/$projectId': typeof ProjectsProjectIdRoute
+  '/appliances': typeof AppliancesRoute
+  '/computes': typeof ComputesRoute
+  '/installed-software': typeof InstalledSoftwareRoute
+  '/preferences': typeof PreferencesRoute
+  '/settings': typeof SettingsRoute
+  '/system-status': typeof SystemStatusRoute
+  '/node-editors/$nodeType': typeof NodeEditorsNodeTypeRoute
+  '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
+  '/templates/new': typeof TemplatesNewRoute
+  '/projects/$projectId/snapshots': typeof ProjectsProjectIdSnapshotsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/projects/$projectId': typeof ProjectsProjectIdRoute
+  '/appliances': typeof AppliancesRoute
+  '/computes': typeof ComputesRoute
+  '/installed-software': typeof InstalledSoftwareRoute
+  '/preferences': typeof PreferencesRoute
+  '/settings': typeof SettingsRoute
+  '/system-status': typeof SystemStatusRoute
+  '/node-editors/$nodeType': typeof NodeEditorsNodeTypeRoute
+  '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
+  '/templates/new': typeof TemplatesNewRoute
+  '/projects/$projectId/snapshots': typeof ProjectsProjectIdSnapshotsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/projects/$projectId'
+  fullPaths:
+    | '/'
+    | '/appliances'
+    | '/computes'
+    | '/installed-software'
+    | '/preferences'
+    | '/settings'
+    | '/system-status'
+    | '/node-editors/$nodeType'
+    | '/projects/$projectId'
+    | '/templates/new'
+    | '/projects/$projectId/snapshots'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/projects/$projectId'
-  id: '__root__' | '/' | '/projects/$projectId'
+  to:
+    | '/'
+    | '/appliances'
+    | '/computes'
+    | '/installed-software'
+    | '/preferences'
+    | '/settings'
+    | '/system-status'
+    | '/node-editors/$nodeType'
+    | '/projects/$projectId'
+    | '/templates/new'
+    | '/projects/$projectId/snapshots'
+  id:
+    | '__root__'
+    | '/'
+    | '/appliances'
+    | '/computes'
+    | '/installed-software'
+    | '/preferences'
+    | '/settings'
+    | '/system-status'
+    | '/node-editors/$nodeType'
+    | '/projects/$projectId'
+    | '/templates/new'
+    | '/projects/$projectId/snapshots'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  ProjectsProjectIdRoute: typeof ProjectsProjectIdRoute
+  AppliancesRoute: typeof AppliancesRoute
+  ComputesRoute: typeof ComputesRoute
+  InstalledSoftwareRoute: typeof InstalledSoftwareRoute
+  PreferencesRoute: typeof PreferencesRoute
+  SettingsRoute: typeof SettingsRoute
+  SystemStatusRoute: typeof SystemStatusRoute
+  NodeEditorsNodeTypeRoute: typeof NodeEditorsNodeTypeRoute
+  ProjectsProjectIdRoute: typeof ProjectsProjectIdRouteWithChildren
+  TemplatesNewRoute: typeof TemplatesNewRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -58,6 +182,55 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/appliances': {
+      id: '/appliances'
+      path: '/appliances'
+      fullPath: '/appliances'
+      preLoaderRoute: typeof AppliancesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/computes': {
+      id: '/computes'
+      path: '/computes'
+      fullPath: '/computes'
+      preLoaderRoute: typeof ComputesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/installed-software': {
+      id: '/installed-software'
+      path: '/installed-software'
+      fullPath: '/installed-software'
+      preLoaderRoute: typeof InstalledSoftwareRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/preferences': {
+      id: '/preferences'
+      path: '/preferences'
+      fullPath: '/preferences'
+      preLoaderRoute: typeof PreferencesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/system-status': {
+      id: '/system-status'
+      path: '/system-status'
+      fullPath: '/system-status'
+      preLoaderRoute: typeof SystemStatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/node-editors/$nodeType': {
+      id: '/node-editors/$nodeType'
+      path: '/node-editors/$nodeType'
+      fullPath: '/node-editors/$nodeType'
+      preLoaderRoute: typeof NodeEditorsNodeTypeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/projects/$projectId': {
       id: '/projects/$projectId'
       path: '/projects/$projectId'
@@ -65,12 +238,45 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/templates/new': {
+      id: '/templates/new'
+      path: '/templates/new'
+      fullPath: '/templates/new'
+      preLoaderRoute: typeof TemplatesNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$projectId/snapshots': {
+      id: '/projects/$projectId/snapshots'
+      path: '/snapshots'
+      fullPath: '/projects/$projectId/snapshots'
+      preLoaderRoute: typeof ProjectsProjectIdSnapshotsRouteImport
+      parentRoute: typeof ProjectsProjectIdRoute
+    }
   }
 }
 
+interface ProjectsProjectIdRouteChildren {
+  ProjectsProjectIdSnapshotsRoute: typeof ProjectsProjectIdSnapshotsRoute
+}
+
+const ProjectsProjectIdRouteChildren: ProjectsProjectIdRouteChildren = {
+  ProjectsProjectIdSnapshotsRoute: ProjectsProjectIdSnapshotsRoute,
+}
+
+const ProjectsProjectIdRouteWithChildren =
+  ProjectsProjectIdRoute._addFileChildren(ProjectsProjectIdRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  ProjectsProjectIdRoute: ProjectsProjectIdRoute,
+  AppliancesRoute: AppliancesRoute,
+  ComputesRoute: ComputesRoute,
+  InstalledSoftwareRoute: InstalledSoftwareRoute,
+  PreferencesRoute: PreferencesRoute,
+  SettingsRoute: SettingsRoute,
+  SystemStatusRoute: SystemStatusRoute,
+  NodeEditorsNodeTypeRoute: NodeEditorsNodeTypeRoute,
+  ProjectsProjectIdRoute: ProjectsProjectIdRouteWithChildren,
+  TemplatesNewRoute: TemplatesNewRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { api, dockerConsoleUrl, dynamipsConsoleUrl, projectNotificationsUrl, qemuConsoleUrl, vpcsConsoleUrl } from "./api";
+import { api, dockerAuxConsoleUrl, dockerConsoleUrl, dockerHttpConsoleUrl, dynamipsConsoleUrl, projectNotificationsUrl, qemuConsoleUrl, symbolRawUrl, vpcsConsoleUrl } from "./api";
 
 describe("GNS3 controller client", () => {
   beforeEach(() => {
@@ -34,12 +34,45 @@ describe("GNS3 controller client", () => {
     expect(fetchMock).toHaveBeenLastCalledWith("/v3/marketplace/gns3/appliances?q=Cisco+IOS", expect.any(Object));
   });
 
+  it("loads appliance configs and persists explicit image bindings per version and image slot", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const manager = { appliances: [], local_images: [], custom_image_options: [] };
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 200, json: async () => manager } as Response);
+    await api.applianceManager();
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/marketplace/gns3/manager", expect.any(Object));
+
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ name: "Alpine custom" }) } as Response);
+    await api.createCustomAppliance({ name: "Alpine custom", source_template_id: "docker-image-id" });
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/marketplace/gns3/custom", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ name: "Alpine custom", source_template_id: "docker-image-id" }),
+    }));
+
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ appliance: {} }) } as Response);
+    await api.setApplianceImageBinding("router.gns3a", { version: "15.2", image_key: "hda_disk_image", image_id: "qemu-1", allow_checksum_mismatch: true });
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/marketplace/gns3/appliances/router.gns3a/bindings", expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ version: "15.2", image_key: "hda_disk_image", image_id: "qemu-1", allow_checksum_mismatch: true }),
+    }));
+  });
+
+  it("uploads a local GNS3 appliance definition to the global appliance library", async () => {
+    const file = new File([JSON.stringify({ appliance_id: "id" })], "router.gns3a", { type: "application/json" });
+    vi.mocked(fetch).mockResolvedValue({ ok: true, status: 200, json: async () => ({ file_name: file.name }) } as Response);
+    await api.importGns3ApplianceFile(file);
+    expect(fetch).toHaveBeenCalledWith("/v3/marketplace/gns3/import/router.gns3a", expect.objectContaining({
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: file,
+    }));
+  });
+
   it("starts a verified iShare2 download into the global runtime image library", async () => {
-    const image = { id: 358, name: "vios-15.5.3M", image_type: "qemu", size: "122 MiB", total_size: 127926272, file_count: 1, catalog: "iShare2 / LabHub" };
+    const image = { id: 358, name: "vios-15.5.3M", image_type: "qemu", size: "122 MiB", total_size: 127926272, file_count: 1, files: ["virtioa.qcow2"], catalog: "iShare2 / LabHub" };
     vi.mocked(fetch).mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ id: image.id, name: image.name, image_type: image.image_type, files: ["vios-15.5.3M-virtioa.qcow2"], image_directory: "/global/images/qemu" }),
+      json: async () => ({ id: image.id, name: image.name, image_type: image.image_type, files: ["vios-15.5.3M-virtioa.qcow2"], source_files: ["virtioa.qcow2"], image_directory: "/global/images/qemu" }),
     } as Response);
 
     await api.downloadIshareImage(image);
@@ -126,6 +159,20 @@ describe("GNS3 controller client", () => {
     expect(url.pathname).toBe("/v3/compute/projects/project-id/docker/nodes/node-id/console/ws");
   });
 
+  it("uses the registered Docker auxiliary console WebSocket endpoint", () => {
+    const url = new URL(dockerAuxConsoleUrl("project-id", "node-id"));
+
+    expect(url.protocol).toBe("ws:");
+    expect(url.pathname).toBe("/v3/compute/projects/project-id/docker/nodes/node-id/aux_console/ws");
+  });
+
+  it("builds browser URLs for Docker HTTP(S) consoles and encodes symbol raw paths", () => {
+    expect(dockerHttpConsoleUrl("https", "127.0.0.1", 8080, "/vnc.html"))
+      .toBe("https://127.0.0.1:8080/vnc.html");
+    expect(dockerHttpConsoleUrl("http", "localhost", 0, "/")).toBeNull();
+    expect(symbolRawUrl("custom router.svg")).toBe("/v3/symbols/custom%20router.svg/raw");
+  });
+
   it("uses the VPCS console WebSocket endpoint", () => {
     const url = new URL(vpcsConsoleUrl("project-id", "node-id"));
 
@@ -155,5 +202,102 @@ describe("GNS3 controller client", () => {
 
     expect(url.protocol).toBe("ws:");
     expect(url.pathname).toBe("/v3/compute/projects/project-id/dynamips/nodes/node-id/console/ws");
+  });
+
+  it("uses GNS3 link filters, capture, stream, and link update routes", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ link_id: "l1", nodes: [], capturing: true }) } as Response);
+    await api.availableLinkFilters("p1", "l1");
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/links/l1/available_filters", expect.any(Object));
+
+    await api.updateLinkFilters("p1", "l1", { delay: [10, 3] });
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/links/l1", expect.objectContaining({ method: "PUT", body: JSON.stringify({ filters: { delay: [10, 3] } }) }));
+
+    await api.startLinkCapture("p1", "l1", { capture_file_name: "edge.pcap", data_link_type: "DLT_EN10MB" });
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/links/l1/capture/start", expect.objectContaining({ method: "POST", body: JSON.stringify({ capture_file_name: "edge.pcap", data_link_type: "DLT_EN10MB" }) }));
+    expect(api.linkCaptureStreamUrl("p1", "l1")).toBe("/v3/projects/p1/links/l1/capture/stream");
+
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 204 } as Response);
+    await api.stopLinkCapture("p1", "l1");
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/links/l1/capture/stop", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("uses project snapshot and symbol controller routes", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    await api.snapshots("p1");
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/snapshots", expect.any(Object));
+    await api.createSnapshot("p1", "Before changes");
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/snapshots", expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "Before changes" }) }));
+    await api.listSymbols();
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/symbols", expect.any(Object));
+    await api.defaultSymbols();
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/symbols/default_symbols", expect.any(Object));
+  });
+
+  it("uses drawing and node isolation routes", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ drawing_id: "d1", node_id: "n1", name: "Router" }) } as Response);
+    await api.createDrawing("p1", { x: 1, y: 2, svg: "<svg/>" });
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/drawings", expect.objectContaining({ method: "POST" }));
+    await api.isolateNode("p1", "n1");
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/nodes/n1/isolate", expect.objectContaining({ method: "POST" }));
+    await api.unisolateNode("p1", "n1");
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/nodes/n1/unisolate", expect.objectContaining({ method: "POST" }));
+
+    await api.lockProject("p1");
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/lock", expect.objectContaining({ method: "POST" }));
+    await api.unlockProject("p1");
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/unlock", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("uses controller endpoints for project import, export, duplicate, readme, and statistics", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const file = new File(["archive"], "Core lab.gns3project");
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 201, json: async () => ({ project_id: "p2", name: "Imported lab" }) } as Response);
+    await api.importProject("p2", "Imported lab", file);
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p2/import?name=Imported+lab", expect.objectContaining({ method: "POST", body: file, headers: { "Content-Type": "application/octet-stream" } }));
+
+    const archive = new Blob(["zip"]);
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 200, blob: async () => archive } as Response);
+    await expect(api.exportProject("p1")).resolves.toBe(archive);
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/export");
+
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ project_id: "copy", name: "Core copy", nodes: 2 }) } as Response);
+    await api.duplicateProject("p1", "Core copy");
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/duplicate", expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "Core copy" }) }));
+    await api.projectStatistics("p1");
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/stats", expect.any(Object));
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 200, text: async () => "Project notes" } as Response);
+    await api.projectReadme("p1");
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/files/readme.md");
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 204 } as Response);
+    await api.updateProjectReadme("p1", "Updated notes");
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/files/readme.md", expect.objectContaining({
+      method: "POST",
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      body: "Updated notes",
+    }));
+  });
+
+  it("uses settings, compute, template CRUD, and snapshot controller paths", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({}) } as Response);
+    await api.settings();
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/settings", expect.any(Object));
+    await api.updateSettings({ Server: { port: 3080 } });
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/settings", expect.objectContaining({ method: "PUT", body: JSON.stringify({ Server: { port: 3080 } }) }));
+
+    await api.computes();
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/computes", expect.any(Object));
+    await api.createTemplate({ name: "My QEMU", template_type: "qemu" });
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/templates", expect.objectContaining({ method: "POST" }));
+    await api.duplicateTemplate("template-1");
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/templates/template-1/duplicate", expect.objectContaining({ method: "POST" }));
+    await api.deleteTemplate("template-1");
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/templates/template-1", expect.objectContaining({ method: "DELETE" }));
+
+    await api.restoreSnapshot("p1", "snap-1");
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/snapshots/snap-1/restore", expect.objectContaining({ method: "POST" }));
   });
 });

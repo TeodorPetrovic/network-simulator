@@ -50,7 +50,7 @@ export function applyProjectEvent(
 
 const svgNamespace = "http://www.w3.org/2000/svg";
 const drawingElements = new Set([
-  "svg", "g", "rect", "circle", "ellipse", "line", "polyline", "polygon", "path",
+  "svg", "g", "rect", "circle", "ellipse", "line", "polyline", "polygon", "path", "image",
   "text", "tspan", "defs", "lineargradient", "radialgradient", "stop", "clippath",
 ]);
 const drawingAttributes = new Set([
@@ -59,6 +59,7 @@ const drawingAttributes = new Set([
   "stroke-width", "stroke-linecap", "stroke-linejoin", "opacity", "transform", "font-family",
   "font-size", "font-weight", "text-anchor", "dominant-baseline", "letter-spacing", "id",
   "gradientunits", "gradienttransform", "offset", "stop-color", "stop-opacity", "clip-path",
+  "href", "preserveaspectratio",
 ]);
 
 export function sanitizeDrawingSvg(source: string): string {
@@ -78,6 +79,7 @@ export function sanitizeDrawingSvg(source: string): string {
       if (name === "id" && !/^[-\w:.]+$/.test(value)) continue;
       if (name === "transform" && !/^[\w.,\s()+-]+$/.test(value)) continue;
       if (name === "d" && !/^[\w.,\s+-]+$/.test(value)) continue;
+      if (name === "href" && !/^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/=]+$/i.test(value)) continue;
       if (name === "fill" || name === "clip-path") {
         if (/url\(/i.test(value) && !/^url\(#[-\w:.]+\)$/.test(value)) continue;
       }

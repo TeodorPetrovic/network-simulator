@@ -1,12 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Activity, FolderOpen, Network, Plus, Search, Trash2, X } from "lucide-react";
-import { api, projectNotificationsUrl } from "./api";
+import { api, dockerHttpConsoleUrl, projectNotificationsUrl } from "./api";
 import type { LinkEndpoint, Node, Project, ProjectEvent, ResourceMonitor, RuntimeInfo, RuntimeTemplate, TopologySnapshot } from "./api";
 import { applyProjectEvent } from "./topology";
 import { SimulatorWorkspace } from "./SimulatorWorkspace";
 import type { ConsoleTarget } from "./ConsoleDock";
-import { ResourceMonitorPopover } from "./ResourceMonitorPopover";
+import { ApplianceManagerPage } from "./ApplianceManagerPage";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -24,9 +24,13 @@ const ConsoleDock = lazy(() => import("./ConsoleDock").then((module) => ({ defau
 type AppProps = {
   projectId: string | null;
   navigateToProject: (id: string | null) => void;
+  showApplianceManager?: boolean;
+  navigateToApplianceManager?: () => void;
+  onOpenPreferences?: () => void;
+  onBackFromApplianceManager?: () => void;
 }
 
-function App({ projectId, navigateToProject }: AppProps) {
+function App({ projectId, navigateToProject, showApplianceManager = false, navigateToApplianceManager, onOpenPreferences, onBackFromApplianceManager }: AppProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
   const [resources, setResources] = useState<ResourceMonitor | null>(null);
@@ -63,6 +67,15 @@ function App({ projectId, navigateToProject }: AppProps) {
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
   const pendingNodeNames = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (!error && !notice) return;
+    const timer = window.setTimeout(() => {
+      setError("");
+      setNotice("");
+    }, 6000);
+    return () => window.clearTimeout(timer);
+  }, [error, notice]);
 
   useEffect(() => {
     setConsoleTargets([]);
@@ -395,11 +408,93 @@ function App({ projectId, navigateToProject }: AppProps) {
     }
   }
 
-  function openConsole(node: Node) {
+  async function duplicateNode(source: Node) {
+    if (!projectId || !topology) return;
+    let reservedName: string | null = null;
+    try {
+      const payload: Record<string, unknown> = { ...source };
+      for (const key of [
+        "node_id", "project_id", "container_id", "image_digest", "status", "locked",
+        "runtime_missing", "runtime_overlay", "runtime_qmp_socket", "runtime_serial_socket",
+        "runtime_pid_file", "runtime_log_file", "console_host", "console_port",
+      ]) delete payload[key];
+      const baseName = `${source.name} copy`;
+      const usedNames = new Set(topology.nodes.map((node) => node.name));
+      let name = baseName;
+      let suffix = 2;
+      while (usedNames.has(name) || pendingNodeNames.current.has(name)) name = `${baseName} ${suffix++}`;
+      reservedName = name;
+      payload.name = name;
+      payload.x = Number(source.x ?? 0) + 140;
+      payload.y = Number(source.y ?? 0) + 100;
+      pendingNodeNames.current.add(name);
+      const node = await api.createNode(projectId, payload as Omit<Node, "node_id">);
+      setTopology((current) => current ? { ...current, nodes: upsertNode(current.nodes, node) } : current);
+      setSelection({ kind: "node", id: node.node_id });
+      setNotice(`${node.name} duplicated`);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      if (reservedName) pendingNodeNames.current.delete(reservedName);
+    }
+  }
+
+  async function configureNode(nodeId: string, patch: Record<string, unknown>) {
+    if (!projectId) return;
+    try {
+      const node = await api.configureNode(projectId, nodeId, patch);
+      setTopology((current) => current ? { ...current, nodes: current.nodes.map((item) => item.node_id === nodeId ? node : item) } : current);
+      setConsoleTargets((current) => current.map((target) => target.nodeId === nodeId ? { ...target, nodeName: node.name } : target));
+      setNotice(`${node.name} device settings saved`);
+    } catch (reason) {
+      setError(errorMessage(reason));
+      throw reason;
+    }
+  }
+
+  async function saveTemplateSettings(templateId: string, patch: Record<string, unknown>) {
+    try {
+      const updated = await api.updateTemplate(templateId, patch);
+      setTemplates((current) => current.map((template) => template.template_id === templateId ? updated : template));
+      setNotice(`${updated.name} template settings saved.`);
+    } catch (reason) {
+      setError(errorMessage(reason));
+      throw reason;
+    }
+  }
+
+  function openConsole(node: Node, auxiliary = false) {
     if (!projectId || !["docker", "qemu", "vpcs", "dynamips"].includes(node.node_type ?? "")) return;
-    const target: ConsoleTarget = { projectId, nodeId: node.node_id, nodeName: node.name, nodeType: node.node_type as ConsoleTarget["nodeType"] };
-    setConsoleTargets((current) => current.some((item) => item.nodeId === node.node_id) ? current : [...current, target]);
-    setActiveConsoleId(node.node_id);
+    const consoleType = String(node.console_type ?? "telnet");
+    const properties = node.properties && typeof node.properties === "object" ? node.properties as Record<string, unknown> : {};
+    const auxType = String(node.aux_type ?? properties.aux_type ?? "none");
+    if (auxiliary && (node.node_type !== "docker" || auxType === "none")) {
+      setNotice("Configure a Docker auxiliary console before opening it.");
+      return;
+    }
+    if (!auxiliary && consoleType === "vnc") {
+      setNotice("The controller starts VNC on its TCP console port, but this UI has no browser VNC route.");
+      return;
+    }
+    if (!auxiliary && consoleType === "none") {
+      setNotice("This device has no console configured.");
+      return;
+    }
+    if (!auxiliary && node.node_type === "docker" && (consoleType === "http" || consoleType === "https")) {
+      const host = typeof node.console_host === "string" && node.console_host ? node.console_host : window.location.hostname;
+      const url = dockerHttpConsoleUrl(consoleType, host, Number(node.console_http_port ?? 80), String(node.console_http_path ?? "/"));
+      if (!url) {
+        setNotice("The HTTP console address is invalid. Check its host, port, and path in device settings.");
+        return;
+      }
+      window.open(url, "_blank", "noopener,noreferrer");
+      setNotice("Opened the configured HTTP console. The container port must be reachable from your browser.");
+      return;
+    }
+    const targetId = `${node.node_id}:${auxiliary ? "aux" : "main"}`;
+    const target: ConsoleTarget = { id: targetId, projectId, nodeId: node.node_id, nodeName: node.name, nodeType: node.node_type as ConsoleTarget["nodeType"], auxiliary };
+    setConsoleTargets((current) => current.some((item) => item.id === targetId) ? current : [...current, target]);
+    setActiveConsoleId(targetId);
     setConsoleMinimized(false);
   }
 
@@ -490,33 +585,30 @@ function App({ projectId, navigateToProject }: AppProps) {
   return (
     <TooltipProvider>
       <div className="app-shell">
-        <header className="sim-app-header">
+        {!projectId && !showApplianceManager && <header className="sim-app-header">
           <Button variant="ghost" className="sim-brand" onClick={() => navigateToProject(null)}>
             <span className="sim-brand-mark"><Network size={18} /></span>
             <span>Network Simulator</span>
           </Button>
-          <div className="sim-header-context">
-            <span>{projectId ? "Project workspace" : "Projects"}</span>
-            {project && <><span className="text-muted-foreground">/</span><b title={project.name}>{project.name}</b></>}
-          </div>
           <div className="sim-header-actions">
             <Badge variant={connection === "connected" ? "secondary" : connection === "disconnected" ? "destructive" : "outline"} className="gap-1.5">
               <span className={`sim-connection-dot ${connection}`} />{connection === "connected" ? "Controller connected" : connection === "reconnecting" ? "Reconnecting" : connection === "checking" ? "Connecting" : "Controller unavailable"}
             </Badge>
-            <ResourceMonitorPopover resources={resources} runtimeInfo={runtimeInfo} error={resourceError} refreshing={refreshingResources} onRefresh={() => void refreshResourceMonitor()} />
           </div>
-        </header>
+        </header>}
 
-        {error && <Card className="sim-flash sim-flash-error" role="alert"><span>{error}</span><Button variant="ghost" size="icon-xs" onClick={() => setError("")} aria-label="Dismiss error"><X /></Button></Card>}
-        {notice && <Card className="sim-flash" role="status"><span>{notice}</span><Button variant="ghost" size="icon-xs" onClick={() => setNotice("")} aria-label="Dismiss message"><X /></Button></Card>}
+        {(error || notice) && <Card className={`sim-flash ${error ? "sim-flash-error" : ""}`} role={error ? "alert" : "status"} aria-live="polite"><span>{error || notice}</span><Button variant="ghost" size="icon-xs" onClick={() => { setError(""); setNotice(""); }} aria-label="Dismiss notification"><X /></Button></Card>}
 
         <main className="main-area">
-          {projectId ? (busy || !project || !topology ? <div className="sim-loading"><Activity className="animate-pulse" />Loading project topology…</div> : <SimulatorWorkspace
+          {showApplianceManager ? <ApplianceManagerPage onBack={onBackFromApplianceManager ?? (() => navigateToProject(projectId))} onOpenPreferences={onOpenPreferences} onOpenImageCatalog={() => setMarketplaceOpen(true)} onTemplatesChanged={setTemplates} /> : projectId ? (busy || !project || !topology ? <div className="sim-loading"><Activity className="animate-pulse" />Loading project topology…</div> : <SimulatorWorkspace
             project={project}
             topology={topology}
             templates={templates}
             runtimeInfo={runtimeInfo}
             resources={resources}
+            resourceError={resourceError}
+            refreshingResources={refreshingResources}
+            connection={connection}
             batchLifecycleRunning={startingAll}
             selection={selection}
             selectedNode={selectedNode}
@@ -524,8 +616,11 @@ function App({ projectId, navigateToProject }: AppProps) {
             connecting={connecting}
             linkEndpoints={linkEndpoints}
             onBack={closeProject}
+            onRefreshResources={() => void refreshResourceMonitor()}
             onOpenNodeDialog={() => void openNodeDialog()}
             onOpenMarketplace={() => setMarketplaceOpen(true)}
+            onOpenApplianceManager={navigateToApplianceManager ?? (() => setMarketplaceOpen(true))}
+            onOpenPreferences={onOpenPreferences ?? (() => undefined)}
             onAddTemplate={(id, x, y) => void addTemplateAt(id, x, y)}
             onNodeLifecycle={changeNodeLifecycle}
             onStartAll={() => void changeAllNodes("start")}
@@ -535,6 +630,9 @@ function App({ projectId, navigateToProject }: AppProps) {
             onCreateLink={() => void createSelectedLink()}
             onDeleteSelection={() => void deleteSelection()}
             onNodeRename={renameNode}
+            onDuplicateNode={duplicateNode}
+            onConfigureNode={configureNode}
+            onSaveTemplate={saveTemplateSettings}
             onSelectNode={(id) => setSelection({ kind: "node", id })}
             onSelectLink={(id) => setSelection({ kind: "link", id })}
             onSelectCanvas={() => setSelection(null)}
@@ -545,7 +643,7 @@ function App({ projectId, navigateToProject }: AppProps) {
           />) : <section className="projects-page">
             <div className="projects-heading">
               <div><div className="sim-section-label">LAB MANAGEMENT</div><h1>Projects</h1><p>Open a project or create a network lab.</p></div>
-              <Button variant="outline" onClick={() => setMarketplaceOpen(true)}><Search />Image catalog</Button>
+              <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={navigateToApplianceManager}><Network />Appliance manager</Button><Button variant="outline" onClick={() => setMarketplaceOpen(true)}><Search />Image catalog</Button></div>
             </div>
             <Card className="sim-create-project">
               <div className="sim-project-create-icon"><Plus /></div>
@@ -575,7 +673,7 @@ function App({ projectId, navigateToProject }: AppProps) {
           onSelect={setActiveConsoleId}
           onMinimize={() => setConsoleMinimized(true)}
           onRestore={() => setConsoleMinimized(false)}
-          onClose={(nodeId) => { setConsoleTargets((current) => current.filter((target) => target.nodeId !== nodeId)); setActiveConsoleId((current) => current === nodeId ? (consoleTargets.find((target) => target.nodeId !== nodeId)?.nodeId ?? null) : current); }}
+          onClose={(targetId) => { setConsoleTargets((current) => current.filter((target) => target.id !== targetId)); setActiveConsoleId((current) => current === targetId ? (consoleTargets.find((target) => target.id !== targetId)?.id ?? null) : current); }}
         /></Suspense>}
 
       <Dialog open={nodeDialogOpen} onOpenChange={setNodeDialogOpen}>
@@ -594,7 +692,7 @@ function App({ projectId, navigateToProject }: AppProps) {
                   setNodeIdlePc(selected?.template_type === "dynamips" ? selected.idlepc : "");
                 }}>
                   <SelectTrigger id="node-template"><SelectValue placeholder="Select a device template" /></SelectTrigger>
-                  <SelectContent>{templates.map((template) => <SelectItem key={template.template_id} value={template.template_id}>{template.template_type === "dynamips" ? "Dynamips / Cisco IOS · " : template.template_type === "qemu" ? "QEMU · " : template.template_type === "vpcs" ? "VPCS · " : "Docker · "}{template.name}</SelectItem>)}</SelectContent>
+                  <SelectContent>{templates.map((template) => <SelectItem key={template.template_id} value={template.template_id}>{template.template_type === "dynamips" ? "Dynamips / Cisco IOS · " : template.template_type === "qemu" ? "QEMU · " : template.template_type === "vpcs" ? "VPCS · " : template.template_type === "docker" ? "Docker · " : `${template.template_type.replaceAll("_", " ")} · `}{template.name}</SelectItem>)}</SelectContent>
                 </Select>
               ) : <Card className="p-3 text-sm text-muted-foreground" role="status">{runtimeInfo?.docker.available || runtimeInfo?.qemu.available || runtimeInfo?.vpcs.available || runtimeInfo?.dynamips.available ? <>No local templates yet. Pull a Docker image, add a QEMU disk under <code>{runtimeInfo.qemu.image_directory || "images/qemu"}</code>, install VPCS, or import a Cisco IOS image below.</> : <>Docker Engine, QEMU, VPCS, and Dynamips are unavailable. Check the controller service account's runtime access.</>}</Card>}
             </div>
@@ -639,10 +737,14 @@ function generatedNodeName(template: RuntimeTemplate, nodes: Node[], pendingName
   else if (template.template_type === "qemu") {
     const name = template.name.replace(/\.(?:qcow2?|raw|img|vmdk|vdi)$/i, "").replace(/\s+\d+(?:\.\d+)*.*$/, "").trim();
     base = name || "QEMU VM";
-  } else {
-    const imageName = template.image.split("/").at(-1)?.split(":")[0] || template.name;
+  } else if (template.template_type === "docker") {
+    const imageName = ("image" in template && typeof template.image === "string" ? template.image : "").split("/").at(-1)?.split(":")[0] || template.name;
     base = imageName.charAt(0).toUpperCase() + imageName.slice(1);
-  }
+  } else if (template.template_type === "ethernet_switch") base = "Switch";
+  else if (template.template_type === "ethernet_hub") base = "Hub";
+  else if (template.template_type === "cloud") base = "Cloud";
+  else if (template.template_type === "nat") base = "NAT";
+  else base = "VPCS";
   const usedNames = new Set(nodes.map((node) => node.name));
   let next = 1;
   while (usedNames.has(`${base} ${next}`) || pendingNames.has(`${base} ${next}`)) next += 1;

@@ -73,4 +73,10 @@ describe("sanitizeDrawingSvg", () => {
   it("rejects malformed SVG input", () => {
     expect(sanitizeDrawingSvg("<svg><rect></svg>")).toBe("");
   });
+
+  it("allows embedded raster drawing images but rejects remote image references", () => {
+    const sanitized = sanitizeDrawingSvg('<svg width="10" height="10"><image href="data:image/png;base64,AA==" width="10" height="10"/><image href="https://example.invalid/a.png"/></svg>');
+    expect(sanitized).toContain('href="data:image/png;base64,AA=="');
+    expect(sanitized).not.toContain("https:");
+  });
 });

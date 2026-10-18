@@ -3,16 +3,30 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as Xterm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { ChevronDown, ChevronUp, Terminal, X } from "lucide-react";
-import { dockerConsoleUrl, dynamipsConsoleUrl, qemuConsoleUrl, vpcsConsoleUrl } from "./api";
+import { dockerAuxConsoleUrl, dockerConsoleUrl, dynamipsConsoleUrl, qemuConsoleUrl, vpcsConsoleUrl } from "./api";
 import type { Node } from "./api";
 import { Button } from "@/components/ui/button";
 
 export type ConsoleTarget = {
+  id: string;
   projectId: string;
   nodeId: string;
   nodeName: string;
   nodeType: "docker" | "qemu" | "vpcs" | "dynamips";
+  auxiliary?: boolean;
 };
+
+export function dockerResizeControlFrame(rows: number, columns: number): string | null {
+  if (!Number.isInteger(rows) || !Number.isInteger(columns) || rows < 1 || columns < 1 || rows > 65_535 || columns > 65_535) return null;
+  return JSON.stringify({ type: "resize", rows, columns });
+}
+
+export function sendDockerResizeControl(socket: Pick<WebSocket, "readyState" | "send">, rows: number, columns: number): boolean {
+  const frame = dockerResizeControlFrame(rows, columns);
+  if (!frame || socket.readyState !== WebSocket.OPEN) return false;
+  socket.send(frame);
+  return true;
+}
 
 export function ConsoleDock({
   targets,
@@ -35,9 +49,9 @@ export function ConsoleDock({
   return <section className={`sim-console-dock ${minimized ? "is-minimized" : ""}`} aria-label="Device consoles">
     <header className="sim-console-tabs">
       <div className="sim-console-tab-list" role="tablist" aria-label="Open consoles">
-        {targets.map((target) => <div className={`sim-console-tab ${activeNodeId === target.nodeId ? "is-active" : ""}`} key={target.nodeId}>
-          <Button variant="ghost" className="sim-console-tab-select" role="tab" aria-selected={activeNodeId === target.nodeId} onClick={() => { onSelect(target.nodeId); onRestore(); }}><span className="sim-console-tab-dot" />{target.nodeName}</Button>
-          <Button variant="ghost" size="icon-xs" aria-label={`Close ${target.nodeName} console`} onClick={() => onClose(target.nodeId)}><X /></Button>
+        {targets.map((target) => <div className={`sim-console-tab ${activeNodeId === target.id ? "is-active" : ""}`} key={target.id}>
+          <Button variant="ghost" className="sim-console-tab-select" role="tab" aria-selected={activeNodeId === target.id} onClick={() => { onSelect(target.id); onRestore(); }}><span className="sim-console-tab-dot" />{target.nodeName}{target.auxiliary ? " · Aux" : ""}</Button>
+          <Button variant="ghost" size="icon-xs" aria-label={`Close ${target.nodeName}${target.auxiliary ? " auxiliary" : ""} console`} onClick={() => onClose(target.id)}><X /></Button>
         </div>)}
       </div>
       <div className="sim-console-dock-actions">
@@ -48,7 +62,7 @@ export function ConsoleDock({
       </div>
     </header>
     <div className="sim-console-panes">
-      {targets.map((target) => <ConsoleSession key={target.nodeId} target={target} active={target.nodeId === activeNodeId && !minimized} />)}
+      {targets.map((target) => <ConsoleSession key={target.id} target={target} active={target.id === activeNodeId && !minimized} />)}
     </div>
   </section>;
 }
@@ -57,6 +71,7 @@ function ConsoleSession({ target, active }: { target: ConsoleTarget; active: boo
   const terminalElement = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const docker = target.nodeType === "docker";
+  const auxiliary = Boolean(target.auxiliary);
   const vpcs = target.nodeType === "vpcs";
   const dynamips = target.nodeType === "dynamips";
 
@@ -73,16 +88,29 @@ function ConsoleSession({ target, active }: { target: ConsoleTarget; active: boo
     fitRef.current = fit;
     terminal.loadAddon(fit);
     terminal.open(terminalElement.current);
-    const fitVisibleTerminal = () => {
-      if (terminalElement.current?.offsetWidth && terminalElement.current.offsetHeight) fit.fit();
-    };
-    requestAnimationFrame(fitVisibleTerminal);
-    terminal.writeln(`${docker ? "Docker" : vpcs ? "VPCS" : dynamips ? "Cisco IOS" : "QEMU serial"} console · ${target.nodeName}`);
     const socket = new WebSocket(docker
-      ? dockerConsoleUrl(target.projectId, target.nodeId)
+      ? auxiliary ? dockerAuxConsoleUrl(target.projectId, target.nodeId) : dockerConsoleUrl(target.projectId, target.nodeId)
       : vpcs ? vpcsConsoleUrl(target.projectId, target.nodeId) : dynamips ? dynamipsConsoleUrl(target.projectId, target.nodeId) : qemuConsoleUrl(target.projectId, target.nodeId));
     socket.binaryType = "arraybuffer";
-    socket.onopen = () => terminal.writeln(docker ? "Attached to Docker container terminal." : vpcs ? "Connected to VPCS console." : dynamips ? "Connected to Cisco IOS console." : "Connected to QEMU serial port.");
+    let lastResizeFrame: string | null = null;
+    const sendResize = () => {
+      if (!docker || auxiliary) return;
+      const frame = dockerResizeControlFrame(terminal.rows, terminal.cols);
+      if (frame && frame !== lastResizeFrame && sendDockerResizeControl(socket, terminal.rows, terminal.cols)) lastResizeFrame = frame;
+    };
+    const fitVisibleTerminal = () => {
+      if (terminalElement.current?.offsetWidth && terminalElement.current.offsetHeight) {
+        fit.fit();
+        sendResize();
+      }
+    };
+    const resize = terminal.onResize(sendResize);
+    requestAnimationFrame(fitVisibleTerminal);
+    terminal.writeln(`${docker ? auxiliary ? "Docker auxiliary" : "Docker" : vpcs ? "VPCS" : dynamips ? "Cisco IOS" : "QEMU serial"} console · ${target.nodeName}`);
+    socket.onopen = () => {
+      terminal.writeln(docker ? auxiliary ? "Attached to Docker auxiliary console." : "Attached to Docker container terminal." : vpcs ? "Connected to VPCS console." : dynamips ? "Connected to Cisco IOS console." : "Connected to QEMU serial port.");
+      sendResize();
+    };
     socket.onmessage = (event) => terminal.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data as ArrayBuffer));
     socket.onerror = () => terminal.writeln("\r\nConsole connection failed.");
     socket.onclose = () => terminal.writeln("\r\nConsole disconnected.");
@@ -94,6 +122,7 @@ function ConsoleSession({ target, active }: { target: ConsoleTarget; active: boo
       window.removeEventListener("resize", fitVisibleTerminal);
       observer?.disconnect();
       input.dispose();
+      resize.dispose();
       socket.onopen = null;
       socket.onmessage = null;
       socket.onerror = null;
@@ -102,7 +131,7 @@ function ConsoleSession({ target, active }: { target: ConsoleTarget; active: boo
       terminal.dispose();
       fitRef.current = null;
     };
-  }, [docker, dynamips, target.nodeId, target.nodeName, target.projectId, vpcs]);
+  }, [auxiliary, docker, dynamips, target.nodeId, target.nodeName, target.projectId, vpcs]);
 
   useEffect(() => {
     if (!active) return;
@@ -110,12 +139,12 @@ function ConsoleSession({ target, active }: { target: ConsoleTarget; active: boo
     return () => cancelAnimationFrame(frame);
   }, [active]);
 
-  return <div className={`sim-console-session ${active ? "is-active" : ""}`} role="region" aria-label={`Console for ${target.nodeName}`} aria-hidden={!active}>
-    <div className="sim-console-session-meta"><span className="sim-console-tab-dot" />{target.nodeName}<span className="text-muted-foreground">{consoleKind(target.nodeType)}</span></div>
+  return <div className={`sim-console-session ${active ? "is-active" : ""}`} role="region" aria-label={`${target.auxiliary ? "Auxiliary console" : "Console"} for ${target.nodeName}`} aria-hidden={!active}>
+    <div className="sim-console-session-meta"><span className="sim-console-tab-dot" />{target.nodeName}<span className="text-muted-foreground">{consoleKind(target.nodeType, target.auxiliary)}</span></div>
     <div ref={terminalElement} className="sim-xterm" />
   </div>;
 }
 
-function consoleKind(nodeType: Node["node_type"] | ConsoleTarget["nodeType"]) {
-  return nodeType === "docker" ? "Docker attached console" : nodeType === "vpcs" ? "VPCS console" : nodeType === "dynamips" ? "Dynamips IOS console" : "QEMU serial console";
+function consoleKind(nodeType: Node["node_type"] | ConsoleTarget["nodeType"], auxiliary = false) {
+  return nodeType === "docker" ? auxiliary ? "Docker auxiliary console" : "Docker attached console" : nodeType === "vpcs" ? "VPCS console" : nodeType === "dynamips" ? "Dynamips IOS console" : "QEMU serial console";
 }
