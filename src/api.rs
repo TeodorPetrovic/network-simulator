@@ -1,15 +1,17 @@
 use std::collections::HashSet;
+use std::path::{Component, Path as FsPath, PathBuf};
+use std::time::Instant;
 
 use axum::{
     Json, Router,
-    body::Body,
+    body::{Body, Bytes},
     extract::{
         Path, Query, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{any, get, post},
+    routing::{any, get, post, put},
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -19,6 +21,7 @@ use tokio::sync::broadcast;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpStream, UnixStream},
+    time::{Duration, sleep},
 };
 use tower_http::{
     limit::RequestBodyLimitLayer,
@@ -27,11 +30,18 @@ use tower_http::{
 };
 use uuid::Uuid;
 
+#[path = "api/controller_routes.rs"]
+mod controller_routes;
+
 use crate::{
-    dynamips::{DynamipsRuntime, DynamipsVm},
+    builtin::BuiltinRuntime,
+    dynamips::{DynamipsOptions, DynamipsRuntime},
+    links::{AdapterNio, LinkEngine, NioAdapter},
     marketplace::{ApplianceRecord, MarketplaceCatalog},
-    qemu::{QemuLink, QemuRuntime},
-    runtime::{DockerRuntime, NodeAction, RuntimeError, parse_start_command},
+    qemu::{QemuLink, QemuRuntime, QemuTemplateOptions},
+    runtime::{
+        DockerRuntime, DockerTemplateOptions, NodeAction, RuntimeError, parse_start_command,
+    },
     storage::{ProjectEvent, Store},
     ubridge::{self, UbridgeRuntime},
     vpcs::VpcsRuntime,
@@ -49,8 +59,10 @@ pub struct AppState {
     qemu: QemuRuntime,
     vpcs: VpcsRuntime,
     dynamips: DynamipsRuntime,
+    builtin: BuiltinRuntime,
     ubridge: UbridgeRuntime,
     marketplace: MarketplaceCatalog,
+    started_at: Instant,
 }
 
 impl AppState {
@@ -61,8 +73,10 @@ impl AppState {
             qemu: QemuRuntime::new(),
             vpcs: VpcsRuntime::new(),
             dynamips: DynamipsRuntime::new(),
+            builtin: BuiltinRuntime::default(),
             ubridge: UbridgeRuntime::new(),
             marketplace: MarketplaceCatalog::new(),
+            started_at: Instant::now(),
         }
     }
 
@@ -73,6 +87,28 @@ impl AppState {
         qemu: QemuRuntime,
         vpcs: VpcsRuntime,
         dynamips: DynamipsRuntime,
+        marketplace: MarketplaceCatalog,
+    ) -> Self {
+        Self::with_runtimes_and_ubridge(
+            store,
+            runtime,
+            qemu,
+            vpcs,
+            dynamips,
+            UbridgeRuntime::new(),
+            marketplace,
+        )
+    }
+
+    #[cfg(test)]
+    fn with_runtimes_and_ubridge(
+        store: Store,
+        runtime: DockerRuntime,
+        qemu: QemuRuntime,
+        vpcs: VpcsRuntime,
+        dynamips: DynamipsRuntime,
+        ubridge: UbridgeRuntime,
+        marketplace: MarketplaceCatalog,
     ) -> Self {
         Self {
             store,
@@ -80,8 +116,75 @@ impl AppState {
             qemu,
             vpcs,
             dynamips,
-            ubridge: UbridgeRuntime::new(),
-            marketplace: MarketplaceCatalog::new(),
+            builtin: BuiltinRuntime::default(),
+            ubridge,
+            marketplace,
+            started_at: Instant::now(),
+        }
+    }
+
+    /// Reattach links for runtimes that survived a controller restart. Nodes
+    /// that were stopped with the controller are attached later by their
+    /// normal start lifecycle path.
+    pub async fn reattach_running_links(&self) {
+        let rows = match sqlx::query(
+            "SELECT project_id, object_json FROM topology_objects WHERE kind = 'link'",
+        )
+        .fetch_all(self.store.pool())
+        .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(%error, "could not load links for runtime reconciliation");
+                return;
+            }
+        };
+        for row in rows {
+            let project_id = row.get::<String, _>("project_id");
+            let link = match decode_json(row.get::<String, _>("object_json")) {
+                Ok(link) => link,
+                Err(error) => {
+                    tracing::warn!(error = %error.message, %project_id, "skipping invalid link during runtime reconciliation");
+                    continue;
+                }
+            };
+            let endpoints = match link_runtime_endpoints(self.store.pool(), &project_id, &link)
+                .await
+            {
+                Ok(endpoints) => endpoints,
+                Err(error) => {
+                    tracing::warn!(error = %error.message, %project_id, link_id = %link["link_id"], "could not resolve link endpoints during runtime reconciliation");
+                    continue;
+                }
+            };
+            for endpoint in link["nodes"].as_array().into_iter().flatten() {
+                let node_id = endpoint["node_id"].as_str().unwrap_or_default();
+                let Some(runtime_endpoint) = endpoints
+                    .iter()
+                    .find(|candidate| candidate["node_id"].as_str() == Some(node_id))
+                else {
+                    continue;
+                };
+                match runtime_endpoint_status(self, &project_id, runtime_endpoint).await {
+                    Ok(status) if status != "stopped" => {
+                        if let Err(error) = attach_runtime_link_endpoint(
+                            self,
+                            &project_id,
+                            &link,
+                            endpoint,
+                            runtime_endpoint,
+                        )
+                        .await
+                        {
+                            tracing::warn!(error = %error.message, %project_id, %node_id, link_id = %link["link_id"], "could not reattach link endpoint after controller restart");
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!(error = %error.message, %project_id, %node_id, "could not inspect node during link reconciliation")
+                    }
+                }
+            }
         }
     }
 }
@@ -89,10 +192,13 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/healthz", get(health))
-        .route("/v3/version", get(version))
+        .route(
+            "/v3/version",
+            get(version).post(controller_routes::check_version),
+        )
         .route("/v3/runtimes", get(runtimes))
         .route("/v3/resources/monitor", get(resource_monitor))
-        .route("/v3/templates", get(list_templates))
+        .route("/v3/docker/images/pull", post(pull_docker_image))
         .route("/v3/marketplace/ishare2/images", get(search_ishare2_images))
         .route(
             "/v3/marketplace/ishare2/images/{image_type}/{image_id}/download",
@@ -110,9 +216,19 @@ pub fn router(state: AppState) -> Router {
             "/v3/marketplace/gns3/appliances/{file_name}/import",
             post(import_gns3_appliance),
         )
+        .route("/v3/marketplace/gns3/custom", post(create_custom_appliance))
         .route(
             "/v3/marketplace/gns3/imported",
             get(list_imported_appliances),
+        )
+        .route("/v3/marketplace/gns3/manager", get(get_appliance_manager))
+        .route(
+            "/v3/marketplace/gns3/appliances/{file_name}/bindings",
+            put(set_appliance_image_binding).delete(clear_appliance_image_binding),
+        )
+        .route(
+            "/v3/marketplace/gns3/import/{file_name}",
+            post(import_appliance_file),
         )
         .route("/v3/projects", get(list_projects).post(create_project))
         .route(
@@ -132,6 +248,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v3/projects/{project_id}/nodes/{node_id}",
             get(get_node).put(update_node).delete(delete_node),
+        )
+        .route(
+            "/v3/projects/{project_id}/nodes/{node_id}/config",
+            put(update_node_configuration),
         )
         .route(
             "/v3/projects/{project_id}/nodes/{node_id}/start",
@@ -158,6 +278,26 @@ pub fn router(state: AppState) -> Router {
             get(get_link).put(update_link).delete(delete_link),
         )
         .route(
+            "/v3/projects/{project_id}/links/{link_id}/available_filters",
+            get(available_link_filters),
+        )
+        .route(
+            "/v3/projects/{project_id}/links/{link_id}/capture/start",
+            post(start_link_capture),
+        )
+        .route(
+            "/v3/projects/{project_id}/links/{link_id}/capture/stop",
+            post(stop_link_capture),
+        )
+        .route(
+            "/v3/projects/{project_id}/links/{link_id}/capture/stream",
+            get(stream_link_capture),
+        )
+        .route(
+            "/v3/projects/{project_id}/links/{link_id}/capture/file",
+            get(download_link_capture),
+        )
+        .route(
             "/v3/projects/{project_id}/drawings",
             get(list_drawings).post(create_drawing),
         )
@@ -180,6 +320,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v3/compute/projects/{project_id}/docker/nodes/{node_id}/console/ws",
             get(docker_console),
+        )
+        .route(
+            "/v3/compute/projects/{project_id}/docker/nodes/{node_id}/aux_console/ws",
+            get(docker_aux_console),
         )
         .route(
             "/v3/compute/projects/{project_id}/vpcs/nodes/{node_id}/console/ws",
@@ -209,6 +353,7 @@ pub fn router(state: AppState) -> Router {
         .layer(RequestBodyLimitLayer::new(MAX_QEMU_IMAGE_BYTES));
     Router::new()
         .merge(api)
+        .merge(controller_routes::router())
         .merge(image_upload)
         .merge(qemu_image_upload)
         .layer(TraceLayer::new_for_http())
@@ -282,7 +427,8 @@ impl From<sqlx::Error> for ApiError {
 
 async fn version() -> Json<Value> {
     Json(json!({
-        "version": env!("CARGO_PKG_VERSION"),
+        "controller_host": null,
+        "version": "3.1.0.dev7",
         "local": true
     }))
 }
@@ -477,7 +623,7 @@ async fn import_gns3_appliance(
         .import_appliance(&file_name)
         .await
         .map_err(catalog_api_error)?;
-    let templates = available_templates(&state).await;
+    let templates = available_templates(&state).await?;
     let matching_templates = templates
         .iter()
         .filter(|template| template["appliance_id"].as_str() == Some(&appliance.appliance_id))
@@ -499,6 +645,113 @@ async fn list_imported_appliances(
     state
         .marketplace
         .imported_appliances()
+        .map(Json)
+        .map_err(catalog_api_error)
+}
+
+async fn get_appliance_manager(
+    State(state): State<AppState>,
+) -> Result<Json<crate::marketplace::ApplianceManagerState>, ApiError> {
+    let image_options = base_runtime_templates(&state).await;
+    state
+        .marketplace
+        .appliance_manager(&image_options)
+        .await
+        .map(Json)
+        .map_err(catalog_api_error)
+}
+
+#[derive(Deserialize)]
+struct CreateCustomAppliance {
+    name: String,
+    source_template_id: String,
+    #[serde(default = "default_object")]
+    runtime_settings: Value,
+}
+
+fn default_object() -> Value {
+    json!({})
+}
+
+async fn create_custom_appliance(
+    State(state): State<AppState>,
+    Json(request): Json<CreateCustomAppliance>,
+) -> Result<Json<crate::marketplace::ApplianceRecord>, ApiError> {
+    let image_options = base_runtime_templates(&state).await;
+    state
+        .marketplace
+        .create_custom_appliance(
+            &request.name,
+            &request.source_template_id,
+            &request.runtime_settings,
+            &image_options,
+        )
+        .map(Json)
+        .map_err(ApiError::bad_request)
+}
+
+#[derive(Deserialize)]
+struct SetApplianceImageBinding {
+    version: String,
+    image_key: String,
+    image_id: String,
+    #[serde(default)]
+    allow_checksum_mismatch: bool,
+}
+
+async fn set_appliance_image_binding(
+    State(state): State<AppState>,
+    Path(file_name): Path<String>,
+    Json(request): Json<SetApplianceImageBinding>,
+) -> Result<Json<Value>, ApiError> {
+    let templates = base_runtime_templates(&state).await;
+    let appliance = state
+        .marketplace
+        .set_image_binding(
+            &file_name,
+            &request.version,
+            &request.image_key,
+            &request.image_id,
+            request.allow_checksum_mismatch,
+            &templates,
+        )
+        .await
+        .map_err(catalog_api_error)?;
+    Ok(Json(json!({ "appliance": appliance })))
+}
+
+#[derive(Deserialize)]
+struct ClearApplianceImageBinding {
+    version: String,
+    image_key: String,
+}
+
+async fn clear_appliance_image_binding(
+    State(state): State<AppState>,
+    Path(file_name): Path<String>,
+    Json(request): Json<ClearApplianceImageBinding>,
+) -> Result<Json<Value>, ApiError> {
+    let appliance = state
+        .marketplace
+        .clear_image_binding(&file_name, &request.version, &request.image_key)
+        .await
+        .map_err(catalog_api_error)?;
+    Ok(Json(json!({ "appliance": appliance })))
+}
+
+async fn import_appliance_file(
+    State(state): State<AppState>,
+    Path(file_name): Path<String>,
+    body: Body,
+) -> Result<Json<ApplianceRecord>, ApiError> {
+    let bytes = axum::body::to_bytes(body, MAX_BODY_BYTES)
+        .await
+        .map_err(|error| {
+            ApiError::bad_request(format!("Could not read appliance file: {error}"))
+        })?;
+    state
+        .marketplace
+        .import_appliance_file(&file_name, &bytes)
         .map(Json)
         .map_err(catalog_api_error)
 }
@@ -672,11 +925,749 @@ async fn upload_qemu_image(
 }
 
 async fn list_templates(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
-    Ok(Json(available_templates(&state).await))
+    Ok(Json(available_templates(&state).await?))
 }
 
-async fn available_templates(state: &AppState) -> Vec<Value> {
-    let mut templates = Vec::new();
+async fn available_templates(state: &AppState) -> Result<Vec<Value>, ApiError> {
+    // Discovered runtime images are only inputs to appliances, never palette entries;
+    // the palette is the built-in nodes plus imported/custom appliances.
+    let base = base_runtime_templates(state).await;
+    let mut templates = BuiltinRuntime::templates();
+    templates.extend(state.marketplace.templates(base));
+    let rows = sqlx::query("SELECT template_id, template_json FROM runtime_template_profiles")
+        .fetch_all(state.store.pool())
+        .await?;
+    for row in rows {
+        let template_id: String = row.get("template_id");
+        let profile = decode_json(row.get::<String, _>("template_json"))?;
+        if let Some(template) = templates
+            .iter_mut()
+            .find(|template| template["template_id"].as_str() == Some(template_id.as_str()))
+            && let (Some(base), Some(overrides)) = (template.as_object_mut(), profile.as_object())
+        {
+            for (key, value) in overrides {
+                base.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    Ok(templates)
+}
+
+async fn update_template_profile(
+    State(state): State<AppState>,
+    Path(template_id): Path<Uuid>,
+    Json(patch): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    let template_id = template_id.to_string();
+    let template = available_templates(&state)
+        .await?
+        .into_iter()
+        .find(|template| template["template_id"].as_str() == Some(template_id.as_str()))
+        .ok_or_else(|| ApiError::not_found(format!("Template {template_id} does not exist")))?;
+    let patch = validate_template_profile_patch(&template, patch)?;
+    let row =
+        sqlx::query("SELECT template_json FROM runtime_template_profiles WHERE template_id = ?")
+            .bind(&template_id)
+            .fetch_optional(state.store.pool())
+            .await?;
+    let mut profile = row
+        .map(|row| decode_json(row.get::<String, _>("template_json")))
+        .transpose()?
+        .unwrap_or_else(|| json!({}));
+    {
+        let profile_object = as_object_mut(&mut profile, "template profile must be an object")?;
+        for (key, value) in patch.as_object().expect("validated profile is an object") {
+            profile_object.insert(key.clone(), value.clone());
+        }
+    }
+    let profile_json = serde_json::to_string(&profile).map_err(internal_json_error)?;
+    sqlx::query(
+        "INSERT INTO runtime_template_profiles (template_id, template_type, template_json)
+         VALUES (?, ?, ?)
+         ON CONFLICT(template_id) DO UPDATE SET
+           template_type = excluded.template_type,
+           template_json = excluded.template_json,
+           updated_at = CURRENT_TIMESTAMP",
+    )
+    .bind(&template_id)
+    .bind(template["template_type"].as_str().unwrap_or_default())
+    .bind(profile_json)
+    .execute(state.store.pool())
+    .await?;
+    let mut updated = template;
+    for (key, value) in profile.as_object().expect("profile is an object") {
+        updated[key] = value.clone();
+    }
+    Ok(Json(updated))
+}
+
+async fn reset_template_profile(
+    State(state): State<AppState>,
+    Path(template_id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let template_id = template_id.to_string();
+    sqlx::query("DELETE FROM runtime_template_profiles WHERE template_id = ?")
+        .bind(&template_id)
+        .execute(state.store.pool())
+        .await?;
+    let template = available_templates(&state)
+        .await?
+        .into_iter()
+        .find(|template| template["template_id"].as_str() == Some(template_id.as_str()))
+        .ok_or_else(|| ApiError::not_found(format!("Template {template_id} does not exist")))?;
+    Ok(Json(template))
+}
+
+fn validate_template_profile_patch(template: &Value, patch: Value) -> Result<Value, ApiError> {
+    let patch = patch
+        .as_object()
+        .ok_or_else(|| ApiError::bad_request("template settings must be an object"))?;
+    let kind = template["template_type"].as_str().unwrap_or_default();
+    let allowed: &[&str] = match kind {
+        "qemu" => &[
+            "name",
+            "adapters",
+            "memory",
+            "cpus",
+            "maxcpus",
+            "linked_clone",
+            "adapter_type",
+            "hda_disk_interface",
+            "hdb_disk_image",
+            "hdb_disk_interface",
+            "hdb_disk_image_backing_file",
+            "hdc_disk_image",
+            "hdc_disk_interface",
+            "hdc_disk_image_backing_file",
+            "hdd_disk_image",
+            "hdd_disk_interface",
+            "hdd_disk_image_backing_file",
+            "hda_disk_image_backing_file",
+            "cdrom_image",
+            "bios_image",
+            "kernel_image",
+            "initrd",
+            "kernel_command_line",
+            "boot_priority",
+            "console_type",
+            "aux_type",
+            "on_close",
+            "process_priority",
+            "options",
+            "tpm",
+            "uefi",
+            "replicate_network_connection_state",
+            "create_config_disk",
+            "cpu_throttling",
+        ],
+        "docker" => &[
+            "name",
+            "adapters",
+            "memory",
+            "cpus",
+            "start_command",
+            "environment",
+            "extra_hosts",
+            "extra_volumes",
+            "console_type",
+            "console_resolution",
+            "console_http_port",
+            "console_http_path",
+            "aux_type",
+            "custom_adapters",
+        ],
+        "dynamips" => &[
+            "name",
+            "platform",
+            "chassis",
+            "memory",
+            "nvram",
+            "idlepc",
+            "mmap",
+            "sparsemem",
+            "clock_divisor",
+            "idlemax",
+            "idlesleep",
+            "exec_area",
+            "disk0",
+            "disk1",
+            "auto_delete_disks",
+            "private_config",
+            "mac_addr",
+            "system_id",
+            "slot0",
+            "slot1",
+            "slot2",
+            "slot3",
+            "slot4",
+            "slot5",
+            "slot6",
+            "wic0",
+            "wic1",
+            "wic2",
+            "npe",
+            "midplane",
+            "iomem",
+            "ghost_ios",
+            "console_type",
+            "aux_type",
+        ],
+        "vpcs" => &[
+            "name",
+            "startup_script",
+            "base_script_file",
+            "console_type",
+            "console_auto_start",
+        ],
+        "ethernet_switch" => &["name", "ports_mapping", "console_type"],
+        "ethernet_hub" => &["name", "ports_mapping"],
+        "cloud" => &[
+            "name",
+            "ports_mapping",
+            "remote_console_host",
+            "remote_console_port",
+            "remote_console_type",
+            "remote_console_http_path",
+        ],
+        "nat" => &["name", "ports_mapping"],
+        _ => return Err(ApiError::bad_request("unsupported template runtime")),
+    };
+    let mut validated = serde_json::Map::new();
+    for (key, value) in patch {
+        if !allowed.contains(&key.as_str()) {
+            return Err(ApiError::bad_request(format!(
+                "'{key}' is not an editable {kind} template setting"
+            )));
+        }
+        match key.as_str() {
+            "name" => {
+                let name = value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .ok_or_else(|| ApiError::bad_request("template name must not be empty"))?;
+                if name.len() > 120 {
+                    return Err(ApiError::bad_request("template name is too long"));
+                }
+                validated.insert(key.clone(), json!(name));
+            }
+            "ports_mapping" => {
+                let mapping =
+                    crate::builtin::BuiltinRuntime::normalize_template_ports(kind, value.clone())
+                        .map_err(ApiError::bad_request)?;
+                validated.insert(key.clone(), mapping);
+            }
+            "console_type" if kind == "ethernet_switch" => {
+                let console_type = value
+                    .as_str()
+                    .filter(|value| matches!(*value, "none" | "telnet"))
+                    .ok_or_else(|| ApiError::bad_request("unsupported switch console_type"))?;
+                validated.insert(key.clone(), json!(console_type));
+            }
+            "remote_console_host" => {
+                let host = value
+                    .as_str()
+                    .filter(|host| {
+                        host.len() <= 255 && !host.bytes().any(|byte| byte.is_ascii_control())
+                    })
+                    .ok_or_else(|| ApiError::bad_request("remote_console_host is invalid"))?;
+                validated.insert(key.clone(), json!(host));
+            }
+            "remote_console_port" => {
+                let port = value
+                    .as_u64()
+                    .filter(|port| (1..=65535).contains(port))
+                    .ok_or_else(|| {
+                        ApiError::bad_request("remote_console_port must be from 1 to 65535")
+                    })?;
+                validated.insert(key.clone(), json!(port));
+            }
+            "remote_console_type" => {
+                let console_type = value
+                    .as_str()
+                    .filter(|value| {
+                        matches!(
+                            *value,
+                            "none" | "telnet" | "ssh" | "vnc" | "spice" | "http" | "https"
+                        )
+                    })
+                    .ok_or_else(|| {
+                        ApiError::bad_request("unsupported cloud remote console type")
+                    })?;
+                validated.insert(key.clone(), json!(console_type));
+            }
+            "remote_console_http_path" => {
+                let path = value
+                    .as_str()
+                    .filter(|path| {
+                        path.starts_with('/') && !path.bytes().any(|byte| byte.is_ascii_control())
+                    })
+                    .ok_or_else(|| {
+                        ApiError::bad_request("remote_console_http_path must be an absolute path")
+                    })?;
+                validated.insert(key.clone(), json!(path));
+            }
+            "adapters" => {
+                let adapters = value
+                    .as_u64()
+                    .filter(|value| {
+                        if kind == "qemu" {
+                            *value <= 275
+                        } else if kind == "dynamips" {
+                            (1..=99).contains(value)
+                        } else {
+                            (1..=99).contains(value)
+                        }
+                    })
+                    .ok_or_else(|| {
+                        ApiError::bad_request(if kind == "qemu" {
+                            "QEMU adapters must be an integer from 0 to 275"
+                        } else {
+                            "adapters must be an integer from 1 to 99"
+                        })
+                    })?;
+                validated.insert(key.clone(), json!(adapters));
+            }
+            "memory" => {
+                let memory = value
+                    .as_u64()
+                    .filter(|value| {
+                        if kind == "qemu" {
+                            (16..=1_048_576).contains(value)
+                        } else if kind == "dynamips" {
+                            (1..=1_048_576).contains(value)
+                        } else {
+                            *value <= 1_048_576
+                        }
+                    })
+                    .ok_or_else(|| {
+                        ApiError::bad_request("memory is outside the supported range")
+                    })?;
+                validated.insert(key.clone(), json!(memory));
+            }
+            "cpus" if kind == "docker" => {
+                let cpus = value
+                    .as_f64()
+                    .filter(|value| (0.0..=256.0).contains(value))
+                    .ok_or_else(|| {
+                        ApiError::bad_request("Docker CPU limit must be between 0 and 256")
+                    })?;
+                validated.insert(key.clone(), json!(cpus));
+            }
+            "cpus" => {
+                let cpus = value
+                    .as_u64()
+                    .filter(|value| (1..=255).contains(value))
+                    .ok_or_else(|| {
+                        ApiError::bad_request("CPU count must be an integer from 1 to 256")
+                    })?;
+                validated.insert(key.clone(), json!(cpus));
+            }
+            "adapter_type" if kind == "qemu" => {
+                let model = value
+                    .as_str()
+                    .filter(|value| {
+                        matches!(
+                            *value,
+                            "e1000"
+                                | "e1000-82544gc"
+                                | "e1000-82545em"
+                                | "e1000e"
+                                | "i82550"
+                                | "i82551"
+                                | "i82557a"
+                                | "i82557b"
+                                | "i82557c"
+                                | "i82558a"
+                                | "i82558b"
+                                | "i82559a"
+                                | "i82559b"
+                                | "i82559c"
+                                | "i82559er"
+                                | "i82562"
+                                | "i82801"
+                                | "igb"
+                                | "ne2k_pci"
+                                | "pcnet"
+                                | "rocker"
+                                | "rtl8139"
+                                | "virtio"
+                                | "virtio-net-pci"
+                                | "vmxnet3"
+                        )
+                    })
+                    .ok_or_else(|| {
+                        ApiError::bad_request("unsupported QEMU network adapter model")
+                    })?;
+                validated.insert(key.clone(), json!(model));
+            }
+            "hda_disk_interface" if kind == "qemu" => {
+                let interface = value
+                    .as_str()
+                    .filter(|value| {
+                        matches!(
+                            *value,
+                            "ide"
+                                | "sata"
+                                | "nvme"
+                                | "scsi"
+                                | "virtio"
+                                | "sd"
+                                | "mtd"
+                                | "floppy"
+                                | "pflash"
+                                | "none"
+                        )
+                    })
+                    .ok_or_else(|| {
+                        ApiError::bad_request("unsupported QEMU primary disk interface")
+                    })?;
+                validated.insert(key.clone(), json!(interface));
+            }
+            "boot_priority" if kind == "qemu" => {
+                let order = value
+                    .as_str()
+                    .filter(|value| {
+                        matches!(
+                            *value,
+                            "c" | "d" | "n" | "cn" | "cd" | "dn" | "dc" | "nc" | "nd"
+                        )
+                    })
+                    .ok_or_else(|| ApiError::bad_request("unsupported QEMU boot priority"))?;
+                validated.insert(key.clone(), json!(order));
+            }
+            "maxcpus" if kind == "qemu" => {
+                let value = value
+                    .as_u64()
+                    .filter(|value| (1..=255).contains(value))
+                    .ok_or_else(|| ApiError::bad_request("QEMU maxcpus must be from 1 to 255"))?;
+                validated.insert(key.clone(), json!(value));
+            }
+            "linked_clone"
+            | "tpm"
+            | "uefi"
+            | "replicate_network_connection_state"
+            | "create_config_disk"
+                if kind == "qemu" =>
+            {
+                let value = value
+                    .as_bool()
+                    .ok_or_else(|| ApiError::bad_request(format!("{key} must be a boolean")))?;
+                validated.insert(key.clone(), json!(value));
+            }
+            "hdb_disk_interface" | "hdc_disk_interface" | "hdd_disk_interface"
+                if kind == "qemu" =>
+            {
+                let interface = value
+                    .as_str()
+                    .filter(|value| {
+                        matches!(
+                            *value,
+                            "ide"
+                                | "sata"
+                                | "nvme"
+                                | "scsi"
+                                | "virtio"
+                                | "sd"
+                                | "mtd"
+                                | "floppy"
+                                | "pflash"
+                                | "none"
+                        )
+                    })
+                    .ok_or_else(|| ApiError::bad_request(format!("unsupported QEMU {key}")))?;
+                validated.insert(key.clone(), json!(interface));
+            }
+            "hdb_disk_image" | "hdc_disk_image" | "hdd_disk_image" | "cdrom_image"
+            | "bios_image" | "kernel_image" | "initrd"
+                if kind == "qemu" =>
+            {
+                let path = value
+                    .as_str()
+                    .filter(|value| value.len() <= 4096)
+                    .ok_or_else(|| {
+                        ApiError::bad_request(format!("{key} must be a path under 4096 characters"))
+                    })?;
+                validated.insert(key.clone(), json!(path));
+            }
+            "kernel_command_line" | "options" if kind == "qemu" => {
+                let max = if key == "options" {
+                    16 * 1024
+                } else {
+                    64 * 1024
+                };
+                let text = value
+                    .as_str()
+                    .filter(|text| text.len() <= max)
+                    .ok_or_else(|| ApiError::bad_request(format!("{key} is too long")))?;
+                validated.insert(key.clone(), json!(text));
+            }
+            "console_type" | "aux_type" if kind == "qemu" => {
+                let value = value
+                    .as_str()
+                    .filter(|value| {
+                        matches!(
+                            *value,
+                            "telnet" | "ssh" | "vnc" | "spice" | "spice+agent" | "none"
+                        )
+                    })
+                    .ok_or_else(|| ApiError::bad_request(format!("unsupported QEMU {key}")))?;
+                validated.insert(key.clone(), json!(value));
+            }
+            "on_close" if kind == "qemu" => {
+                let value = value
+                    .as_str()
+                    .filter(|value| {
+                        matches!(*value, "power_off" | "shutdown_signal" | "save_vm_state")
+                    })
+                    .ok_or_else(|| ApiError::bad_request("unsupported QEMU on_close action"))?;
+                validated.insert(key.clone(), json!(value));
+            }
+            "process_priority" if kind == "qemu" => {
+                let value = value
+                    .as_str()
+                    .filter(|value| {
+                        matches!(
+                            *value,
+                            "realtime" | "very high" | "high" | "normal" | "low" | "very low"
+                        )
+                    })
+                    .ok_or_else(|| ApiError::bad_request("unsupported QEMU process priority"))?;
+                validated.insert(key.clone(), json!(value));
+            }
+            "cpu_throttling" if kind == "qemu" => {
+                let value = value
+                    .as_u64()
+                    .filter(|value| *value <= 800)
+                    .ok_or_else(|| {
+                        ApiError::bad_request("QEMU cpu_throttling must be from 0 to 800")
+                    })?;
+                validated.insert(key.clone(), json!(value));
+            }
+            "platform" if kind == "dynamips" => {
+                let platform = value
+                    .as_str()
+                    .filter(|value| {
+                        matches!(
+                            *value,
+                            "c1700" | "c2600" | "c2691" | "c3600" | "c3725" | "c3745" | "c7200"
+                        )
+                    })
+                    .ok_or_else(|| ApiError::bad_request("unsupported Dynamips platform"))?;
+                validated.insert(key.clone(), json!(platform));
+            }
+            "chassis" | "slot0" | "slot1" | "slot2" | "slot3" | "slot4" | "slot5" | "slot6"
+            | "wic0" | "wic1" | "wic2" | "npe" | "midplane" | "system_id" | "mac_addr"
+                if kind == "dynamips" =>
+            {
+                let setting = value
+                    .as_str()
+                    .ok_or_else(|| ApiError::bad_request("Dynamips setting must be text"))?;
+                validated.insert(key.clone(), json!(setting));
+            }
+            "nvram" | "clock_divisor" | "idlemax" | "idlesleep" | "exec_area" | "disk0"
+            | "disk1" | "iomem"
+                if kind == "dynamips" =>
+            {
+                let value = value
+                    .as_u64()
+                    .filter(|value| match key.as_str() {
+                        "iomem" => *value <= 100,
+                        "clock_divisor" => (1..=4096).contains(value),
+                        "disk0" | "disk1" | "exec_area" => *value <= 16_384,
+                        _ => *value <= 1_048_576,
+                    })
+                    .ok_or_else(|| {
+                        ApiError::bad_request(format!("{key} is outside the supported range"))
+                    })?;
+                validated.insert(key.clone(), json!(value));
+            }
+            "idlepc" if kind == "dynamips" => {
+                let value = value
+                    .as_str()
+                    .filter(|value| value.is_empty() || value.starts_with("0x"))
+                    .ok_or_else(|| {
+                        ApiError::bad_request("Idle-PC must be empty or a hexadecimal value")
+                    })?;
+                validated.insert(key.clone(), json!(value));
+            }
+            "mmap" | "sparsemem" | "auto_delete_disks" | "ghost_ios" | "console_auto_start"
+                if kind == "dynamips" || kind == "vpcs" =>
+            {
+                let value = value
+                    .as_bool()
+                    .ok_or_else(|| ApiError::bad_request(format!("{key} must be a boolean")))?;
+                validated.insert(key.clone(), json!(value));
+            }
+            "private_config" | "startup_script" | "base_script_file"
+                if kind == "dynamips" || kind == "vpcs" =>
+            {
+                let value = value
+                    .as_str()
+                    .filter(|value| value.len() <= 1_048_576)
+                    .ok_or_else(|| {
+                        ApiError::bad_request(format!("{key} must be text under 1 MiB"))
+                    })?;
+                validated.insert(key.clone(), json!(value));
+            }
+            "console_type" | "aux_type" if kind == "dynamips" => {
+                let value = value
+                    .as_str()
+                    .filter(|value| matches!(*value, "telnet" | "ssh" | "none"))
+                    .ok_or_else(|| ApiError::bad_request(format!("unsupported Dynamips {key}")))?;
+                validated.insert(key.clone(), json!(value));
+            }
+            "console_type" if kind == "docker" => {
+                let value = value
+                    .as_str()
+                    .filter(|value| matches!(*value, "none" | "telnet" | "vnc" | "http" | "https"))
+                    .ok_or_else(|| ApiError::bad_request("unsupported Docker console_type"))?;
+                validated.insert(key.clone(), json!(value));
+            }
+            "aux_type" if kind == "docker" => {
+                let value = value
+                    .as_str()
+                    .filter(|value| matches!(*value, "none" | "telnet" | "ssh"))
+                    .ok_or_else(|| ApiError::bad_request("unsupported Docker aux_type"))?;
+                validated.insert(key.clone(), json!(value));
+            }
+            "console_resolution" if kind == "docker" => {
+                let resolution = value
+                    .as_str()
+                    .filter(|value| {
+                        value.split_once('x').is_some_and(|(w, h)| {
+                            !w.is_empty()
+                                && !h.is_empty()
+                                && w.bytes().all(|byte| byte.is_ascii_digit())
+                                && h.bytes().all(|byte| byte.is_ascii_digit())
+                        })
+                    })
+                    .ok_or_else(|| {
+                        ApiError::bad_request("console_resolution must use WIDTHxHEIGHT")
+                    })?;
+                validated.insert(key.clone(), json!(resolution));
+            }
+            "console_http_port" if kind == "docker" => {
+                let port = value
+                    .as_u64()
+                    .filter(|port| (1..=65535).contains(port))
+                    .ok_or_else(|| {
+                        ApiError::bad_request("console_http_port must be from 1 to 65535")
+                    })?;
+                validated.insert(key.clone(), json!(port));
+            }
+            "console_http_path" if kind == "docker" => {
+                let path = value
+                    .as_str()
+                    .filter(|path| {
+                        path.starts_with('/') && !path.bytes().any(|byte| byte.is_ascii_control())
+                    })
+                    .ok_or_else(|| {
+                        ApiError::bad_request("console_http_path must be an absolute URL path")
+                    })?;
+                validated.insert(key.clone(), json!(path));
+            }
+            "custom_adapters" if kind == "docker" => {
+                if !value.is_array() || value.as_array().is_some_and(|adapters| adapters.len() > 99)
+                {
+                    return Err(ApiError::bad_request(
+                        "custom_adapters must contain at most 99 entries",
+                    ));
+                }
+                serde_json::from_value::<Vec<crate::runtime::DockerCustomAdapter>>(value.clone())
+                    .map_err(|_| {
+                    ApiError::bad_request("custom_adapters contain an invalid definition")
+                })?;
+                validated.insert(key.clone(), value.clone());
+            }
+            "console_type" if kind == "vpcs" => {
+                let value = value
+                    .as_str()
+                    .filter(|value| *value == "telnet")
+                    .ok_or_else(|| {
+                        ApiError::bad_request("VPCS supports the telnet console type")
+                    })?;
+                validated.insert(key.clone(), json!(value));
+            }
+            "extra_volumes" if kind == "docker" => {
+                let volumes = value.as_array().ok_or_else(|| {
+                    ApiError::bad_request("extra_volumes must be an array of container paths")
+                })?;
+                if volumes.len() > 32
+                    || volumes.iter().any(|volume| {
+                        volume
+                            .as_str()
+                            .is_none_or(|path| !valid_container_path(path))
+                    })
+                {
+                    return Err(ApiError::bad_request(
+                        "Docker volume paths must be absolute, safe container paths (up to 32)",
+                    ));
+                }
+                validated.insert(key.clone(), value.clone());
+            }
+            "environment" | "extra_hosts" | "start_command" | "startup_script"
+                if matches!(kind, "docker" | "vpcs") =>
+            {
+                let text = value
+                    .as_str()
+                    .ok_or_else(|| ApiError::bad_request(format!("{key} must be text")))?;
+                if text.len() > 64 * 1024 {
+                    return Err(ApiError::bad_request(format!("{key} is too long")));
+                }
+                if key == "start_command" && !text.trim().is_empty() {
+                    parse_start_command(text)
+                        .map_err(|error| ApiError::bad_request(error.message()))?;
+                }
+                validated.insert(key.clone(), json!(text));
+            }
+            _ => {
+                return Err(ApiError::bad_request(format!(
+                    "'{key}' is not valid for {kind}"
+                )));
+            }
+        }
+    }
+    Ok(Value::Object(validated))
+}
+
+fn valid_container_path(path: &str) -> bool {
+    path.starts_with('/') && !path.contains("..") && path.len() <= 512 && !path.contains('\0')
+}
+
+async fn pull_docker_image(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    let image = body
+        .get("image")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|image| !image.is_empty())
+        .ok_or_else(|| ApiError::bad_request("Docker image reference is required"))?;
+    let image_id = state
+        .runtime
+        .pull_image(image)
+        .await
+        .map_err(runtime_api_error)?;
+    let templates = base_runtime_templates(&state).await;
+    let template = templates
+        .into_iter()
+        .find(|template| {
+            template["template_type"] == "docker"
+                && template["image"].as_str().is_some_and(|candidate| {
+                    candidate == image
+                        || (!image.contains(':') && candidate.starts_with(&format!("{image}:")))
+                })
+        })
+        .ok_or_else(|| {
+            ApiError::conflict("Docker pulled the image but did not expose a local template")
+        })?;
+    Ok(Json(json!({ "image_id": image_id, "template": template })))
+}
+
+async fn base_runtime_templates(state: &AppState) -> Vec<Value> {
+    let mut templates = BuiltinRuntime::templates();
     match state.runtime.templates().await {
         Ok(available) => templates.extend(available),
         Err(error) => tracing::debug!(error = %error.message(), "Docker templates are unavailable"),
@@ -695,7 +1686,7 @@ async fn available_templates(state: &AppState) -> Vec<Value> {
             tracing::debug!(error = %error.message(), "Dynamips templates are unavailable")
         }
     }
-    state.marketplace.templates(templates)
+    templates
 }
 
 fn runtime_api_error(error: RuntimeError) -> ApiError {
@@ -992,11 +1983,39 @@ async fn create_node(
         Some("qemu") => create_qemu_node(state, project_id.to_string(), node).await,
         Some("vpcs") => create_vpcs_node(state, project_id.to_string(), node).await,
         Some("dynamips") => create_dynamips_node(state, project_id.to_string(), node).await,
+        Some(node_type) if BuiltinRuntime::is_type(node_type) => {
+            create_builtin_node(state, project_id.to_string(), node).await
+        }
         Some(node_type) => Err(ApiError::bad_request(format!(
-            "Unsupported node type '{node_type}'. Executable node types are Docker, QEMU, VPCS, and Dynamips."
+            "Unsupported node type '{node_type}'. Executable node types are Docker, QEMU, VPCS, Dynamips, Ethernet switch, Ethernet hub, Cloud, and NAT."
         ))),
         None => Err(ApiError::bad_request("node_type is required")),
     }
+}
+
+async fn create_builtin_node(
+    state: AppState,
+    project_id: String,
+    mut node: Value,
+) -> Result<Response, ApiError> {
+    let object = as_object_mut(&mut node, "node body must be an object")?;
+    let node_id = parse_or_generate_uuid(object.get("node_id"), "node_id")?;
+    ensure_project_exists_pool(state.store.pool(), &project_id).await?;
+    if let Some(row) = sqlx::query(
+        "SELECT object_json FROM topology_objects
+         WHERE project_id = ? AND kind = 'node' AND object_id = ?",
+    )
+    .bind(&project_id)
+    .bind(&node_id)
+    .fetch_optional(state.store.pool())
+    .await?
+    {
+        return Ok(Json(decode_json(row.get::<String, _>("object_json"))?).into_response());
+    }
+    object.insert("node_id".into(), json!(node_id));
+    object.insert("project_id".into(), json!(project_id.clone()));
+    let node = BuiltinRuntime::normalize_node(node).map_err(ApiError::bad_request)?;
+    create_topology_object(state, &project_id, "node", "node_id", node).await
 }
 
 async fn create_node_from_template(
@@ -1004,7 +2023,7 @@ async fn create_node_from_template(
     Path((project_id, template_id)): Path<(Uuid, Uuid)>,
     Json(usage): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let templates = available_templates(&state).await;
+    let templates = available_templates(&state).await?;
     let template = templates
         .into_iter()
         .find(|template| {
@@ -1021,6 +2040,30 @@ async fn create_node_from_template(
         .get("template_type")
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::bad_request("template has no runtime type"))?;
+    if BuiltinRuntime::is_type(node_type) {
+        let mut node = template.clone();
+        node["node_type"] = json!(node_type);
+        node["name"] = json!(name);
+        node["template_id"] = json!(template_id);
+        node["x"] = usage.get("x").cloned().unwrap_or(json!(0));
+        node["y"] = usage.get("y").cloned().unwrap_or(json!(0));
+        for key in [
+            "ports_mapping",
+            "remote_console_host",
+            "remote_console_port",
+            "remote_console_type",
+            "remote_console_http_path",
+            "nat_interface",
+        ] {
+            if let Some(value) = usage.get(key) {
+                node[key] = value.clone();
+            }
+        }
+        if let Some(compute_id) = usage.get("compute_id") {
+            node["compute_id"] = compute_id.clone();
+        }
+        return create_builtin_node(state, project_id.to_string(), node).await;
+    }
     let mut node = if node_type == "docker" {
         json!({
             "name": name,
@@ -1031,6 +2074,15 @@ async fn create_node_from_template(
             "adapters": template["adapters"],
             "memory": template["memory"],
             "cpus": template["cpus"],
+            "environment": template["environment"],
+            "extra_hosts": template["extra_hosts"],
+            "extra_volumes": template["extra_volumes"],
+            "console_type": template["console_type"],
+            "console_resolution": template["console_resolution"],
+            "console_http_port": template["console_http_port"],
+            "console_http_path": template["console_http_path"],
+            "aux_type": template["aux_type"],
+            "custom_adapters": template["custom_adapters"],
             "x": usage.get("x").cloned().unwrap_or(json!(0)),
             "y": usage.get("y").cloned().unwrap_or(json!(0))
         })
@@ -1043,6 +2095,33 @@ async fn create_node_from_template(
             "adapters": template["adapters"],
             "memory": template["memory"],
             "cpus": template["cpus"],
+            "platform": template["platform"],
+            "adapter_type": template["adapter_type"],
+            "hda_disk_interface": template["hda_disk_interface"],
+            "boot_priority": template["boot_priority"],
+            "linked_clone": template["linked_clone"],
+            "maxcpus": template["maxcpus"],
+            "hdb_disk_image": template["hdb_disk_image"],
+            "hdb_disk_interface": template["hdb_disk_interface"],
+            "hdc_disk_image": template["hdc_disk_image"],
+            "hdc_disk_interface": template["hdc_disk_interface"],
+            "hdd_disk_image": template["hdd_disk_image"],
+            "hdd_disk_interface": template["hdd_disk_interface"],
+            "cdrom_image": template["cdrom_image"],
+            "bios_image": template["bios_image"],
+            "kernel_image": template["kernel_image"],
+            "initrd": template["initrd"],
+            "kernel_command_line": template["kernel_command_line"],
+            "console_type": template["console_type"],
+            "aux_type": template["aux_type"],
+            "on_close": template["on_close"],
+            "process_priority": template["process_priority"],
+            "options": template["options"],
+            "tpm": template["tpm"],
+            "uefi": template["uefi"],
+            "replicate_network_connection_state": template["replicate_network_connection_state"],
+            "create_config_disk": template["create_config_disk"],
+            "cpu_throttling": template["cpu_throttling"],
             "x": usage.get("x").cloned().unwrap_or(json!(0)),
             "y": usage.get("y").cloned().unwrap_or(json!(0))
         })
@@ -1055,6 +2134,9 @@ async fn create_node_from_template(
             "memory": 0,
             "cpus": 0,
             "startup_script": usage.get("startup_script").cloned().unwrap_or(json!("")),
+            "base_script_file": template["base_script_file"],
+            "console_type": template["console_type"],
+            "console_auto_start": template["console_auto_start"],
             "x": usage.get("x").cloned().unwrap_or(json!(0)),
             "y": usage.get("y").cloned().unwrap_or(json!(0))
         })
@@ -1064,11 +2146,42 @@ async fn create_node_from_template(
             "node_type": "dynamips",
             "template_id": template_id,
             "platform": template["platform"],
+            "chassis": template["chassis"],
+            "slot0": template["slot0"],
             "image": template["image"],
             "adapters": template["adapters"],
             "ram": template["memory"],
+            "nvram": template["nvram"],
+            "dynamips_id": template["dynamips_id"],
             "idlepc": usage.get("idlepc").cloned().unwrap_or(template["idlepc"].clone()),
             "startup_config": usage.get("startup_config").cloned().unwrap_or(json!("")),
+            "private_config": template["private_config"],
+            "mmap": template["mmap"],
+            "sparsemem": template["sparsemem"],
+            "clock_divisor": template["clock_divisor"],
+            "idlemax": template["idlemax"],
+            "idlesleep": template["idlesleep"],
+            "exec_area": template["exec_area"],
+            "disk0": template["disk0"],
+            "disk1": template["disk1"],
+            "auto_delete_disks": template["auto_delete_disks"],
+            "mac_addr": template["mac_addr"],
+            "system_id": template["system_id"],
+            "slot1": template["slot1"],
+            "slot2": template["slot2"],
+            "slot3": template["slot3"],
+            "slot4": template["slot4"],
+            "slot5": template["slot5"],
+            "slot6": template["slot6"],
+            "wic0": template["wic0"],
+            "wic1": template["wic1"],
+            "wic2": template["wic2"],
+            "npe": template["npe"],
+            "midplane": template["midplane"],
+            "iomem": template["iomem"],
+            "ghost_ios": template["ghost_ios"],
+            "console_type": template["console_type"],
+            "aux_type": template["aux_type"],
             "x": usage.get("x").cloned().unwrap_or(json!(0)),
             "y": usage.get("y").cloned().unwrap_or(json!(0))
         })
@@ -1155,10 +2268,16 @@ async fn create_docker_node(
     set_default(object, "y", json!(0));
     set_default(object, "z", json!(1));
     set_default(object, "locked", json!(false));
-    set_default(object, "adapters", json!(8));
+    set_default(object, "adapters", json!(1));
     set_default(object, "memory", json!(0));
     set_default(object, "cpus", json!(0));
     set_default(object, "properties", json!({}));
+    set_default(object, "console_type", json!("telnet"));
+    set_default(object, "console_resolution", json!("1024x768"));
+    set_default(object, "console_http_port", json!(80));
+    set_default(object, "console_http_path", json!("/"));
+    set_default(object, "aux_type", json!("none"));
+    set_default(object, "custom_adapters", json!([]));
 
     let memory_mb = object
         .get("memory")
@@ -1198,9 +2317,62 @@ async fn create_docker_node(
     if !(1..=99).contains(&adapters) {
         return Err(ApiError::bad_request("adapters must be between 1 and 99"));
     }
+    let docker_options = DockerTemplateOptions {
+        environment: object
+            .get("environment")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        extra_hosts: object
+            .get("extra_hosts")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        extra_volumes: object
+            .get("extra_volumes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        console_type: object
+            .get("console_type")
+            .and_then(Value::as_str)
+            .unwrap_or("telnet")
+            .to_owned(),
+        console_resolution: object
+            .get("console_resolution")
+            .and_then(Value::as_str)
+            .unwrap_or("1024x768")
+            .to_owned(),
+        console_http_port: object
+            .get("console_http_port")
+            .and_then(Value::as_u64)
+            .and_then(|port| u16::try_from(port).ok()),
+        console_http_path: object
+            .get("console_http_path")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        aux_type: object
+            .get("aux_type")
+            .and_then(Value::as_str)
+            .unwrap_or("none")
+            .to_owned(),
+        custom_adapters: serde_json::from_value(
+            object
+                .get("custom_adapters")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        )
+        .map_err(|_| {
+            ApiError::bad_request("custom_adapters must be an array of adapter definitions")
+        })?,
+        ..DockerTemplateOptions::default()
+    };
     let (container_id, image_digest) = state
         .runtime
-        .create_container(
+        .create_container_with_options(
             &project_id,
             &node_id,
             &image,
@@ -1208,11 +2380,15 @@ async fn create_docker_node(
             start_command.as_deref(),
             u64::try_from(memory_mb).ok(),
             Some(cpus),
+            &docker_options,
         )
         .await
         .map_err(runtime_api_error)?;
     object.insert("container_id".into(), json!(container_id));
     object.insert("image_digest".into(), json!(image_digest));
+    if let Some(console_port) = state.runtime.console_port(&container_id).await {
+        object.insert("console".into(), json!(console_port));
+    }
 
     match create_topology_object(state.clone(), &project_id, "node", "node_id", node).await {
         Ok(response) => Ok(response),
@@ -1277,9 +2453,24 @@ async fn create_qemu_node(
     set_default(object, "y", json!(0));
     set_default(object, "z", json!(1));
     set_default(object, "locked", json!(false));
-    set_default(object, "adapters", json!(8));
+    set_default(object, "adapters", json!(1));
     set_default(object, "memory", json!(512));
     set_default(object, "cpus", json!(1));
+    let default_maxcpus = object.get("cpus").and_then(Value::as_u64).unwrap_or(1);
+    set_default(object, "maxcpus", json!(default_maxcpus));
+    set_default(object, "linked_clone", json!(true));
+    set_default(object, "hda_disk_interface", json!("ide"));
+    set_default(object, "boot_priority", json!("c"));
+    set_default(object, "console_type", json!("telnet"));
+    set_default(object, "aux_type", json!("none"));
+    set_default(object, "on_close", json!("power_off"));
+    set_default(object, "process_priority", json!("normal"));
+    set_default(object, "options", json!(""));
+    set_default(object, "tpm", json!(false));
+    set_default(object, "uefi", json!(false));
+    set_default(object, "replicate_network_connection_state", json!(true));
+    set_default(object, "create_config_disk", json!(false));
+    set_default(object, "cpu_throttling", json!(0));
     set_default(object, "properties", json!({}));
 
     let memory_mb = object
@@ -1305,8 +2496,8 @@ async fn create_qemu_node(
         })
         .transpose()?
         .unwrap_or(1);
-    if !(1..=256).contains(&cpus) {
-        return Err(ApiError::bad_request("QEMU cpus must be between 1 and 256"));
+    if !(1..=255).contains(&cpus) {
+        return Err(ApiError::bad_request("QEMU cpus must be between 1 and 255"));
     }
     let adapters = object
         .get("adapters")
@@ -1317,18 +2508,158 @@ async fn create_qemu_node(
         })
         .transpose()?
         .unwrap_or(8);
-    if !(1..=99).contains(&adapters) {
-        return Err(ApiError::bad_request("adapters must be between 1 and 99"));
+    if !(0..=275).contains(&adapters) {
+        return Err(ApiError::bad_request(
+            "QEMU adapters must be between 0 and 275",
+        ));
     }
+    let maxcpus = object
+        .get("maxcpus")
+        .and_then(Value::as_u64)
+        .filter(|maxcpus| (1..=255).contains(maxcpus))
+        .ok_or_else(|| ApiError::bad_request("QEMU maxcpus must be from 1 to 255"))?;
+    if maxcpus < cpus as u64 {
+        return Err(ApiError::bad_request(
+            "QEMU maxcpus cannot be less than cpus",
+        ));
+    }
+    let disk_images_to_reset = object
+        .get("disk_images_to_reset")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .map(|value| {
+                    value.as_str().map(str::to_owned).ok_or_else(|| {
+                        ApiError::bad_request("disk_images_to_reset entries must be strings")
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let qemu_options = QemuTemplateOptions {
+        platform: object
+            .get("platform")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        adapter_type: object
+            .get("adapter_type")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        hda_disk_interface: object
+            .get("hda_disk_interface")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        boot_priority: object
+            .get("boot_priority")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        linked_clone: object.get("linked_clone").and_then(Value::as_bool),
+        maxcpus: Some(maxcpus as u32),
+        hdb_disk_image: object
+            .get("hdb_disk_image")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        hdb_disk_interface: object
+            .get("hdb_disk_interface")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        hda_disk_image_backing_file: object
+            .get("hda_disk_image_backing_file")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        hdb_disk_image_backing_file: object
+            .get("hdb_disk_image_backing_file")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        hdc_disk_image: object
+            .get("hdc_disk_image")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        hdc_disk_interface: object
+            .get("hdc_disk_interface")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        hdc_disk_image_backing_file: object
+            .get("hdc_disk_image_backing_file")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        hdd_disk_image: object
+            .get("hdd_disk_image")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        hdd_disk_interface: object
+            .get("hdd_disk_interface")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        hdd_disk_image_backing_file: object
+            .get("hdd_disk_image_backing_file")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        disk_images_to_reset,
+        cdrom_image: object
+            .get("cdrom_image")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        bios_image: object
+            .get("bios_image")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        kernel_image: object
+            .get("kernel_image")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        initrd: object
+            .get("initrd")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        kernel_command_line: object
+            .get("kernel_command_line")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        console_type: object
+            .get("console_type")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        aux_type: object
+            .get("aux_type")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        on_close: object
+            .get("on_close")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        process_priority: object
+            .get("process_priority")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        options: object
+            .get("options")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        tpm: object.get("tpm").and_then(Value::as_bool),
+        uefi: object.get("uefi").and_then(Value::as_bool),
+        replicate_network_connection_state: object
+            .get("replicate_network_connection_state")
+            .and_then(Value::as_bool),
+        create_config_disk: object.get("create_config_disk").and_then(Value::as_bool),
+        cpu_throttling: object
+            .get("cpu_throttling")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok()),
+    };
+    object.remove("disk_images_to_reset");
     let vm = state
         .qemu
-        .create_vm(
+        .create_vm_with_options(
             &project_id,
             &node_id,
             &image,
             memory_mb as u64,
             cpus as u32,
             adapters as u32,
+            &qemu_options,
         )
         .await
         .map_err(runtime_api_error)?;
@@ -1407,7 +2738,15 @@ async fn create_vpcs_node(
     set_default(object, "memory", json!(0));
     set_default(object, "cpus", json!(0));
     set_default(object, "startup_script", json!(""));
+    set_default(object, "base_script_file", json!("vpcs_base_config.txt"));
+    set_default(object, "console_type", json!("telnet"));
+    set_default(object, "console_auto_start", json!(false));
     set_default(object, "properties", json!({}));
+    if object.get("console_type").and_then(Value::as_str) != Some("telnet") {
+        return Err(ApiError::bad_request(
+            "VPCS supports the telnet console type",
+        ));
+    }
     if object.get("adapters").and_then(Value::as_u64) != Some(1) {
         return Err(ApiError::bad_request(
             "VPCS provides exactly one Ethernet adapter",
@@ -1444,7 +2783,38 @@ async fn create_dynamips_node(
         .and_then(Value::as_str)
         .unwrap_or("c7200")
         .to_owned();
-    let ram_mb = object.get("ram").and_then(Value::as_u64).unwrap_or(256);
+    let chassis = object
+        .get("chassis")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| match platform.as_str() {
+            "c3600" => Some("3640".to_owned()),
+            "c2600" => Some("2610".to_owned()),
+            "c1700" => Some("1760".to_owned()),
+            _ => None,
+        });
+    let slot0 = object
+        .get("slot0")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let ram_mb = object
+        .get("ram")
+        .and_then(Value::as_u64)
+        .unwrap_or(match platform.as_str() {
+            "c1700" | "c2600" => 160,
+            "c2691" | "c3600" => 192,
+            "c3725" => 128,
+            "c3745" => 256,
+            _ => 512,
+        });
+    let nvram = object
+        .get("nvram")
+        .and_then(Value::as_u64)
+        .unwrap_or(match platform.as_str() {
+            "c2691" | "c3725" | "c3745" => 256,
+            "c7200" => 512,
+            _ => 128,
+        });
     let idle_pc = object
         .get("idlepc")
         .and_then(Value::as_str)
@@ -1468,15 +2838,94 @@ async fn create_dynamips_node(
         return Ok(Json(decode_json(row.get::<String, _>("object_json"))?).into_response());
     }
 
+    let existing_nodes = sqlx::query(
+        "SELECT object_json FROM topology_objects WHERE project_id = ? AND kind = 'node'",
+    )
+    .bind(&project_id)
+    .fetch_all(state.store.pool())
+    .await?;
+    let used_ids = existing_nodes
+        .iter()
+        .filter_map(|row| decode_json(row.get::<String, _>("object_json")).ok())
+        .filter(|node| node["node_type"].as_str() == Some("dynamips"))
+        .filter_map(|node| node["dynamips_id"].as_u64())
+        .collect::<HashSet<_>>();
+    let dynamips_id = object
+        .get("dynamips_id")
+        .and_then(Value::as_u64)
+        .or_else(|| (1..=4096).find(|identifier| !used_ids.contains(identifier)))
+        .filter(|identifier| (1..=4096).contains(identifier))
+        .ok_or_else(|| ApiError::conflict("No free Dynamips internal identifier is available"))?
+        as u32;
+    let mut dynamips_options: DynamipsOptions =
+        serde_json::from_value(Value::Object(object.clone()))
+            .map_err(|_| ApiError::bad_request("Dynamips runtime settings are invalid"))?;
+    dynamips_options.dynamips_id = dynamips_id;
+    dynamips_options.mac_addr = dynamips_options
+        .mac_addr
+        .take()
+        .filter(|value| !value.trim().is_empty());
+    dynamips_options.system_id = dynamips_options
+        .system_id
+        .take()
+        .filter(|value| !value.trim().is_empty());
+    dynamips_options.slots = (0..7)
+        .map(|index| {
+            object
+                .get(format!("slot{index}").as_str())
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect();
+    dynamips_options.wics = (0..3)
+        .map(|index| {
+            object
+                .get(format!("wic{index}").as_str())
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect();
+
     object.insert("name".into(), json!(name));
     object.insert("node_id".into(), json!(node_id));
     object.insert("project_id".into(), json!(project_id.clone()));
     object.insert("node_type".into(), json!("dynamips"));
     object.insert("platform".into(), json!(platform));
+    object.insert("chassis".into(), json!(chassis));
     object.insert("image".into(), json!(image));
     object.insert("ram".into(), json!(ram_mb));
+    object.insert("nvram".into(), json!(nvram));
     object.insert("idlepc".into(), json!(idle_pc));
     object.insert("startup_config".into(), json!(startup_config));
+    object.insert("dynamips_id".into(), json!(dynamips_id));
+    object.insert(
+        "private_config".into(),
+        json!(dynamips_options.private_config),
+    );
+    object.insert("mmap".into(), json!(dynamips_options.mmap));
+    object.insert("sparsemem".into(), json!(dynamips_options.sparsemem));
+    object.insert(
+        "clock_divisor".into(),
+        json!(dynamips_options.clock_divisor),
+    );
+    object.insert("idlemax".into(), json!(dynamips_options.idlemax));
+    object.insert("idlesleep".into(), json!(dynamips_options.idlesleep));
+    object.insert("exec_area".into(), json!(dynamips_options.exec_area));
+    object.insert("disk0".into(), json!(dynamips_options.disk0));
+    object.insert("disk1".into(), json!(dynamips_options.disk1));
+    object.insert(
+        "auto_delete_disks".into(),
+        json!(dynamips_options.auto_delete_disks),
+    );
+    object.insert("ghost_ios".into(), json!(dynamips_options.ghost_ios));
+    object.insert("console_type".into(), json!(dynamips_options.console_type));
+    object.insert("aux_type".into(), json!(dynamips_options.aux_type));
+    for (index, slot) in dynamips_options.slots.iter().enumerate() {
+        object.insert(format!("slot{index}"), json!(slot));
+    }
+    for (index, wic) in dynamips_options.wics.iter().enumerate() {
+        object.insert(format!("wic{index}"), json!(wic));
+    }
     set_default(object, "compute_id", json!("local"));
     set_default(object, "status", json!("stopped"));
     set_default(object, "x", json!(0));
@@ -1490,15 +2939,19 @@ async fn create_dynamips_node(
 
     let vm = state
         .dynamips
-        .create_router(
+        .create_router_with_options(
             &project_id,
             &node_id.to_string(),
             &name,
             &image,
             &platform,
+            chassis.as_deref(),
+            slot0.as_deref(),
             ram_mb,
+            nvram,
             idle_pc.as_deref(),
             &startup_config,
+            &dynamips_options,
         )
         .await
         .map_err(runtime_api_error)?;
@@ -1534,9 +2987,9 @@ async fn create_link(
         .get("nodes")
         .and_then(Value::as_array)
         .ok_or_else(|| ApiError::bad_request("link must contain a nodes array"))?;
-    if endpoints.len() < 2 {
+    if endpoints.len() != 2 {
         return Err(ApiError::bad_request(
-            "link must connect at least two endpoints",
+            "GNS3 links connect exactly two endpoints; use a switch or hub for shared media",
         ));
     }
     validate_link_shape(endpoints)?;
@@ -1553,6 +3006,21 @@ async fn create_link(
     object.insert("project_id".into(), json!(project_id));
     set_default(object, "link_type", json!("ethernet"));
     set_default(object, "suspend", json!(false));
+    set_default(object, "filters", json!({}));
+    set_default(object, "link_style", json!({}));
+    set_default(object, "capturing", json!(false));
+    let filters = validate_link_filters(object.get("filters").unwrap_or(&Value::Null))?;
+    object.insert("filters".into(), filters);
+    if !object.get("suspend").is_some_and(Value::is_boolean) {
+        return Err(ApiError::bad_request("suspend must be a boolean"));
+    }
+    if !object.get("link_style").is_some_and(Value::is_object) {
+        return Err(ApiError::bad_request("link_style must be an object"));
+    }
+    set_default(object, "capture_file_name", Value::Null);
+    set_default(object, "capture_file_path", Value::Null);
+    set_default(object, "capture_endpoint_id", Value::Null);
+    set_default(object, "wireshark", json!(false));
     if let Some(row) = sqlx::query(
         "SELECT object_json FROM topology_objects
          WHERE project_id = ? AND kind = 'link' AND object_id = ?",
@@ -1569,378 +3037,81 @@ async fn create_link(
     validate_link_in_tx(&mut validation, &project_id, &link).await?;
     validation.rollback().await?;
     let runtime_endpoints = link_runtime_endpoints(state.store.pool(), &project_id, &link).await?;
-    let first_runtime_type = runtime_endpoints
-        .first()
-        .and_then(|endpoint| endpoint["node_type"].as_str())
-        .unwrap_or_default();
-    let mixed_runtime_link = runtime_endpoints
-        .iter()
-        .any(|endpoint| endpoint["node_type"].as_str() != Some(first_runtime_type));
-    if mixed_runtime_link {
-        ensure_link_nodes_stopped(&state, &project_id, &runtime_endpoints).await?;
-        create_shared_ethernet_link(&state, &link_id, &mut link, &runtime_endpoints).await?;
-        let cleanup_link = link.clone();
-        return match create_topology_object(state.clone(), &project_id, "link", "link_id", link)
-            .await
+    let endpoints = link["nodes"].as_array_mut().expect("validated nodes array");
+    for (endpoint, runtime_endpoint) in endpoints.iter_mut().zip(&runtime_endpoints) {
+        endpoint["node_type"] = runtime_endpoint["node_type"].clone();
+    }
+    let engine = LinkEngine::new(state.ubridge.clone());
+    engine
+        .reserve_pair(&mut link)
+        .await
+        .map_err(runtime_api_error)?;
+    for endpoint in link["nodes"].as_array_mut().expect("validated nodes array") {
+        if endpoint["node_type"].as_str() == Some("vpcs")
+            && let Some(node_id) = endpoint["node_id"].as_str().map(str::to_owned)
+            && let Some(adapter_port) = state.vpcs.adapter_udp_port(&node_id).await
         {
-            Ok(response) => Ok(response),
-            Err(error) => {
-                if let Err(cleanup_error) =
-                    cleanup_shared_ethernet_link(&state, &link_id, &cleanup_link).await
-                {
-                    tracing::error!(error = %cleanup_error.message, %link_id, "could not roll back shared Ethernet segment");
-                }
-                Err(error)
+            endpoint["runtime_adapter_port"] = json!(adapter_port);
+            if let Some(local_port) = state.vpcs.active_udp_port(&node_id).await {
+                endpoint["runtime_udp_port"] = json!(local_port);
             }
+        }
+    }
+    for endpoint in link["nodes"].as_array_mut().expect("validated nodes array") {
+        if let Some(object) = endpoint.as_object_mut() {
+            object.remove("node_type");
+        }
+    }
+    let mut attached = Vec::new();
+    for endpoint in link["nodes"].as_array().expect("validated nodes array") {
+        let Some(node_id) = endpoint["node_id"].as_str() else {
+            continue;
         };
-    }
-    let udp_segment = runtime_endpoints
-        .iter()
-        .all(|endpoint| matches!(endpoint["node_type"].as_str(), Some("vpcs" | "dynamips")));
-    let runtime_type = if udp_segment {
-        "udp_segment"
-    } else {
-        first_runtime_type
-    };
-    if runtime_type == "docker" {
-        state
-            .runtime
-            .create_link(&project_id, &link_id, &runtime_endpoints)
-            .await
-            .map_err(runtime_api_error)?;
-    } else if runtime_type == "qemu" {
-        for endpoint in &runtime_endpoints {
-            let row = sqlx::query(
-                "SELECT object_json FROM topology_objects
-                 WHERE project_id = ? AND kind = 'node' AND object_id = ?",
-            )
-            .bind(&project_id)
-            .bind(endpoint["node_id"].as_str().unwrap_or_default())
-            .fetch_one(state.store.pool())
-            .await?;
-            let node = decode_json(row.get::<String, _>("object_json"))?;
-            let vm = state.qemu.vm_from_node(&node).map_err(runtime_api_error)?;
-            let status = state.qemu.status(&vm).await.map_err(runtime_api_error)?;
-            if status != "stopped" {
-                return Err(ApiError::conflict(
-                    "Stop all QEMU nodes attached to this Ethernet segment before changing it",
-                ));
-            }
-        }
-        let (multicast_address, multicast_port) =
-            QemuRuntime::multicast_endpoint(&link_id).map_err(runtime_api_error)?;
-        let endpoints = link["nodes"]
-            .as_array_mut()
-            .ok_or_else(|| ApiError::bad_request("link must contain a nodes array"))?;
-        for endpoint in endpoints {
-            let endpoint_object = endpoint
-                .as_object_mut()
-                .ok_or_else(|| ApiError::bad_request("each link endpoint must be an object"))?;
-            endpoint_object.insert(
-                "runtime_multicast_address".into(),
-                json!(multicast_address.to_string()),
-            );
-            endpoint_object.insert("runtime_multicast_port".into(), json!(multicast_port));
-        }
-    } else if runtime_type == "udp_segment" {
-        let node_ids = runtime_endpoints
+        let runtime_endpoint = runtime_endpoints
             .iter()
-            .filter_map(|endpoint| endpoint["node_id"].as_str().map(str::to_owned))
-            .collect::<Vec<_>>();
-        let switch_port = state
-            .vpcs
-            .create_segment(&link_id, node_ids)
-            .await
-            .map_err(runtime_api_error)?;
-        let setup_result: Result<(), ApiError> = async {
-            let endpoints = link["nodes"]
-                .as_array_mut()
-                .ok_or_else(|| ApiError::bad_request("link must contain a nodes array"))?;
-            for (index, endpoint) in runtime_endpoints.iter().enumerate() {
-                if endpoint["node_type"].as_str() != Some("dynamips") {
-                    continue;
-                }
-                let node_id = endpoint["node_id"].as_str().unwrap_or_default();
-                let row = sqlx::query(
-                    "SELECT object_json FROM topology_objects
-                     WHERE project_id = ? AND kind = 'node' AND object_id = ?",
-                )
-                .bind(&project_id)
-                .bind(node_id)
-                .fetch_one(state.store.pool())
-                .await?;
-                let node = decode_json(row.get::<String, _>("object_json"))?;
-                let vm = state
-                    .dynamips
-                    .vm_from_node(&node)
-                    .map_err(runtime_api_error)?;
-                let local_port = state
-                    .dynamips
-                    .switch_endpoint(
-                        &vm,
-                        endpoint["adapter_number"].as_u64().unwrap_or_default() as u32,
-                        endpoint["port_number"].as_u64().unwrap_or_default() as u32,
-                        switch_port,
-                    )
-                    .await
-                    .map_err(runtime_api_error)?;
-                state
-                    .vpcs
-                    .register_external_endpoint(node_id, local_port)
-                    .await;
-                if let Some(endpoint_object) =
-                    endpoints.get_mut(index).and_then(Value::as_object_mut)
-                {
-                    endpoint_object.insert("runtime_udp_port".into(), json!(local_port));
-                }
-            }
-            Ok(())
-        }
-        .await;
-        if let Err(error) = setup_result {
-            for endpoint in &runtime_endpoints {
-                let Some(node_id) = endpoint["node_id"].as_str() else {
-                    continue;
-                };
-                state.vpcs.remove_external_endpoint(node_id, None).await;
-                if endpoint["node_type"].as_str() == Some("dynamips")
-                    && let Ok(row) = sqlx::query(
-                        "SELECT object_json FROM topology_objects
-                         WHERE project_id = ? AND kind = 'node' AND object_id = ?",
-                    )
-                    .bind(&project_id)
-                    .bind(node_id)
-                    .fetch_one(state.store.pool())
-                    .await
-                    && let Ok(node) = decode_json(row.get::<String, _>("object_json"))
-                    && let Ok(vm) = state.dynamips.vm_from_node(&node)
-                {
-                    let _ = state.dynamips.remove_switch_endpoint(&vm).await;
-                }
-            }
-            state.vpcs.remove_link(&link_id).await;
-            return Err(error);
-        }
-    } else {
-        return Err(ApiError::bad_request(format!(
-            "Ethernet links are not available for node type '{runtime_type}'"
-        )));
-    }
-
-    match create_topology_object(state.clone(), &project_id, "link", "link_id", link).await {
-        Ok(response) => Ok(response),
-        Err(error) => {
-            if runtime_type == "docker"
-                && let Err(cleanup_error) = state
-                    .runtime
-                    .remove_link(&link_id, &runtime_endpoints)
+            .find(|runtime_endpoint| runtime_endpoint["node_id"].as_str() == Some(node_id))
+            .ok_or_else(|| ApiError::bad_request("Link endpoint runtime is missing"))?;
+        if runtime_endpoint_status(&state, &project_id, runtime_endpoint).await? != "stopped" {
+            if let Err(error) =
+                attach_runtime_link_endpoint(&state, &project_id, &link, endpoint, runtime_endpoint)
                     .await
             {
-                tracing::error!(error = %cleanup_error.message(), %link_id, "could not roll back created Docker network");
-            }
-            if runtime_type == "udp_segment" {
-                for endpoint in &runtime_endpoints {
-                    let Some(node_id) = endpoint["node_id"].as_str() else {
-                        continue;
-                    };
-                    state.vpcs.remove_external_endpoint(node_id, None).await;
-                    if endpoint["node_type"].as_str() == Some("dynamips") {
-                        if let Ok(row) = sqlx::query(
-                            "SELECT object_json FROM topology_objects
-                             WHERE project_id = ? AND kind = 'node' AND object_id = ?",
-                        )
-                        .bind(&project_id)
-                        .bind(node_id)
-                        .fetch_one(state.store.pool())
-                        .await
-                        {
-                            if let Ok(node) = decode_json(row.get::<String, _>("object_json")) {
-                                if let Ok(vm) = state.dynamips.vm_from_node(&node) {
-                                    let _ = state.dynamips.remove_switch_endpoint(&vm).await;
-                                }
-                            }
-                        }
-                    }
+                for (attached_endpoint, attached_runtime) in attached.iter().rev() {
+                    let _ = detach_runtime_link_endpoint(
+                        &state,
+                        &project_id,
+                        attached_endpoint,
+                        attached_runtime,
+                    )
+                    .await;
                 }
-                state.vpcs.remove_link(&link_id).await;
+                return Err(error);
+            }
+            attached.push((endpoint.clone(), runtime_endpoint.clone()));
+        }
+    }
+    match create_topology_object(state.clone(), &project_id, "link", "link_id", link.clone()).await
+    {
+        Ok(response) => Ok(response),
+        Err(error) => {
+            for endpoint in link["nodes"].as_array().expect("validated nodes array") {
+                let node_id = endpoint["node_id"].as_str().unwrap_or_default();
+                if let Some(runtime_endpoint) = runtime_endpoints
+                    .iter()
+                    .find(|candidate| candidate["node_id"].as_str() == Some(node_id))
+                {
+                    let _ = detach_runtime_link_endpoint(
+                        &state,
+                        &project_id,
+                        endpoint,
+                        runtime_endpoint,
+                    )
+                    .await;
+                }
             }
             Err(error)
         }
     }
-}
-
-async fn ensure_link_nodes_stopped(
-    state: &AppState,
-    project_id: &str,
-    endpoints: &[Value],
-) -> Result<(), ApiError> {
-    for endpoint in endpoints {
-        let node_id = endpoint["node_id"].as_str().unwrap_or_default();
-        let row = sqlx::query(
-            "SELECT object_json FROM topology_objects
-             WHERE project_id = ? AND kind = 'node' AND object_id = ?",
-        )
-        .bind(project_id)
-        .bind(node_id)
-        .fetch_one(state.store.pool())
-        .await?;
-        let node = decode_json(row.get::<String, _>("object_json"))?;
-        let status = match endpoint["node_type"].as_str().unwrap_or_default() {
-            "docker" => {
-                let id = endpoint["container_id"].as_str().unwrap_or_default();
-                state.runtime.container_status(id).await
-            }
-            "qemu" => {
-                let vm = state.qemu.vm_from_node(&node).map_err(runtime_api_error)?;
-                state.qemu.status(&vm).await
-            }
-            "vpcs" => state.vpcs.status(node_id).await,
-            "dynamips" => {
-                let vm = state
-                    .dynamips
-                    .vm_from_node(&node)
-                    .map_err(runtime_api_error)?;
-                state.dynamips.status(&vm).await
-            }
-            node_type => {
-                return Err(ApiError::bad_request(format!(
-                    "Node type '{node_type}' cannot join a shared Ethernet segment"
-                )));
-            }
-        }
-        .map_err(runtime_api_error)?;
-        if status != "stopped" {
-            return Err(ApiError::conflict(format!(
-                "Stop node {node_id} before changing its shared Ethernet segment"
-            )));
-        }
-    }
-    Ok(())
-}
-
-async fn create_shared_ethernet_link(
-    state: &AppState,
-    link_id: &str,
-    link: &mut Value,
-    runtime_endpoints: &[Value],
-) -> Result<(), ApiError> {
-    let segment = state
-        .ubridge
-        .create_segment(link_id)
-        .await
-        .map_err(runtime_api_error)?;
-    let endpoints = link["nodes"]
-        .as_array_mut()
-        .ok_or_else(|| ApiError::bad_request("link must contain a nodes array"))?;
-    let mut created_taps: Vec<String> = Vec::new();
-    let setup = async {
-        for (index, runtime_endpoint) in runtime_endpoints.iter().enumerate() {
-            let endpoint = endpoints
-                .get_mut(index)
-                .and_then(Value::as_object_mut)
-                .ok_or_else(|| ApiError::bad_request("each link endpoint must be an object"))?;
-            let node_id = runtime_endpoint["node_id"].as_str().unwrap_or_default();
-            let node_type = runtime_endpoint["node_type"].as_str().unwrap_or_default();
-            let adapter = runtime_endpoint["adapter_number"]
-                .as_u64()
-                .unwrap_or_default();
-            let port = runtime_endpoint["port_number"].as_u64().unwrap_or_default();
-            let endpoint_id = shared_endpoint_id(link_id, node_id, adapter, port);
-            endpoint.insert("runtime_ubridge_segment".into(), json!(segment));
-            endpoint.insert("runtime_ubridge_endpoint".into(), json!(endpoint_id));
-
-            if node_type == "docker" {
-                let host = ubridge::host_veth_name(&endpoint_id).map_err(runtime_api_error)?;
-                let guest = ubridge::guest_veth_name(&endpoint_id).map_err(runtime_api_error)?;
-                endpoint.insert("runtime_host_veth".into(), json!(host));
-                endpoint.insert("runtime_guest_veth".into(), json!(guest));
-                endpoint.insert(
-                    "runtime_guest_interface".into(),
-                    // The current Docker node container owns eth0 on its
-                    // private node network. Shared uBridge ports start at eth1.
-                    json!(format!("eth{}", port + 1)),
-                );
-                continue;
-            }
-
-            let tap = ubridge::tap_name(&endpoint_id).map_err(runtime_api_error)?;
-            state
-                .ubridge
-                .create_tap(&tap, &segment)
-                .await
-                .map_err(runtime_api_error)?;
-            created_taps.push(tap.clone());
-            endpoint.insert("runtime_tap".into(), json!(tap));
-
-            if matches!(node_type, "vpcs" | "dynamips") {
-                let bridge_port = state
-                    .ubridge
-                    .reserve_udp_port()
-                    .await
-                    .map_err(runtime_api_error)?;
-                endpoint.insert("runtime_bridge_udp_port".into(), json!(bridge_port));
-            }
-        }
-        Ok::<(), ApiError>(())
-    }
-    .await;
-    if let Err(error) = setup {
-        for tap in created_taps {
-            let _ = state.ubridge.delete_tap(&tap, &segment).await;
-        }
-        let _ = state.ubridge.delete_segment(&segment).await;
-        return Err(error);
-    }
-    Ok(())
-}
-
-async fn cleanup_shared_ethernet_link(
-    state: &AppState,
-    link_id: &str,
-    link: &Value,
-) -> Result<(), ApiError> {
-    let segment = link["nodes"]
-        .as_array()
-        .and_then(|endpoints| {
-            endpoints
-                .iter()
-                .find_map(|endpoint| endpoint["runtime_ubridge_segment"].as_str())
-        })
-        .map(str::to_owned)
-        .unwrap_or(ubridge::segment_name(link_id).map_err(runtime_api_error)?);
-    if let Some(endpoints) = link["nodes"].as_array() {
-        for endpoint in endpoints {
-            if let Some(node_id) = endpoint["node_id"].as_str() {
-                state.vpcs.remove_bridge_port(node_id).await;
-            }
-            if let Some(endpoint_id) = endpoint["runtime_ubridge_endpoint"].as_str() {
-                let _ = state.ubridge.delete_udp_tap_endpoint(endpoint_id).await;
-            }
-            if let Some(host) = endpoint["runtime_host_veth"].as_str() {
-                let _ = state.ubridge.delete_veth(host).await;
-            }
-            if let Some(tap) = endpoint["runtime_tap"].as_str() {
-                state
-                    .ubridge
-                    .delete_tap(tap, &segment)
-                    .await
-                    .map_err(runtime_api_error)?;
-            }
-        }
-    }
-    state
-        .ubridge
-        .delete_segment(&segment)
-        .await
-        .map_err(|error| {
-            tracing::warn!(error = %error.message(), %link_id, "could not remove shared Ethernet bridge");
-            runtime_api_error(error)
-        })
-}
-
-fn shared_endpoint_id(link_id: &str, node_id: &str, adapter: u64, port: u64) -> String {
-    let seed = format!("network-simulator/{link_id}/{node_id}/{adapter}/{port}");
-    Uuid::new_v5(&Uuid::NAMESPACE_URL, seed.as_bytes()).to_string()
 }
 
 async fn link_runtime_endpoints(
@@ -1977,25 +3148,32 @@ async fn link_runtime_endpoints(
         let adapter = endpoint["adapter_number"].as_u64().unwrap_or_default();
         let port = endpoint["port_number"].as_u64().unwrap_or_default();
         let adapters = node.get("adapters").and_then(Value::as_u64).unwrap_or(8);
-        if node_type != "docker" && node_type != "qemu" {
-            if node_type == "vpcs" || node_type == "dynamips" {
-                if adapter != 0 || port != 0 {
-                    return Err(ApiError::bad_request(
-                        "This Dynamips/VPCS runtime provides only Ethernet port 0/0",
-                    ));
-                }
-            } else {
+        let builtin_ports = node["ports_mapping"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or_default() as u64;
+        let port_capacity = if BuiltinRuntime::is_type(node_type) {
+            builtin_ports
+        } else if node_type == "docker" || node_type == "qemu" {
+            adapters
+        } else {
+            1
+        };
+        let valid_endpoint = match node_type {
+            "docker" => adapter == 0 && port < adapters,
+            "qemu" => adapter < adapters && port == 0,
+            "vpcs" | "dynamips" => adapter == 0 && port == 0,
+            "ethernet_switch" | "ethernet_hub" | "cloud" => adapter == 0 && port < builtin_ports,
+            "nat" => adapter == 0 && port == 0 && builtin_ports == 1,
+            _ => {
                 return Err(ApiError::bad_request(format!(
                     "Node type '{node_type}' has no Ethernet runtime"
                 )));
             }
-        }
-        if (node_type == "docker" && (adapter > 0 || port >= adapters))
-            || (node_type == "qemu" && (adapter >= adapters || port != 0))
-            || ((node_type == "vpcs" || node_type == "dynamips") && (adapter != 0 || port != 0))
-        {
+        };
+        if !valid_endpoint {
             return Err(ApiError::bad_request(format!(
-                "Port {adapter}/{port} is outside the configured {adapters} {node_type} adapters"
+                "Port {adapter}/{port} is outside the configured {port_capacity} {node_type} ports"
             )));
         }
         let mut runtime_endpoint = json!({
@@ -2015,6 +3193,423 @@ async fn link_runtime_endpoints(
     Ok(runtime_endpoints)
 }
 
+async fn load_topology_node(
+    pool: &SqlitePool,
+    project_id: &str,
+    node_id: &str,
+) -> Result<Value, ApiError> {
+    let row = sqlx::query(
+        "SELECT object_json FROM topology_objects
+         WHERE project_id = ? AND kind = 'node' AND object_id = ?",
+    )
+    .bind(project_id)
+    .bind(node_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::not_found(format!("Node {node_id} does not exist")))?;
+    decode_json(row.get::<String, _>("object_json"))
+}
+
+async fn runtime_endpoint_status(
+    state: &AppState,
+    project_id: &str,
+    endpoint: &Value,
+) -> Result<String, ApiError> {
+    let node_id = endpoint["node_id"].as_str().unwrap_or_default();
+    let node = load_topology_node(state.store.pool(), project_id, node_id).await?;
+    let node_type = endpoint["node_type"].as_str().unwrap_or_default();
+    if BuiltinRuntime::is_type(node_type) {
+        return Ok(node["status"].as_str().unwrap_or("started").to_owned());
+    }
+    let status = match node_type {
+        "docker" => {
+            state
+                .runtime
+                .container_status(endpoint["container_id"].as_str().unwrap_or_default())
+                .await
+        }
+        "qemu" => {
+            let vm = state.qemu.vm_from_node(&node).map_err(runtime_api_error)?;
+            state.qemu.status(&vm).await
+        }
+        "vpcs" => state.vpcs.status(node_id).await,
+        "dynamips" => {
+            let vm = state
+                .dynamips
+                .vm_from_node(&node)
+                .map_err(runtime_api_error)?;
+            state.dynamips.status(&vm).await
+        }
+        node_type => {
+            return Err(ApiError::bad_request(format!(
+                "Unsupported node type '{node_type}'"
+            )));
+        }
+    }
+    .map_err(runtime_api_error)?;
+    Ok(status)
+}
+
+async fn attach_runtime_link_endpoint(
+    state: &AppState,
+    project_id: &str,
+    link: &Value,
+    endpoint: &Value,
+    runtime_endpoint: &Value,
+) -> Result<(), ApiError> {
+    let node_id = endpoint["node_id"].as_str().unwrap_or_default();
+    let node = load_topology_node(state.store.pool(), project_id, node_id).await?;
+    let engine = LinkEngine::new(state.ubridge.clone());
+    let filters = link.get("filters").cloned().unwrap_or_else(|| json!({}));
+    let suspended = link["suspend"].as_bool().unwrap_or(false);
+    let endpoint_id = endpoint["runtime_endpoint_id"].as_str().unwrap_or_default();
+    let capture_selected = link["capturing"].as_bool().unwrap_or(false)
+        && link["capture_endpoint_id"].as_str() == Some(endpoint_id);
+    let capture_needed = capture_selected && !state.ubridge.has_link_endpoint(endpoint_id).await;
+    let mut endpoint = endpoint.clone();
+    match runtime_endpoint["node_type"].as_str().unwrap_or_default() {
+        "docker" => {
+            let adapter = state
+                .runtime
+                .adapter_nio(&endpoint)
+                .map_err(runtime_api_error)?;
+            let AdapterNio::Ethernet {
+                host_interface,
+                guest_interface,
+            } = adapter.clone()
+            else {
+                return Err(ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Docker did not provide an Ethernet NIO",
+                ));
+            };
+            let container_id = runtime_endpoint["container_id"]
+                .as_str()
+                .unwrap_or_default();
+            let endpoint_id = endpoint["runtime_endpoint_id"].as_str().unwrap_or_default();
+            let setup = async {
+                if !state.ubridge.has_link_endpoint(endpoint_id).await {
+                    let pid = state
+                        .runtime
+                        .container_pid(container_id)
+                        .await
+                        .map_err(runtime_api_error)?;
+                    let _ = state.ubridge.delete_veth(&host_interface).await;
+                    state
+                        .ubridge
+                        .create_veth_pair(&host_interface, &guest_interface)
+                        .await
+                        .map_err(runtime_api_error)?;
+                    let port = endpoint["port_number"].as_u64().unwrap_or_default();
+                    let mac = docker_interface_mac(node_id, port)?;
+                    state
+                        .ubridge
+                        .set_docker_mac_address(&guest_interface, &mac)
+                        .await
+                        .map_err(runtime_api_error)?;
+                    state
+                        .ubridge
+                        .set_interface_up(&guest_interface)
+                        .await
+                        .map_err(runtime_api_error)?;
+                    state
+                        .ubridge
+                        .set_interface_up(&host_interface)
+                        .await
+                        .map_err(runtime_api_error)?;
+                    state
+                        .ubridge
+                        .move_veth_to_container(&guest_interface, pid, &guest_interface)
+                        .await
+                        .map_err(runtime_api_error)?;
+                }
+                engine
+                    .attach_endpoint(&endpoint, adapter, &filters, suspended, None)
+                    .await
+                    .map_err(runtime_api_error)
+            }
+            .await;
+            if let Err(error) = setup {
+                let _ = state.ubridge.delete_veth(&host_interface).await;
+                return Err(error);
+            }
+            endpoint["runtime_host_veth"] = json!(host_interface);
+        }
+        "qemu" => {
+            let vm = state.qemu.vm_from_node(&node).map_err(runtime_api_error)?;
+            let adapter = state
+                .qemu
+                .adapter_nio(&endpoint)
+                .map_err(runtime_api_error)?;
+            state
+                .qemu
+                .attach_nio(&vm, &qemu_link_from_endpoint(&endpoint)?)
+                .await
+                .map_err(runtime_api_error)?;
+            engine
+                .attach_endpoint(&endpoint, adapter, &filters, suspended, None)
+                .await
+                .map_err(runtime_api_error)?;
+        }
+        "vpcs" => {
+            if let Some(port) = state.vpcs.adapter_udp_port(node_id).await {
+                endpoint["runtime_adapter_port"] = json!(port);
+            }
+            if let Some(port) = state.vpcs.active_udp_port(node_id).await {
+                endpoint["runtime_udp_port"] = json!(port);
+            }
+            let adapter = state
+                .vpcs
+                .adapter_nio(&endpoint)
+                .map_err(runtime_api_error)?;
+            engine
+                .attach_endpoint(&endpoint, adapter, &filters, suspended, None)
+                .await
+                .map_err(runtime_api_error)?;
+        }
+        "dynamips" => {
+            let vm = state
+                .dynamips
+                .vm_from_node(&node)
+                .map_err(runtime_api_error)?;
+            let adapter = state
+                .dynamips
+                .adapter_nio(&endpoint)
+                .map_err(runtime_api_error)?;
+            let AdapterNio::Udp {
+                adapter_port,
+                runtime_port,
+            } = adapter
+            else {
+                unreachable!()
+            };
+            state
+                .dynamips
+                .attach_nio(
+                    &vm,
+                    endpoint["adapter_number"].as_u64().unwrap_or_default() as u32,
+                    endpoint["port_number"].as_u64().unwrap_or_default() as u32,
+                    runtime_port,
+                    adapter_port,
+                )
+                .await
+                .map_err(runtime_api_error)?;
+            engine
+                .attach_endpoint(&endpoint, adapter, &filters, suspended, None)
+                .await
+                .map_err(runtime_api_error)?;
+        }
+        "ethernet_switch" | "ethernet_hub" | "cloud" | "nat" => {
+            let adapter =
+                BuiltinRuntime::adapter_nio(&node, &endpoint).map_err(runtime_api_error)?;
+            state
+                .builtin
+                .attach_switch_port(&node, &endpoint)
+                .await
+                .map_err(runtime_api_error)?;
+            if let Err(error) = engine
+                .attach_endpoint(&endpoint, adapter, &filters, suspended, None)
+                .await
+            {
+                state
+                    .builtin
+                    .detach_switch_port(
+                        node_id,
+                        endpoint["port_number"].as_u64().unwrap_or_default() as u16,
+                    )
+                    .await;
+                return Err(runtime_api_error(error));
+            }
+        }
+        node_type => {
+            return Err(ApiError::bad_request(format!(
+                "Unsupported node type '{node_type}'"
+            )));
+        }
+    }
+    if capture_needed {
+        let capture_path = link["capture_file_path"]
+            .as_str()
+            .ok_or_else(|| ApiError::conflict("Capturing link has no capture file path"))?;
+        engine
+            .start_capture(&endpoint, capture_path)
+            .await
+            .map_err(runtime_api_error)?;
+    }
+    Ok(())
+}
+
+async fn detach_runtime_link_endpoint(
+    state: &AppState,
+    project_id: &str,
+    endpoint: &Value,
+    runtime_endpoint: &Value,
+) -> Result<(), ApiError> {
+    let node_id = endpoint["node_id"].as_str().unwrap_or_default();
+    let engine = LinkEngine::new(state.ubridge.clone());
+    let engine_result = engine.detach_endpoint(endpoint).await;
+    match runtime_endpoint["node_type"].as_str().unwrap_or_default() {
+        "docker" => {
+            let host = endpoint["runtime_host_veth"]
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| {
+                    endpoint["runtime_endpoint_id"]
+                        .as_str()
+                        .and_then(|id| ubridge::host_veth_name(id).ok())
+                });
+            if let Some(host) = host {
+                let _ = state.ubridge.delete_veth(&host).await;
+            }
+        }
+        "qemu" => {
+            let node = load_topology_node(state.store.pool(), project_id, node_id).await?;
+            let vm = state.qemu.vm_from_node(&node).map_err(runtime_api_error)?;
+            if state.qemu.status(&vm).await.map_err(runtime_api_error)? != "stopped" {
+                if let Ok(link) = qemu_link_from_endpoint(endpoint) {
+                    let _ = state.qemu.detach_nio(&vm, &link).await;
+                }
+            }
+        }
+        "vpcs" => {}
+        "dynamips" => {
+            let node = load_topology_node(state.store.pool(), project_id, node_id).await?;
+            let vm = state
+                .dynamips
+                .vm_from_node(&node)
+                .map_err(runtime_api_error)?;
+            let _ = state
+                .dynamips
+                .detach_nio(
+                    &vm,
+                    endpoint["adapter_number"].as_u64().unwrap_or_default() as u32,
+                    endpoint["port_number"].as_u64().unwrap_or_default() as u32,
+                )
+                .await;
+        }
+        "ethernet_switch" | "ethernet_hub" => {
+            state
+                .builtin
+                .detach_switch_port(
+                    node_id,
+                    endpoint["port_number"].as_u64().unwrap_or_default() as u16,
+                )
+                .await;
+        }
+        _ => {}
+    }
+    engine_result.map_err(runtime_api_error)
+}
+
+fn qemu_link_from_endpoint(endpoint: &Value) -> Result<QemuLink, ApiError> {
+    Ok(QemuLink {
+        link_id: endpoint["runtime_endpoint_id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+        adapter_number: endpoint["adapter_number"].as_u64().unwrap_or_default() as u32,
+        adapter_port: endpoint["runtime_adapter_port"]
+            .as_u64()
+            .and_then(|port| u16::try_from(port).ok())
+            .ok_or_else(|| ApiError::conflict("QEMU link has no adapter UDP port"))?,
+        runtime_port: endpoint["runtime_udp_port"]
+            .as_u64()
+            .and_then(|port| u16::try_from(port).ok())
+            .ok_or_else(|| ApiError::conflict("QEMU link has no runtime UDP port"))?,
+    })
+}
+
+async fn node_link_entries(
+    state: &AppState,
+    project_id: &str,
+    node_id: &str,
+) -> Result<Vec<(Value, Value, Value)>, ApiError> {
+    let links = list_objects(state.store.pool(), project_id, "link")
+        .await?
+        .0;
+    let mut entries = Vec::new();
+    for link in links {
+        let Some(endpoint) = link
+            .get("nodes")
+            .and_then(Value::as_array)
+            .and_then(|nodes| {
+                nodes
+                    .iter()
+                    .find(|endpoint| endpoint["node_id"].as_str() == Some(node_id))
+            })
+            .cloned()
+        else {
+            continue;
+        };
+        let runtime_endpoint = link_runtime_endpoints(state.store.pool(), project_id, &link)
+            .await?
+            .into_iter()
+            .find(|candidate| candidate["node_id"].as_str() == Some(node_id))
+            .ok_or_else(|| {
+                ApiError::conflict(format!("Link endpoint for {node_id} has no runtime"))
+            })?;
+        entries.push((link, endpoint, runtime_endpoint));
+    }
+    Ok(entries)
+}
+
+async fn attach_node_links(
+    state: &AppState,
+    project_id: &str,
+    node_id: &str,
+    before_start: bool,
+) -> Result<(), ApiError> {
+    let entries = node_link_entries(state, project_id, node_id).await?;
+    for (link, endpoint, runtime_endpoint) in entries {
+        let node_type = runtime_endpoint["node_type"].as_str().unwrap_or_default();
+        if before_start && node_type == "vpcs" {
+            let adapter_port = endpoint["runtime_adapter_port"]
+                .as_u64()
+                .and_then(|port| u16::try_from(port).ok())
+                .ok_or_else(|| ApiError::conflict("VPCS link has no adapter UDP port"))?;
+            let runtime_port = endpoint["runtime_udp_port"]
+                .as_u64()
+                .and_then(|port| u16::try_from(port).ok())
+                .ok_or_else(|| ApiError::conflict("VPCS link has no runtime UDP port"))?;
+            state
+                .vpcs
+                .set_nio_ports(node_id, adapter_port, runtime_port)
+                .await;
+        }
+        if before_start && node_type == "dynamips" {
+            // Dynamips binds its UDP NIO through the hypervisor before the IOS
+            // process starts. The other runtimes are attached after startup.
+            attach_runtime_link_endpoint(state, project_id, &link, &endpoint, &runtime_endpoint)
+                .await?;
+        }
+        if !before_start && node_type != "dynamips" {
+            attach_runtime_link_endpoint(state, project_id, &link, &endpoint, &runtime_endpoint)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn detach_node_links(
+    state: &AppState,
+    project_id: &str,
+    node_id: &str,
+) -> Result<(), ApiError> {
+    let entries = node_link_entries(state, project_id, node_id).await?;
+    let mut first_error = None;
+    for (_link, endpoint, runtime_endpoint) in entries.into_iter().rev() {
+        if let Err(error) =
+            detach_runtime_link_endpoint(state, project_id, &endpoint, &runtime_endpoint).await
+        {
+            first_error.get_or_insert(error);
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+    Ok(())
+}
+
 async fn apply_node_lifecycle(
     state: &AppState,
     project_id: &str,
@@ -2025,28 +3620,29 @@ async fn apply_node_lifecycle(
         .get("node_type")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    let node_id = node
+        .get("node_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::conflict("Node has no node ID"))?;
+    let before_stop = matches!(&action, NodeAction::Stop) && !BuiltinRuntime::is_type(node_type)
+        || (matches!(&action, NodeAction::Reload) && matches!(node_type, "docker" | "vpcs"));
+    if before_stop {
+        detach_node_links(state, project_id, node_id).await?;
+    }
     match node_type {
         "docker" => {
             let container_id = node
                 .get("container_id")
                 .and_then(Value::as_str)
                 .ok_or_else(|| ApiError::conflict("Docker node has no runtime container"))?;
-            if matches!(
-                action,
-                NodeAction::Start | NodeAction::Stop | NodeAction::Reload
-            ) {
-                detach_docker_shared_links(state, project_id, node).await;
-            }
             let status = state
                 .runtime
                 .lifecycle(container_id, action)
                 .await
                 .map_err(runtime_api_error)?;
             if matches!(action, NodeAction::Start | NodeAction::Reload) {
-                if let Err(error) =
-                    attach_docker_shared_links(state, project_id, node, container_id).await
-                {
-                    detach_docker_shared_links(state, project_id, node).await;
+                if let Err(error) = attach_node_links(state, project_id, node_id, false).await {
+                    let _ = detach_node_links(state, project_id, node_id).await;
                     let _ = state
                         .runtime
                         .lifecycle(container_id, NodeAction::Stop)
@@ -2058,98 +3654,62 @@ async fn apply_node_lifecycle(
         }
         "qemu" => {
             let vm = state.qemu.vm_from_node(node).map_err(runtime_api_error)?;
-            let links = if matches!(action, NodeAction::Start) {
-                qemu_links_for_node(state.store.pool(), project_id, &vm.node_id).await?
-            } else {
-                Vec::new()
-            };
-            state
+            let status = state
                 .qemu
-                .lifecycle(&vm, action, &links)
+                .lifecycle(&vm, action, &[])
                 .await
-                .map_err(runtime_api_error)
+                .map_err(runtime_api_error)?;
+            if matches!(&action, NodeAction::Start) {
+                if let Err(error) = attach_node_links(state, project_id, node_id, false).await {
+                    let _ = detach_node_links(state, project_id, node_id).await;
+                    let _ = state.qemu.lifecycle(&vm, NodeAction::Stop, &[]).await;
+                    return Err(error);
+                }
+            }
+            Ok(status)
         }
         "vpcs" => {
-            let node_id = node
-                .get("node_id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| ApiError::conflict("VPCS node has no node ID"))?;
             let name = node
                 .get("name")
                 .and_then(Value::as_str)
                 .ok_or_else(|| ApiError::conflict("VPCS node has no name"))?;
             if matches!(action, NodeAction::Start | NodeAction::Reload) {
-                for (link_id, node_ids) in
-                    vpcs_links_for_node(state.store.pool(), project_id, node_id).await?
+                for (_link, endpoint, _runtime) in
+                    node_link_entries(state, project_id, node_id).await?
                 {
-                    state.vpcs.set_link(&link_id, node_ids).await;
-                }
-            }
-            let shared_links =
-                shared_link_endpoints_for_node(state.store.pool(), project_id, node_id).await?;
-            for (_link_id, endpoint) in &shared_links {
-                if let Some(port) = endpoint["runtime_bridge_udp_port"]
-                    .as_u64()
-                    .and_then(|port| u16::try_from(port).ok())
-                {
-                    state.vpcs.set_bridge_port(node_id, port).await;
-                }
-            }
-            if matches!(action, NodeAction::Stop | NodeAction::Reload) {
-                for (_link_id, endpoint) in &shared_links {
-                    if let Some(bridge_id) = endpoint["runtime_ubridge_endpoint"].as_str() {
-                        let _ = state.ubridge.delete_udp_tap_endpoint(bridge_id).await;
+                    if let (Some(adapter_port), Some(runtime_port)) = (
+                        endpoint["runtime_adapter_port"]
+                            .as_u64()
+                            .and_then(|port| u16::try_from(port).ok()),
+                        endpoint["runtime_udp_port"]
+                            .as_u64()
+                            .and_then(|port| u16::try_from(port).ok()),
+                    ) {
+                        state
+                            .vpcs
+                            .set_nio_ports(node_id, adapter_port, runtime_port)
+                            .await;
                     }
                 }
             }
+            let startup_script = if matches!(action, NodeAction::Start | NodeAction::Reload) {
+                vpcs_startup_script(state.store.pool(), project_id, node).await?
+            } else {
+                None
+            };
             let status = state
                 .vpcs
-                .lifecycle(
-                    project_id,
-                    node_id,
-                    name,
-                    node.get("startup_script").and_then(Value::as_str),
-                    action,
-                )
+                .lifecycle(project_id, node_id, name, startup_script.as_deref(), action)
                 .await
                 .map_err(runtime_api_error)?;
             if matches!(action, NodeAction::Start | NodeAction::Reload) {
-                let Some(local_port) = state.vpcs.active_udp_port(node_id).await else {
-                    return Err(ApiError::conflict(
-                        "VPCS started without allocating its Ethernet UDP endpoint",
-                    ));
-                };
-                for (_link_id, endpoint) in &shared_links {
-                    let bridge_id = endpoint["runtime_ubridge_endpoint"]
-                        .as_str()
-                        .unwrap_or_default();
-                    let tap = endpoint["runtime_tap"].as_str().unwrap_or_default();
-                    let switch_port = endpoint["runtime_bridge_udp_port"]
-                        .as_u64()
-                        .and_then(|port| u16::try_from(port).ok())
-                        .ok_or_else(|| ApiError::conflict("VPCS link has no bridge UDP port"))?;
-                    if let Err(error) = state
-                        .ubridge
-                        .attach_udp_to_tap_at(bridge_id, tap, switch_port, local_port)
-                        .await
-                    {
-                        let _ = state
-                            .vpcs
-                            .lifecycle(
-                                project_id,
-                                node_id,
-                                name,
-                                node.get("startup_script").and_then(Value::as_str),
-                                NodeAction::Stop,
-                            )
-                            .await;
-                        for (_link_id, endpoint) in &shared_links {
-                            if let Some(bridge_id) = endpoint["runtime_ubridge_endpoint"].as_str() {
-                                let _ = state.ubridge.delete_udp_tap_endpoint(bridge_id).await;
-                            }
-                        }
-                        return Err(runtime_api_error(error));
-                    }
+                if let Err(error) = attach_node_links(state, project_id, node_id, false).await {
+                    let _ = detach_node_links(state, project_id, node_id).await;
+                    let _ = state
+                        .vpcs
+                        .lifecycle(project_id, node_id, name, None, NodeAction::Stop)
+                        .await;
+                    return Err(error);
                 }
             }
             Ok(status)
@@ -2159,30 +3719,89 @@ async fn apply_node_lifecycle(
                 .dynamips
                 .vm_from_node(node)
                 .map_err(runtime_api_error)?;
-            if matches!(action, NodeAction::Stop | NodeAction::Reload) {
-                for (_link_id, endpoint) in
-                    shared_link_endpoints_for_node(state.store.pool(), project_id, &vm.node_id)
-                        .await?
-                {
-                    if let Some(bridge_id) = endpoint["runtime_ubridge_endpoint"].as_str() {
-                        let _ = state.ubridge.delete_udp_tap_endpoint(bridge_id).await;
-                    }
-                }
+            if matches!(&action, NodeAction::Start) {
+                attach_node_links(state, project_id, node_id, true).await?;
             }
-            if matches!(action, NodeAction::Start | NodeAction::Reload) {
-                attach_dynamips_links_for_node(state, project_id, &vm).await?;
-            }
-            state
+            let status = state
                 .dynamips
                 .lifecycle(&vm, action)
                 .await
-                .map_err(runtime_api_error)
+                .map_err(runtime_api_error)?;
+            if matches!(&action, NodeAction::Start)
+                && let Err(error) = attach_node_links(state, project_id, node_id, false).await
+            {
+                let _ = detach_node_links(state, project_id, node_id).await;
+                let _ = state.dynamips.lifecycle(&vm, NodeAction::Stop).await;
+                return Err(error);
+            }
+            Ok(status)
         }
+        "ethernet_switch" | "ethernet_hub" => Err(ApiError::new(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "Ethernet switches and hubs are always running",
+        )),
+        "cloud" | "nat" => match action {
+            NodeAction::Start => {
+                attach_node_links(state, project_id, node_id, false).await?;
+                Ok("started".to_owned())
+            }
+            NodeAction::Stop | NodeAction::Reload | NodeAction::Suspend => Err(ApiError::new(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "Cloud and NAT nodes cannot be stopped, reloaded, or suspended",
+            )),
+        },
         _ => Err(ApiError::new(
             StatusCode::METHOD_NOT_ALLOWED,
             "This node has no implemented runtime adapter",
         )),
     }
+}
+
+async fn vpcs_startup_script(
+    pool: &SqlitePool,
+    project_id: &str,
+    node: &Value,
+) -> Result<Option<String>, ApiError> {
+    if let Some(script) = node
+        .get("startup_script")
+        .and_then(Value::as_str)
+        .filter(|script| !script.is_empty())
+    {
+        return Ok(Some(script.to_owned()));
+    }
+    let Some(base_script_file) = node
+        .get("base_script_file")
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty())
+    else {
+        return Ok(None);
+    };
+    let path = FsPath::new(base_script_file);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        || base_script_file.contains('\\')
+    {
+        return Err(ApiError::bad_request(
+            "VPCS base_script_file must be a relative project file path",
+        ));
+    }
+    let normalized = path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => Some(value.to_string_lossy()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    let row =
+        sqlx::query("SELECT contents FROM project_files WHERE project_id = ? AND file_path = ?")
+            .bind(project_id)
+            .bind(normalized)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|row| String::from_utf8_lossy(&row.get::<Vec<u8>, _>("contents")).into_owned()))
 }
 
 async fn stop_runtime_node(
@@ -2193,12 +3812,44 @@ async fn stop_runtime_node(
     let Some(node_type) = node.get("node_type").and_then(Value::as_str) else {
         return Ok(());
     };
+    if BuiltinRuntime::is_type(node_type) {
+        let node_id = node
+            .get("node_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        state.builtin.stop_node(node_id).await;
+        return Ok(());
+    }
     if node_type != "docker"
         && node_type != "qemu"
         && node_type != "vpcs"
         && node_type != "dynamips"
     {
         return Ok(());
+    }
+    match node_type {
+        "docker" if node.get("container_id").and_then(Value::as_str).is_none() => return Ok(()),
+        "qemu"
+            if node
+                .get("runtime_overlay")
+                .and_then(Value::as_str)
+                .is_none() =>
+        {
+            return Ok(());
+        }
+        "dynamips"
+            if node
+                .get("runtime_working_dir")
+                .and_then(Value::as_str)
+                .is_none()
+                || node
+                    .get("runtime_hypervisor_port")
+                    .and_then(Value::as_u64)
+                    .is_none() =>
+        {
+            return Ok(());
+        }
+        _ => {}
     }
     let mut node = node.clone();
     apply_node_lifecycle(state, project_id, &mut node, NodeAction::Stop).await?;
@@ -2215,12 +3866,22 @@ async fn cleanup_node_runtime(state: &AppState, node: &Value) -> Result<(), ApiE
         .and_then(Value::as_str)
         .unwrap_or_default();
     match node_type {
-        "docker" => state
-            .runtime
-            .remove_node_resources(node_id, node.get("container_id").and_then(Value::as_str))
-            .await
-            .map_err(runtime_api_error),
+        "docker" => match node.get("container_id").and_then(Value::as_str) {
+            Some(container_id) => state
+                .runtime
+                .remove_node_resources(node_id, Some(container_id))
+                .await
+                .map_err(runtime_api_error),
+            None => Ok(()),
+        },
         "qemu" => {
+            if node
+                .get("runtime_overlay")
+                .and_then(Value::as_str)
+                .is_none()
+            {
+                return Ok(());
+            }
             let vm = state.qemu.vm_from_node(node).map_err(runtime_api_error)?;
             state.qemu.remove_vm(&vm).await.map_err(runtime_api_error)
         }
@@ -2235,6 +3896,17 @@ async fn cleanup_node_runtime(state: &AppState, node: &Value) -> Result<(), ApiE
             .await
             .map_err(runtime_api_error),
         "dynamips" => {
+            if node
+                .get("runtime_working_dir")
+                .and_then(Value::as_str)
+                .is_none()
+                || node
+                    .get("runtime_hypervisor_port")
+                    .and_then(Value::as_u64)
+                    .is_none()
+            {
+                return Ok(());
+            }
             let vm = state
                 .dynamips
                 .vm_from_node(node)
@@ -2245,333 +3917,22 @@ async fn cleanup_node_runtime(state: &AppState, node: &Value) -> Result<(), ApiE
                 .await
                 .map_err(runtime_api_error)
         }
+        "ethernet_switch" | "ethernet_hub" | "cloud" | "nat" => {
+            state.builtin.stop_node(node_id).await;
+            Ok(())
+        }
         _ => Ok(()),
     }
 }
 
-async fn qemu_links_for_node(
-    pool: &SqlitePool,
-    project_id: &str,
-    node_id: &str,
-) -> Result<Vec<QemuLink>, ApiError> {
-    // QEMU enumerates guest NICs in device argument order; keep that order
-    // aligned with the topology's adapter numbers regardless of SQLite row order.
-    let rows = sqlx::query(
-        "SELECT o.object_id, o.object_json
-         FROM topology_objects AS o
-         JOIN link_endpoints AS e
-           ON e.project_id = o.project_id AND e.link_id = o.object_id
-         WHERE o.project_id = ? AND o.kind = 'link' AND e.node_id = ?
-         ORDER BY e.adapter_number, o.object_id",
-    )
-    .bind(project_id)
-    .bind(node_id)
-    .fetch_all(pool)
-    .await?;
-    let mut links = Vec::new();
-    for row in rows {
-        let link_id: String = row.get("object_id");
-        let link = decode_json(row.get::<String, _>("object_json"))?;
-        let Some(endpoints) = link.get("nodes").and_then(Value::as_array) else {
-            continue;
-        };
-        let Some(endpoint) = endpoints
-            .iter()
-            .find(|endpoint| endpoint["node_id"].as_str() == Some(node_id))
-        else {
-            continue;
-        };
-        // Older persisted links used a pair of unicast UDP ports. Derive the
-        // multicast bus from their stable link ID when upgrading those records.
-        let (fallback_address, fallback_port) =
-            QemuRuntime::multicast_endpoint(&link_id).map_err(runtime_api_error)?;
-        let multicast_address = endpoint["runtime_multicast_address"]
-            .as_str()
-            .and_then(|address| address.parse().ok())
-            .unwrap_or(fallback_address);
-        let multicast_port = endpoint["runtime_multicast_port"]
-            .as_u64()
-            .and_then(|port| u16::try_from(port).ok())
-            .unwrap_or(fallback_port);
-        let adapter_number = endpoint["adapter_number"]
-            .as_u64()
-            .and_then(|adapter| u32::try_from(adapter).ok())
-            .ok_or_else(|| {
-                ApiError::conflict(format!("QEMU link {link_id} has an invalid adapter"))
-            })?;
-        links.push(QemuLink {
-            link_id,
-            adapter_number,
-            multicast_address,
-            multicast_port,
-            tap: endpoint["runtime_tap"].as_str().map(str::to_owned),
-        });
-    }
-    Ok(links)
-}
-
-async fn vpcs_links_for_node(
-    pool: &SqlitePool,
-    project_id: &str,
-    node_id: &str,
-) -> Result<Vec<(String, Vec<String>)>, ApiError> {
-    let rows = sqlx::query(
-        "SELECT DISTINCT o.object_id, o.object_json
-         FROM topology_objects AS o
-         JOIN link_endpoints AS e
-           ON e.project_id = o.project_id AND e.link_id = o.object_id
-         WHERE o.project_id = ? AND o.kind = 'link' AND e.node_id = ?",
-    )
-    .bind(project_id)
-    .bind(node_id)
-    .fetch_all(pool)
-    .await?;
-    rows.into_iter()
-        .map(|row| {
-            let link_id: String = row.get("object_id");
-            let link = decode_json(row.get::<String, _>("object_json"))?;
-            let node_ids = link
-                .get("nodes")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|endpoint| {
-                    endpoint
-                        .get("node_id")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                })
-                .collect();
-            Ok((link_id, node_ids))
-        })
-        .collect()
-}
-
-async fn shared_link_endpoints_for_node(
-    pool: &SqlitePool,
-    project_id: &str,
-    node_id: &str,
-) -> Result<Vec<(String, Value)>, ApiError> {
-    let rows = sqlx::query(
-        "SELECT DISTINCT o.object_id, o.object_json
-         FROM topology_objects AS o
-         JOIN link_endpoints AS e
-           ON e.project_id = o.project_id AND e.link_id = o.object_id
-         WHERE o.project_id = ? AND o.kind = 'link' AND e.node_id = ?",
-    )
-    .bind(project_id)
-    .bind(node_id)
-    .fetch_all(pool)
-    .await?;
-    let mut shared = Vec::new();
-    for row in rows {
-        let link_id: String = row.get("object_id");
-        let link = decode_json(row.get::<String, _>("object_json"))?;
-        let Some(endpoint) = link
-            .get("nodes")
-            .and_then(Value::as_array)
-            .and_then(|endpoints| {
-                endpoints.iter().find(|endpoint| {
-                    endpoint["node_id"].as_str() == Some(node_id)
-                        && endpoint.get("runtime_ubridge_segment").is_some()
-                })
-            })
-        else {
-            continue;
-        };
-        shared.push((link_id, endpoint.clone()));
-    }
-    Ok(shared)
-}
-
-async fn attach_docker_shared_links(
-    state: &AppState,
-    project_id: &str,
-    node: &Value,
-    container_id: &str,
-) -> Result<(), ApiError> {
-    let node_id = node["node_id"].as_str().unwrap_or_default();
-    let links = shared_link_endpoints_for_node(state.store.pool(), project_id, node_id).await?;
-    if links.is_empty() {
-        return Ok(());
-    }
-    let namespace_pid = state
-        .runtime
-        .container_pid(container_id)
-        .await
-        .map_err(runtime_api_error)?;
-    let mut attached_hosts: Vec<String> = Vec::new();
-    for (_link_id, endpoint) in links {
-        let segment = endpoint["runtime_ubridge_segment"]
-            .as_str()
-            .unwrap_or_default();
-        let host = endpoint["runtime_host_veth"].as_str().unwrap_or_default();
-        let guest = endpoint["runtime_guest_veth"].as_str().unwrap_or_default();
-        let guest_name = endpoint["runtime_guest_interface"]
-            .as_str()
-            .unwrap_or("eth1");
-        let result = async {
-            state.ubridge.create_veth(host, guest, segment).await?;
-            state.ubridge.set_interface_up(guest).await?;
-            state
-                .ubridge
-                .move_veth_to_container(guest, namespace_pid, guest_name)
-                .await
-        }
-        .await;
-        if let Err(error) = result {
-            let _ = state.ubridge.delete_veth(host).await;
-            for previous_host in attached_hosts {
-                let _ = state.ubridge.delete_veth(&previous_host).await;
-            }
-            return Err(runtime_api_error(error));
-        }
-        attached_hosts.push(host.to_owned());
-    }
-    Ok(())
-}
-
-async fn detach_docker_shared_links(state: &AppState, project_id: &str, node: &Value) {
-    let node_id = node["node_id"].as_str().unwrap_or_default();
-    match shared_link_endpoints_for_node(state.store.pool(), project_id, node_id).await {
-        Ok(links) => {
-            for (_link_id, endpoint) in links {
-                if let Some(host) = endpoint["runtime_host_veth"].as_str() {
-                    if let Err(error) = state.ubridge.delete_veth(host).await {
-                        tracing::debug!(error = %error.message(), %node_id, %host, "Docker shared-link veth was already absent or could not be removed");
-                    }
-                }
-            }
-        }
-        Err(error) => {
-            tracing::error!(error = %error.message, %node_id, "could not load Docker shared-link endpoints for cleanup")
-        }
-    }
-}
-
-async fn attach_dynamips_links_for_node(
-    state: &AppState,
-    project_id: &str,
-    vm: &DynamipsVm,
-) -> Result<(), ApiError> {
-    let shared_links =
-        shared_link_endpoints_for_node(state.store.pool(), project_id, &vm.node_id).await?;
-    let shared_link_ids = shared_links
-        .iter()
-        .map(|(link_id, _)| link_id.clone())
-        .collect::<HashSet<_>>();
-    for (_link_id, endpoint) in shared_links {
-        let bridge_port = endpoint["runtime_bridge_udp_port"]
-            .as_u64()
-            .and_then(|port| u16::try_from(port).ok())
-            .ok_or_else(|| ApiError::conflict("Dynamips link has no bridge UDP port"))?;
-        let endpoint_id = endpoint["runtime_ubridge_endpoint"]
-            .as_str()
-            .unwrap_or_default();
-        let tap = endpoint["runtime_tap"].as_str().unwrap_or_default();
-        let adapter = endpoint["adapter_number"].as_u64().unwrap_or_default() as u32;
-        let port = endpoint["port_number"].as_u64().unwrap_or_default() as u32;
-        let local_port = state
-            .dynamips
-            .switch_endpoint(vm, adapter, port, bridge_port)
-            .await
-            .map_err(runtime_api_error)?;
-        state
-            .ubridge
-            .attach_udp_to_tap_at(endpoint_id, tap, bridge_port, local_port)
-            .await
-            .map_err(runtime_api_error)?;
-    }
-    for (link_id, node_ids) in
-        vpcs_links_for_node(state.store.pool(), project_id, &vm.node_id).await?
-    {
-        if shared_link_ids.contains(&link_id) {
-            continue;
-        }
-        let switch_port = state
-            .vpcs
-            .create_segment(&link_id, node_ids)
-            .await
-            .map_err(runtime_api_error)?;
-        let local_port = state
-            .dynamips
-            .switch_endpoint(vm, 0, 0, switch_port)
-            .await
-            .map_err(runtime_api_error)?;
-        state
-            .vpcs
-            .register_external_endpoint(&vm.node_id, local_port)
-            .await;
-    }
-    Ok(())
-}
-
-async fn ensure_link_qemu_nodes_stopped(
-    state: &AppState,
-    project_id: &str,
-    link: &Value,
-) -> Result<(), ApiError> {
-    let Some(endpoints) = link.get("nodes").and_then(Value::as_array) else {
-        return Ok(());
-    };
-    for endpoint in endpoints {
-        let Some(node_id) = endpoint.get("node_id").and_then(Value::as_str) else {
-            continue;
-        };
-        let row = sqlx::query(
-            "SELECT object_json FROM topology_objects
-             WHERE project_id = ? AND kind = 'node' AND object_id = ?",
-        )
-        .bind(project_id)
-        .bind(node_id)
-        .fetch_optional(state.store.pool())
-        .await?;
-        let Some(row) = row else { continue };
-        let node = decode_json(row.get::<String, _>("object_json"))?;
-        if node.get("node_type").and_then(Value::as_str) == Some("qemu") {
-            let vm = state.qemu.vm_from_node(&node).map_err(runtime_api_error)?;
-            if state.qemu.status(&vm).await.map_err(runtime_api_error)? != "stopped" {
-                return Err(ApiError::conflict(
-                    "Stop all QEMU nodes attached to this Ethernet segment before changing it",
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn link_cleanup_endpoints(
-    pool: &SqlitePool,
-    project_id: &str,
-    link: &Value,
-) -> Result<Vec<Value>, ApiError> {
-    let Some(endpoints) = link.get("nodes").and_then(Value::as_array) else {
-        return Ok(Vec::new());
-    };
-    let mut runtime_endpoints = Vec::new();
-    for endpoint in endpoints {
-        let Some(node_id) = endpoint.get("node_id").and_then(Value::as_str) else {
-            continue;
-        };
-        let row = sqlx::query(
-            "SELECT object_json FROM topology_objects
-             WHERE project_id = ? AND kind = 'node' AND object_id = ?",
-        )
-        .bind(project_id)
-        .bind(node_id)
-        .fetch_optional(pool)
-        .await?;
-        let Some(row) = row else { continue };
-        let node = decode_json(row.get::<String, _>("object_json"))?;
-        if node.get("node_type").and_then(Value::as_str) != Some("docker") {
-            continue;
-        }
-        let Some(container_id) = node.get("container_id").and_then(Value::as_str) else {
-            continue;
-        };
-        runtime_endpoints.push(json!({ "container_id": container_id }));
-    }
-    Ok(runtime_endpoints)
+fn docker_interface_mac(node_id: &str, interface_number: u64) -> Result<String, ApiError> {
+    let node_id =
+        Uuid::parse_str(node_id).map_err(|_| ApiError::bad_request("Docker node ID is invalid"))?;
+    let bytes = node_id.as_bytes();
+    Ok(format!(
+        "02:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3], interface_number as u8
+    ))
 }
 
 async fn cleanup_link_runtime(
@@ -2579,92 +3940,30 @@ async fn cleanup_link_runtime(
     project_id: &str,
     link: &Value,
 ) -> Result<(), ApiError> {
-    let endpoints = link
+    let runtime_endpoints = link_runtime_endpoints(state.store.pool(), project_id, link)
+        .await
+        .unwrap_or_default();
+    for endpoint in link
         .get("nodes")
         .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let shared_ethernet = endpoints
-        .iter()
-        .any(|endpoint| endpoint.get("runtime_ubridge_segment").is_some());
-    let mut node_types = HashSet::new();
-    for endpoint in &endpoints {
-        let Some(node_id) = endpoint.get("node_id").and_then(Value::as_str) else {
-            continue;
-        };
-        let row = sqlx::query(
-            "SELECT object_json FROM topology_objects
-             WHERE project_id = ? AND kind = 'node' AND object_id = ?",
-        )
-        .bind(project_id)
-        .bind(node_id)
-        .fetch_optional(state.store.pool())
-        .await?;
-        if let Some(row) = row {
-            let node = decode_json(row.get::<String, _>("object_json"))?;
-            if let Some(node_type) = node.get("node_type").and_then(Value::as_str) {
-                node_types.insert(node_type.to_owned());
+        .into_iter()
+        .flatten()
+    {
+        let node_id = endpoint["node_id"].as_str().unwrap_or_default();
+        if let Some(runtime_endpoint) = runtime_endpoints
+            .iter()
+            .find(|candidate| candidate["node_id"].as_str() == Some(node_id))
+        {
+            detach_runtime_link_endpoint(state, project_id, endpoint, runtime_endpoint).await?;
+        } else {
+            let _ = LinkEngine::new(state.ubridge.clone())
+                .detach_endpoint(endpoint)
+                .await;
+            if let Some(endpoint_id) = endpoint["runtime_endpoint_id"].as_str()
+                && let Ok(host) = ubridge::host_veth_name(endpoint_id)
+            {
+                let _ = state.ubridge.delete_veth(&host).await;
             }
-        }
-    }
-    if node_types.contains("qemu") {
-        ensure_link_qemu_nodes_stopped(state, project_id, link).await?;
-    }
-    if shared_ethernet {
-        let link_id = link
-            .get("link_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        cleanup_shared_ethernet_link(state, link_id, link).await?;
-    }
-    if node_types.contains("docker") && !shared_ethernet {
-        let link_id = link
-            .get("link_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let cleanup = link_cleanup_endpoints(state.store.pool(), project_id, link).await?;
-        state
-            .runtime
-            .remove_link(link_id, &cleanup)
-            .await
-            .map_err(runtime_api_error)?;
-    }
-    if node_types.contains("vpcs") {
-        // The shared UDP switch is owned by VPCS even when the segment also
-        // contains IOS routers. Remove the Dynamips NIO before releasing it.
-    }
-    if node_types.contains("vpcs") || node_types.contains("dynamips") {
-        if let Some(endpoints) = link.get("nodes").and_then(Value::as_array) {
-            for endpoint in endpoints {
-                let Some(node_id) = endpoint["node_id"].as_str() else {
-                    continue;
-                };
-                state.vpcs.remove_external_endpoint(node_id, None).await;
-                let row = sqlx::query(
-                    "SELECT object_json FROM topology_objects
-                     WHERE project_id = ? AND kind = 'node' AND object_id = ?",
-                )
-                .bind(project_id)
-                .bind(node_id)
-                .fetch_optional(state.store.pool())
-                .await?;
-                let Some(row) = row else { continue };
-                let node = decode_json(row.get::<String, _>("object_json"))?;
-                if node.get("node_type").and_then(Value::as_str) == Some("dynamips") {
-                    let vm = state
-                        .dynamips
-                        .vm_from_node(&node)
-                        .map_err(runtime_api_error)?;
-                    state
-                        .dynamips
-                        .remove_switch_endpoint(&vm)
-                        .await
-                        .map_err(runtime_api_error)?;
-                }
-            }
-        }
-        if let Some(link_id) = link.get("link_id").and_then(Value::as_str) {
-            state.vpcs.remove_link(link_id).await;
         }
     }
     Ok(())
@@ -2701,6 +4000,552 @@ async fn update_node(
         patch,
     )
     .await
+}
+
+async fn update_node_configuration(
+    State(state): State<AppState>,
+    Path((project_id, node_id)): Path<(Uuid, Uuid)>,
+    Json(patch): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    let project_id = project_id.to_string();
+    let node_id = node_id.to_string();
+    let node = get_topology_object(state.store.pool(), &project_id, "node", &node_id)
+        .await?
+        .0;
+    let node_type = node["node_type"].as_str().unwrap_or_default().to_owned();
+    if BuiltinRuntime::is_type(&node_type) {
+        let patch = BuiltinRuntime::normalize_configuration_patch(&node, patch)
+            .map_err(ApiError::bad_request)?;
+        let mut updated = node.clone();
+        for (key, value) in patch.as_object().expect("normalized patch is an object") {
+            updated[key] = value.clone();
+        }
+        updated = BuiltinRuntime::normalize_node(updated).map_err(ApiError::bad_request)?;
+        validate_builtin_configuration_links(
+            state.store.pool(),
+            &project_id,
+            &node_id,
+            &node,
+            &updated,
+        )
+        .await?;
+
+        let rewire_cloud =
+            node_type == "cloud" && node["ports_mapping"] != updated["ports_mapping"];
+        if rewire_cloud {
+            detach_node_links(&state, &project_id, &node_id).await?;
+        }
+        let persisted = persist_node_configuration(
+            state.clone(),
+            &project_id,
+            &node_id,
+            patch.clone(),
+            Map::new(),
+        )
+        .await?;
+        let updated = persisted.0;
+        if node_type == "ethernet_switch" {
+            state.builtin.update_switch_configuration(&updated).await;
+        }
+        if rewire_cloud
+            && let Err(error) = attach_node_links(&state, &project_id, &node_id, false).await
+        {
+            let _ = detach_node_links(&state, &project_id, &node_id).await;
+            let mut restore = Map::new();
+            for key in patch
+                .as_object()
+                .expect("normalized patch is an object")
+                .keys()
+            {
+                if let Some(value) = node.get(key) {
+                    restore.insert(key.clone(), value.clone());
+                }
+            }
+            let _ = persist_node_configuration(
+                state.clone(),
+                &project_id,
+                &node_id,
+                Value::Object(restore),
+                Map::new(),
+            )
+            .await;
+            let _ = attach_node_links(&state, &project_id, &node_id, false).await;
+            return Err(error);
+        }
+        return Ok(Json(updated));
+    }
+    let patch = validate_node_configuration_patch(&node_type, patch)?;
+    let current_status = match node_type.as_str() {
+        "qemu" => {
+            let vm = state.qemu.vm_from_node(&node).map_err(runtime_api_error)?;
+            state.qemu.status(&vm).await.map_err(runtime_api_error)?
+        }
+        "docker" => {
+            let container_id = node["container_id"]
+                .as_str()
+                .ok_or_else(|| ApiError::conflict("Docker node has no runtime container"))?;
+            state
+                .runtime
+                .container_status(container_id)
+                .await
+                .map_err(runtime_api_error)?
+        }
+        "vpcs" => {
+            let node_id = node["node_id"]
+                .as_str()
+                .ok_or_else(|| ApiError::conflict("VPCS node has no node ID"))?;
+            state
+                .vpcs
+                .status(node_id)
+                .await
+                .map_err(runtime_api_error)?
+        }
+        "dynamips" => {
+            let vm = state
+                .dynamips
+                .vm_from_node(&node)
+                .map_err(runtime_api_error)?;
+            state
+                .dynamips
+                .status(&vm)
+                .await
+                .map_err(runtime_api_error)?
+        }
+        _ => {
+            return Err(ApiError::new(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "This runtime does not expose editable per-device settings",
+            ));
+        }
+    };
+    if current_status != "stopped" {
+        return Err(ApiError::conflict(
+            "Stop this device before changing runtime settings",
+        ));
+    }
+    if let Some(adapters) = patch["adapters"].as_u64() {
+        validate_adapter_count_against_links(
+            state.store.pool(),
+            &project_id,
+            &node_id,
+            &node_type,
+            adapters,
+        )
+        .await?;
+    }
+
+    let mut updated = node;
+    for (key, value) in patch.as_object().expect("validated patch is an object") {
+        updated[key] = value.clone();
+    }
+    let mut extra_fields = Map::new();
+    if node_type == "docker" {
+        detach_node_links(&state, &project_id, &node_id).await?;
+        let options = DockerTemplateOptions {
+            environment: updated["environment"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            extra_hosts: updated["extra_hosts"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            extra_volumes: updated["extra_volumes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+            console_type: updated["console_type"]
+                .as_str()
+                .unwrap_or("telnet")
+                .to_owned(),
+            console_resolution: updated["console_resolution"]
+                .as_str()
+                .unwrap_or("1024x768")
+                .to_owned(),
+            console_http_port: updated["console_http_port"]
+                .as_u64()
+                .and_then(|port| u16::try_from(port).ok()),
+            console_http_path: updated["console_http_path"].as_str().map(str::to_owned),
+            aux_type: updated["aux_type"].as_str().unwrap_or("none").to_owned(),
+            custom_adapters: serde_json::from_value(updated["custom_adapters"].clone()).map_err(
+                |_| {
+                    ApiError::bad_request("custom_adapters must be an array of adapter definitions")
+                },
+            )?,
+            ..DockerTemplateOptions::default()
+        };
+        let old_container_id = updated["container_id"]
+            .as_str()
+            .ok_or_else(|| ApiError::conflict("Docker node has no runtime container"))?;
+        let (container_id, image_digest) = state
+            .runtime
+            .reconfigure_container(
+                &project_id,
+                &node_id,
+                old_container_id,
+                updated["image"].as_str().unwrap_or_default(),
+                updated["name"].as_str().unwrap_or("Docker node"),
+                updated["start_command"].as_str(),
+                updated["memory"].as_u64(),
+                updated["cpus"].as_f64(),
+                &options,
+            )
+            .await
+            .map_err(runtime_api_error)?;
+        extra_fields.insert("container_id".to_owned(), json!(container_id));
+        extra_fields.insert("image_digest".to_owned(), json!(image_digest));
+        extra_fields.insert(
+            "console".to_owned(),
+            json!(state.runtime.console_port(&container_id).await),
+        );
+    }
+    persist_node_configuration(state, &project_id, &node_id, patch, extra_fields).await
+}
+
+fn validate_node_configuration_patch(node_type: &str, patch: Value) -> Result<Value, ApiError> {
+    let patch = patch
+        .as_object()
+        .ok_or_else(|| ApiError::bad_request("device configuration must be an object"))?;
+    if patch.is_empty() {
+        return Err(ApiError::bad_request("device configuration is empty"));
+    }
+    let allowed: &[&str] = match node_type {
+        "qemu" => &[
+            "name",
+            "memory",
+            "cpus",
+            "adapters",
+            "adapter_type",
+            "hda_disk_interface",
+            "boot_priority",
+        ],
+        "docker" => &[
+            "name",
+            "memory",
+            "cpus",
+            "adapters",
+            "start_command",
+            "environment",
+            "extra_hosts",
+            "extra_volumes",
+            "console_type",
+            "console_resolution",
+            "console_http_port",
+            "console_http_path",
+            "aux_type",
+            "custom_adapters",
+        ],
+        "vpcs" => &["name", "startup_script"],
+        "dynamips" => &["name", "startup_config"],
+        _ => return Err(ApiError::bad_request("unsupported per-device runtime")),
+    };
+    let mut validated = Map::new();
+    for (key, value) in patch {
+        if !allowed.contains(&key.as_str()) {
+            return Err(ApiError::bad_request(format!(
+                "'{key}' cannot be changed in this device configuration"
+            )));
+        }
+        let value = match key.as_str() {
+            "name" => {
+                let name = value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty() && name.len() <= 128)
+                    .ok_or_else(|| ApiError::bad_request("device name must be 1–128 characters"))?;
+                json!(name)
+            }
+            "memory" => {
+                let memory = value
+                    .as_u64()
+                    .filter(|memory| {
+                        if node_type == "qemu" {
+                            (16..=1_048_576).contains(memory)
+                        } else {
+                            *memory <= 1_048_576
+                        }
+                    })
+                    .ok_or_else(|| {
+                        ApiError::bad_request("memory is outside the supported range")
+                    })?;
+                json!(memory)
+            }
+            "cpus" => {
+                if node_type == "qemu" {
+                    let cpus = value
+                        .as_u64()
+                        .filter(|cpus| (1..=256).contains(cpus))
+                        .ok_or_else(|| ApiError::bad_request("QEMU CPUs must be from 1 to 256"))?;
+                    json!(cpus)
+                } else {
+                    let cpus = value
+                        .as_f64()
+                        .filter(|cpus| cpus.is_finite() && (0.0..=256.0).contains(cpus))
+                        .ok_or_else(|| {
+                            ApiError::bad_request("Docker CPU limit must be from 0 to 256")
+                        })?;
+                    json!(cpus)
+                }
+            }
+            "adapters" => {
+                let adapters = value
+                    .as_u64()
+                    .filter(|adapters| (1..=99).contains(adapters))
+                    .ok_or_else(|| ApiError::bad_request("adapters must be from 1 to 99"))?;
+                json!(adapters)
+            }
+            "adapter_type" => {
+                let model = value
+                    .as_str()
+                    .filter(|model| {
+                        matches!(*model, "e1000" | "virtio-net-pci" | "rtl8139" | "vmxnet3")
+                    })
+                    .ok_or_else(|| {
+                        ApiError::bad_request("unsupported QEMU network adapter model")
+                    })?;
+                json!(model)
+            }
+            "hda_disk_interface" => {
+                let interface = value
+                    .as_str()
+                    .filter(|interface| matches!(*interface, "ide" | "scsi" | "virtio" | "sd"))
+                    .ok_or_else(|| {
+                        ApiError::bad_request("unsupported QEMU primary disk interface")
+                    })?;
+                json!(interface)
+            }
+            "boot_priority" => {
+                let priority = value
+                    .as_str()
+                    .filter(|priority| matches!(*priority, "c" | "d" | "n" | "dc" | "cd"))
+                    .ok_or_else(|| ApiError::bad_request("unsupported QEMU boot priority"))?;
+                json!(priority)
+            }
+            "start_command" | "environment" | "extra_hosts" => {
+                let text = value
+                    .as_str()
+                    .filter(|text| text.len() <= 65_536)
+                    .ok_or_else(|| {
+                        ApiError::bad_request(format!("{key} must be text under 64 KiB"))
+                    })?;
+                json!(text)
+            }
+            "startup_script" | "startup_config" => {
+                let text = value
+                    .as_str()
+                    .filter(|text| text.len() <= 1_048_576)
+                    .ok_or_else(|| {
+                        ApiError::bad_request(format!("{key} must be text under 1 MiB"))
+                    })?;
+                json!(text)
+            }
+            "extra_volumes" => {
+                let volumes = value.as_array().ok_or_else(|| {
+                    ApiError::bad_request("extra_volumes must be an array of container paths")
+                })?;
+                if volumes.len() > 64 || volumes.iter().any(|volume| volume.as_str().is_none()) {
+                    return Err(ApiError::bad_request(
+                        "extra_volumes must contain at most 64 text paths",
+                    ));
+                }
+                json!(volumes)
+            }
+            "console_type" => {
+                let value = value
+                    .as_str()
+                    .filter(|value| matches!(*value, "none" | "telnet" | "vnc" | "http" | "https"))
+                    .ok_or_else(|| ApiError::bad_request("unsupported Docker console_type"))?;
+                json!(value)
+            }
+            "console_resolution" => {
+                let value = value
+                    .as_str()
+                    .filter(|value| {
+                        value.split_once('x').is_some_and(|(width, height)| {
+                            !width.is_empty()
+                                && !height.is_empty()
+                                && width.bytes().all(|byte| byte.is_ascii_digit())
+                                && height.bytes().all(|byte| byte.is_ascii_digit())
+                        })
+                    })
+                    .ok_or_else(|| {
+                        ApiError::bad_request("console_resolution must use WIDTHxHEIGHT")
+                    })?;
+                json!(value)
+            }
+            "console_http_port" => {
+                let port = value
+                    .as_u64()
+                    .filter(|port| (1..=65535).contains(port))
+                    .ok_or_else(|| {
+                        ApiError::bad_request("console_http_port must be from 1 to 65535")
+                    })?;
+                json!(port)
+            }
+            "console_http_path" => {
+                let path = value
+                    .as_str()
+                    .filter(|path| {
+                        path.starts_with('/') && !path.bytes().any(|byte| byte.is_ascii_control())
+                    })
+                    .ok_or_else(|| {
+                        ApiError::bad_request("console_http_path must be an absolute URL path")
+                    })?;
+                json!(path)
+            }
+            "aux_type" => {
+                let value = value
+                    .as_str()
+                    .filter(|value| matches!(*value, "none" | "telnet" | "ssh"))
+                    .ok_or_else(|| ApiError::bad_request("unsupported Docker aux_type"))?;
+                json!(value)
+            }
+            "custom_adapters" => {
+                if !value.is_array() || value.as_array().is_some_and(|adapters| adapters.len() > 99)
+                {
+                    return Err(ApiError::bad_request(
+                        "custom_adapters must be an array of at most 99 entries",
+                    ));
+                }
+                serde_json::from_value::<Vec<crate::runtime::DockerCustomAdapter>>(value.clone())
+                    .map_err(|_| {
+                    ApiError::bad_request("custom_adapters contain an invalid adapter definition")
+                })?;
+                json!(value)
+            }
+            _ => unreachable!("keys were restricted above"),
+        };
+        validated.insert(key.clone(), value);
+    }
+    Ok(Value::Object(validated))
+}
+
+async fn validate_adapter_count_against_links(
+    pool: &SqlitePool,
+    project_id: &str,
+    node_id: &str,
+    node_type: &str,
+    adapters: u64,
+) -> Result<(), ApiError> {
+    let links = list_objects(pool, project_id, "link").await?.0;
+    for link in links {
+        let Some(endpoints) = link["nodes"].as_array() else {
+            continue;
+        };
+        for endpoint in endpoints {
+            if endpoint["node_id"].as_str() != Some(node_id) {
+                continue;
+            }
+            let configured_port = if node_type == "docker" {
+                endpoint["port_number"].as_u64()
+            } else {
+                endpoint["adapter_number"].as_u64()
+            }
+            .unwrap_or_default();
+            if configured_port >= adapters {
+                return Err(ApiError::conflict(format!(
+                    "Adapter count cannot be reduced to {adapters}; a link is using port {configured_port}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn validate_builtin_configuration_links(
+    pool: &SqlitePool,
+    project_id: &str,
+    node_id: &str,
+    current: &Value,
+    updated: &Value,
+) -> Result<(), ApiError> {
+    let node_type = updated["node_type"].as_str().unwrap_or_default();
+    let current_count = current["ports_mapping"]
+        .as_array()
+        .map(Vec::len)
+        .unwrap_or_default();
+    let updated_count = updated["ports_mapping"]
+        .as_array()
+        .map(Vec::len)
+        .unwrap_or_default();
+    let links = list_objects(pool, project_id, "link").await?.0;
+    for link in links {
+        let Some(endpoints) = link["nodes"].as_array() else {
+            continue;
+        };
+        for endpoint in endpoints {
+            if endpoint["node_id"].as_str() != Some(node_id) {
+                continue;
+            }
+            let port = endpoint["port_number"].as_u64().unwrap_or_default() as usize;
+            if node_type == "ethernet_switch" && current_count != updated_count {
+                return Err(ApiError::conflict(
+                    "Cannot change the port count of an Ethernet switch that is already connected",
+                ));
+            }
+            if port >= updated_count {
+                return Err(ApiError::conflict(format!(
+                    "Cannot remove port {port} while it is connected"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn persist_node_configuration(
+    state: AppState,
+    project_id: &str,
+    node_id: &str,
+    patch: Value,
+    extra_fields: Map<String, Value>,
+) -> Result<Json<Value>, ApiError> {
+    let mut tx = state.store.pool().begin().await?;
+    ensure_project_exists(&mut tx, project_id).await?;
+    let row = sqlx::query(
+        "SELECT object_json FROM topology_objects WHERE project_id = ? AND kind = 'node' AND object_id = ?",
+    )
+    .bind(project_id)
+    .bind(node_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| ApiError::not_found(format!("Node {node_id} does not exist")))?;
+    let mut node = decode_json(row.get::<String, _>("object_json"))?;
+    let object = as_object_mut(&mut node, "stored node is invalid")?;
+    for (key, value) in patch.as_object().expect("validated patch is an object") {
+        object.insert(key.clone(), value.clone());
+    }
+    for (key, value) in extra_fields {
+        object.insert(key, value);
+    }
+    let status = if BuiltinRuntime::is_type(
+        object
+            .get("node_type")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    ) {
+        "started"
+    } else {
+        "stopped"
+    };
+    object.insert("status".to_owned(), json!(status));
+    let name = required_string(object, "name")?.to_owned();
+    sqlx::query(
+        "UPDATE topology_objects SET name = ?, object_json = ? WHERE project_id = ? AND kind = 'node' AND object_id = ?",
+    )
+    .bind(name)
+    .bind(serde_json::to_string(&node).map_err(internal_json_error)?)
+    .bind(project_id)
+    .bind(node_id)
+    .execute(&mut *tx)
+    .await?;
+    let event = Store::append_event(&mut tx, project_id, "node.updated", &node).await?;
+    tx.commit().await?;
+    state.store.publish(event);
+    Ok(Json(node))
 }
 
 async fn delete_node(
@@ -2785,39 +4630,535 @@ async fn update_link(
     Path((project_id, link_id)): Path<(Uuid, Uuid)>,
     Json(patch): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
-    if patch_has_changed_link_nodes(&state, project_id, link_id, &patch).await? {
-        return Err(ApiError::conflict(
-            "Delete and recreate the link to change runtime endpoints",
-        ));
+    let project_id = project_id.to_string();
+    let link_id = link_id.to_string();
+    let current = get_topology_object(state.store.pool(), &project_id, "link", &link_id)
+        .await?
+        .0;
+    let patch = normalize_link_update(&current, patch)?;
+    let mut candidate = current.clone();
+    if let (Some(candidate), Some(patch)) = (candidate.as_object_mut(), patch.as_object()) {
+        for (key, value) in patch {
+            candidate.insert(key.clone(), value.clone());
+        }
     }
-    update_topology_object(
-        state,
-        project_id.to_string(),
-        link_id.to_string(),
-        "link",
-        "link_id",
-        patch,
-    )
-    .await
+    if patch.get("filters").is_some() || patch.get("suspend").is_some() {
+        let runtime_endpoints =
+            link_runtime_endpoints(state.store.pool(), &project_id, &candidate).await?;
+        let engine = LinkEngine::new(state.ubridge.clone());
+        for endpoint in candidate["nodes"].as_array().into_iter().flatten() {
+            let Some(runtime_endpoint) = runtime_endpoints
+                .iter()
+                .find(|candidate| candidate["node_id"].as_str() == endpoint["node_id"].as_str())
+            else {
+                continue;
+            };
+            if runtime_endpoint_status(&state, &project_id, runtime_endpoint).await? == "stopped" {
+                continue;
+            }
+            attach_runtime_link_endpoint(
+                &state,
+                &project_id,
+                &candidate,
+                endpoint,
+                runtime_endpoint,
+            )
+            .await?;
+            engine
+                .update_endpoint(
+                    endpoint,
+                    &candidate["filters"],
+                    candidate["suspend"].as_bool().unwrap_or(false),
+                )
+                .await
+                .map_err(runtime_api_error)?;
+        }
+    }
+    update_topology_object(state, project_id, link_id, "link", "link_id", patch).await
 }
 
-async fn patch_has_changed_link_nodes(
-    state: &AppState,
-    project_id: Uuid,
-    link_id: Uuid,
-    patch: &Value,
-) -> Result<bool, ApiError> {
-    let Some(nodes) = patch.get("nodes") else {
-        return Ok(false);
-    };
-    let current = get_topology_object(
+fn normalize_link_update(current: &Value, patch: Value) -> Result<Value, ApiError> {
+    let object = patch
+        .as_object()
+        .ok_or_else(|| ApiError::bad_request("link update must be an object"))?;
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "filters" | "suspend" | "link_style" | "nodes" | "show_filters_icon" | "label"
+        ) {
+            return Err(ApiError::bad_request(format!(
+                "Link field '{key}' cannot be updated"
+            )));
+        }
+    }
+    let mut normalized = patch;
+    if let Some(filters) = normalized.get("filters") {
+        normalized["filters"] = validate_link_filters(filters)?;
+    }
+    if normalized
+        .get("suspend")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        return Err(ApiError::bad_request("suspend must be a boolean"));
+    }
+    if normalized
+        .get("link_style")
+        .is_some_and(|value| !value.is_object())
+    {
+        return Err(ApiError::bad_request("link_style must be an object"));
+    }
+    if let Some(nodes) = normalized.get("nodes") {
+        let requested = nodes
+            .as_array()
+            .filter(|nodes| nodes.len() == 2)
+            .ok_or_else(|| ApiError::bad_request("GNS3 links have exactly two endpoints"))?;
+        let mut merged = current["nodes"]
+            .as_array()
+            .cloned()
+            .ok_or_else(|| ApiError::conflict("Stored link has invalid endpoints"))?;
+        for requested_endpoint in requested {
+            let node_id = requested_endpoint["node_id"]
+                .as_str()
+                .ok_or_else(|| ApiError::bad_request("Link endpoint requires node_id"))?;
+            let existing = merged
+                .iter_mut()
+                .find(|endpoint| endpoint["node_id"].as_str() == Some(node_id))
+                .ok_or_else(|| {
+                    ApiError::conflict("Delete and recreate the link to change runtime endpoints")
+                })?;
+            for identity in ["adapter_number", "port_number"] {
+                if requested_endpoint
+                    .get(identity)
+                    .is_some_and(|value| value != &existing[identity])
+                {
+                    return Err(ApiError::conflict(
+                        "Delete and recreate the link to change runtime endpoints",
+                    ));
+                }
+            }
+            if let Some(label) = requested_endpoint.get("label") {
+                existing["label"] = label.clone();
+            }
+        }
+        normalized["nodes"] = json!(merged);
+    }
+    Ok(normalized)
+}
+
+fn validate_link_filters(filters: &Value) -> Result<Value, ApiError> {
+    let filters = filters
+        .as_object()
+        .ok_or_else(|| ApiError::bad_request("filters must be an object"))?;
+    let mut active = serde_json::Map::new();
+    for (kind, values) in filters {
+        let values = values
+            .as_array()
+            .ok_or_else(|| ApiError::bad_request(format!("filter '{kind}' must be an array")))?;
+        match kind.as_str() {
+            "frequency_drop" => {
+                if values.len() != 1 {
+                    return Err(ApiError::bad_request("frequency_drop expects one value"));
+                }
+                let frequency = filter_integer(kind, &values[0], -1, 32767)?;
+                if frequency != 0 {
+                    active.insert(kind.clone(), json!([frequency]));
+                }
+            }
+            "packet_loss" => {
+                if values.len() != 1 {
+                    return Err(ApiError::bad_request("packet_loss expects one value"));
+                }
+                let chance = filter_integer(kind, &values[0], 0, 100)?;
+                if chance != 0 {
+                    active.insert(kind.clone(), json!([chance]));
+                }
+            }
+            "delay" => {
+                if !(1..=3).contains(&values.len()) {
+                    return Err(ApiError::bad_request(
+                        "delay expects latency, optional jitter, and optional distribution",
+                    ));
+                }
+                let latency = filter_integer(kind, &values[0], 0, 32767)?;
+                let jitter = if values.len() > 1 {
+                    filter_integer(kind, &values[1], 0, 32767)?
+                } else {
+                    0
+                };
+                if latency == 0 && jitter == 0 {
+                    continue;
+                }
+                if latency == 0 {
+                    return Err(ApiError::bad_request(
+                        "delay latency must be at least 1 ms when jitter is enabled",
+                    ));
+                }
+                let mut normalized = vec![json!(latency), json!(jitter)];
+                if let Some(distribution) = values.get(2) {
+                    let distribution = distribution
+                        .as_str()
+                        .unwrap_or_default()
+                        .trim()
+                        .to_ascii_lowercase();
+                    if !matches!(
+                        distribution.as_str(),
+                        "" | "uniform" | "normal" | "pareto" | "paretonormal"
+                    ) {
+                        return Err(ApiError::bad_request(
+                            "delay distribution must be uniform, normal, pareto, or paretonormal",
+                        ));
+                    }
+                    if distribution.is_empty() {
+                        normalized.push(json!(""));
+                    } else {
+                        normalized.push(json!(distribution));
+                    }
+                }
+                active.insert(kind.clone(), Value::Array(normalized));
+            }
+            "corrupt" => {
+                if values.len() != 1 {
+                    return Err(ApiError::bad_request("corrupt expects one value"));
+                }
+                let chance = filter_integer(kind, &values[0], 0, 100)?;
+                if chance != 0 {
+                    active.insert(kind.clone(), json!([chance]));
+                }
+            }
+            "bpf" => {
+                if values.len() != 1 {
+                    return Err(ApiError::bad_request("bpf expects one expression"));
+                }
+                let expression = values[0]
+                    .as_str()
+                    .ok_or_else(|| ApiError::bad_request("bpf expression must be text"))?;
+                if expression.len() > 4096 || expression.contains('\0') {
+                    return Err(ApiError::bad_request(
+                        "bpf expression is too long or invalid",
+                    ));
+                }
+                if !expression.trim().is_empty() {
+                    active.insert(kind.clone(), json!([expression]));
+                }
+            }
+            _ => {
+                return Err(ApiError::bad_request(format!(
+                    "Unsupported link filter '{kind}'"
+                )));
+            }
+        }
+    }
+    Ok(Value::Object(active))
+}
+
+fn filter_integer(kind: &str, value: &Value, minimum: i64, maximum: i64) -> Result<i64, ApiError> {
+    let integer = value
+        .as_i64()
+        .or_else(|| value.as_str().and_then(|value| value.trim().parse().ok()))
+        .ok_or_else(|| ApiError::bad_request(format!("{kind} filter values must be integers")))?;
+    if integer < minimum || integer > maximum {
+        return Err(ApiError::bad_request(format!(
+            "{kind} filter values must be between {minimum} and {maximum}"
+        )));
+    }
+    Ok(integer)
+}
+
+async fn available_link_filters(
+    State(state): State<AppState>,
+    Path((project_id, link_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    let _ = get_topology_object(
         state.store.pool(),
         &project_id.to_string(),
         "link",
         &link_id.to_string(),
     )
     .await?;
-    Ok(current.0.get("nodes") != Some(nodes))
+    Ok(Json(vec![
+        json!({ "type": "frequency_drop", "name": "Frequency drop", "description": "Drop every Nth packet; -1 drops all packets.", "parameters": [{"name":"Frequency","minimum":-1,"maximum":32767,"type":"int","unit":"th packet"}] }),
+        json!({ "type": "packet_loss", "name": "Packet loss", "description": "Chance for a packet to be lost.", "parameters": [{"name":"Chance","minimum":0,"maximum":100,"type":"int","unit":"%"}] }),
+        json!({ "type": "delay", "name": "Delay", "description": "Delay packets with optional jitter and distribution.", "parameters": [{"name":"Latency","minimum":1,"maximum":32767,"type":"int","unit":"ms"},{"name":"Jitter (-/+)","minimum":0,"maximum":32767,"type":"int","unit":"ms"},{"name":"Distribution","type":"str","unit":"uniform|normal|pareto|paretonormal"}] }),
+        json!({ "type": "corrupt", "name": "Corrupt", "description": "Chance for a packet to be corrupted.", "parameters": [{"name":"Chance","minimum":0,"maximum":100,"type":"int","unit":"%"}] }),
+        json!({ "type": "bpf", "name": "Berkeley Packet Filter (BPF)", "description": "Drop packets matching a BPF expression.", "parameters": [{"name":"Filters","type":"text"}] }),
+    ]))
+}
+
+#[derive(Deserialize)]
+struct LinkCaptureRequest {
+    capture_file_name: Option<String>,
+    data_link_type: Option<String>,
+    #[serde(default)]
+    wireshark: bool,
+}
+
+async fn start_link_capture(
+    State(state): State<AppState>,
+    Path((project_id, link_id)): Path<(Uuid, Uuid)>,
+    Json(request): Json<LinkCaptureRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    if request.wireshark {
+        return Err(ApiError::new(
+            StatusCode::NOT_IMPLEMENTED,
+            "Web Wireshark is not available",
+        ));
+    }
+    if request.data_link_type.as_deref().unwrap_or("DLT_EN10MB") != "DLT_EN10MB" {
+        return Err(ApiError::bad_request(
+            "Ethernet link capture requires DLT_EN10MB",
+        ));
+    }
+    let project_id = project_id.to_string();
+    let link_id = link_id.to_string();
+    let link = get_topology_object(state.store.pool(), &project_id, "link", &link_id)
+        .await?
+        .0;
+    if link["capturing"].as_bool().unwrap_or(false) {
+        return Err(ApiError::conflict("Link capture is already active"));
+    }
+    let file_name = safe_capture_file_name(
+        request
+            .capture_file_name
+            .as_deref()
+            .unwrap_or(&format!("{link_id}.pcap")),
+    )?;
+    let directory = capture_directory(&project_id);
+    std::fs::create_dir_all(&directory).map_err(|error| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Could not create capture directory: {error}"),
+        )
+    })?;
+    let path = directory.join(&file_name);
+    let path_text = path.to_string_lossy().into_owned();
+    let runtimes = link_runtime_endpoints(state.store.pool(), &project_id, &link).await?;
+    let mut selected = None;
+    for endpoint in link["nodes"].as_array().into_iter().flatten() {
+        let node_id = endpoint["node_id"].as_str().unwrap_or_default();
+        let runtime = runtimes
+            .iter()
+            .find(|runtime| runtime["node_id"].as_str() == Some(node_id))
+            .ok_or_else(|| ApiError::conflict("Link runtime endpoint is missing"))?;
+        if runtime_endpoint_status(&state, &project_id, runtime).await? == "started" {
+            selected = Some((endpoint.clone(), runtime.clone()));
+            break;
+        }
+    }
+    let (endpoint, runtime_endpoint) = selected
+        .ok_or_else(|| ApiError::conflict("Start a node on this link before capturing packets"))?;
+    attach_runtime_link_endpoint(&state, &project_id, &link, &endpoint, &runtime_endpoint).await?;
+    LinkEngine::new(state.ubridge.clone())
+        .start_capture(&endpoint, &path_text)
+        .await
+        .map_err(runtime_api_error)?;
+    let updated = update_topology_object(
+        state,
+        project_id,
+        link_id,
+        "link",
+        "link_id",
+        json!({
+            "capturing": true,
+            "capture_file_name": file_name,
+            "capture_file_path": path_text,
+            "capture_endpoint_id": endpoint["runtime_endpoint_id"],
+            "wireshark": false
+        }),
+    )
+    .await?;
+    Ok((StatusCode::CREATED, updated))
+}
+
+async fn stop_link_capture(
+    State(state): State<AppState>,
+    Path((project_id, link_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    let project_id = project_id.to_string();
+    let link_id = link_id.to_string();
+    let link = get_topology_object(state.store.pool(), &project_id, "link", &link_id)
+        .await?
+        .0;
+    if let Some(endpoint_id) = link["capture_endpoint_id"].as_str()
+        && let Some(endpoint) = link["nodes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|endpoint| endpoint["runtime_endpoint_id"].as_str() == Some(endpoint_id))
+    {
+        LinkEngine::new(state.ubridge.clone())
+            .stop_capture(endpoint)
+            .await
+            .map_err(runtime_api_error)?;
+    }
+    let _ = update_topology_object(
+        state,
+        project_id,
+        link_id,
+        "link",
+        "link_id",
+        json!({ "capturing": false, "capture_endpoint_id": null, "wireshark": false }),
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn stream_link_capture(
+    State(state): State<AppState>,
+    Path((project_id, link_id)): Path<(Uuid, Uuid)>,
+) -> Result<Response, ApiError> {
+    link_capture_response(&state, &project_id.to_string(), &link_id.to_string(), true).await
+}
+
+async fn download_link_capture(
+    State(state): State<AppState>,
+    Path((project_id, link_id)): Path<(Uuid, Uuid)>,
+) -> Result<Response, ApiError> {
+    link_capture_response(&state, &project_id.to_string(), &link_id.to_string(), false).await
+}
+
+async fn link_capture_response(
+    state: &AppState,
+    project_id: &str,
+    link_id: &str,
+    require_active: bool,
+) -> Result<Response, ApiError> {
+    let link = get_topology_object(state.store.pool(), project_id, "link", link_id)
+        .await?
+        .0;
+    if require_active && !link["capturing"].as_bool().unwrap_or(false) {
+        return Err(ApiError::conflict("This link has no active packet capture"));
+    }
+    let path = link["capture_file_path"]
+        .as_str()
+        .ok_or_else(|| ApiError::not_found("Link has no capture file"))?;
+    if !require_active && !std::path::Path::new(path).is_file() {
+        return Err(ApiError::not_found(format!(
+            "Capture file is not available: {path}"
+        )));
+    }
+    let body = capture_file_body(
+        PathBuf::from(path),
+        require_active.then(|| {
+            (
+                state.store.pool().clone(),
+                project_id.to_owned(),
+                link_id.to_owned(),
+            )
+        }),
+    );
+    let mut response = body.into_response();
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        "application/vnd.tcpdump.pcap"
+            .parse()
+            .expect("valid media type"),
+    );
+    if !require_active
+        && let Some(file_name) = link["capture_file_name"].as_str()
+        && let Ok(value) = format!("attachment; filename=\"{file_name}\"").parse()
+    {
+        response
+            .headers_mut()
+            .insert(axum::http::header::CONTENT_DISPOSITION, value);
+    }
+    Ok(response)
+}
+
+fn capture_file_body(path: PathBuf, follow: Option<(SqlitePool, String, String)>) -> Body {
+    let stream = futures_util::stream::unfold(
+        (None::<tokio::fs::File>, false),
+        move |(mut file, finished)| {
+            let path = path.clone();
+            let follow = follow.clone();
+            async move {
+                if finished {
+                    return None;
+                }
+                loop {
+                    if file.is_none() {
+                        match tokio::fs::File::open(&path).await {
+                            Ok(opened) => file = Some(opened),
+                            Err(error)
+                                if error.kind() == std::io::ErrorKind::NotFound
+                                    && follow.is_some() =>
+                            {
+                                match capture_is_active(
+                                    follow.as_ref().expect("checked capture state"),
+                                )
+                                .await
+                                {
+                                    Ok(true) => sleep(Duration::from_millis(100)).await,
+                                    Ok(false) => return None,
+                                    Err(error) => return Some((Err(error), (None, true))),
+                                }
+                                continue;
+                            }
+                            Err(error) => return Some((Err(error), (None, true))),
+                        }
+                    }
+                    let mut buffer = vec![0_u8; 16 * 1024];
+                    match file
+                        .as_mut()
+                        .expect("capture file was opened")
+                        .read(&mut buffer)
+                        .await
+                    {
+                        Ok(0) => match follow.as_ref() {
+                            Some(capture) => match capture_is_active(capture).await {
+                                Ok(true) => sleep(Duration::from_millis(100)).await,
+                                Ok(false) => return None,
+                                Err(error) => return Some((Err(error), (file, true))),
+                            },
+                            None => return None,
+                        },
+                        Ok(read) => {
+                            buffer.truncate(read);
+                            return Some((Ok(Bytes::from(buffer)), (file, false)));
+                        }
+                        Err(error) => return Some((Err(error), (file, true))),
+                    }
+                }
+            }
+        },
+    );
+    Body::from_stream(stream)
+}
+
+async fn capture_is_active(
+    (pool, project_id, link_id): &(SqlitePool, String, String),
+) -> Result<bool, std::io::Error> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(json_extract(object_json, '$.capturing'), 0)
+         FROM topology_objects WHERE project_id = ? AND kind = 'link' AND object_id = ?",
+    )
+    .bind(project_id)
+    .bind(link_id)
+    .fetch_optional(pool)
+    .await
+    .map(|capturing| capturing == Some(1))
+    .map_err(std::io::Error::other)
+}
+
+fn capture_directory(project_id: &str) -> std::path::PathBuf {
+    std::env::var_os("NETWORK_SIMULATOR_CAPTURE_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("data/captures"))
+        .join(project_id)
+}
+
+fn safe_capture_file_name(file_name: &str) -> Result<String, ApiError> {
+    let path = FsPath::new(file_name);
+    if file_name.is_empty()
+        || file_name.len() > 255
+        || path.file_name().and_then(|name| name.to_str()) != Some(file_name)
+        || file_name == "."
+        || file_name == ".."
+    {
+        return Err(ApiError::bad_request(
+            "capture_file_name must be a simple file name",
+        ));
+    }
+    Ok(file_name.to_owned())
 }
 
 async fn delete_link(
@@ -3154,6 +5495,11 @@ async fn delete_node_and_connected_links(
         .await?;
         events.push(Store::append_event(&mut tx, &project_id, "link.deleted", &link).await?);
     }
+    sqlx::query("DELETE FROM node_files WHERE project_id = ? AND node_id = ?")
+        .bind(&project_id)
+        .bind(&node_id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query(
         "DELETE FROM topology_objects
          WHERE project_id = ? AND kind = 'node' AND object_id = ?",
@@ -3393,6 +5739,17 @@ async fn docker_console(
             "Attached Docker consoles are available for Docker nodes only",
         ));
     }
+    let console_type = node["console_type"].as_str().unwrap_or("telnet");
+    if console_type != "telnet" {
+        let detail = if matches!(console_type, "http" | "https" | "vnc") {
+            "use the Docker console TCP port"
+        } else {
+            "the Docker WebSocket route supports telnet consoles"
+        };
+        return Err(ApiError::conflict(format!(
+            "Docker {console_type} console is configured; {detail}"
+        )));
+    }
     let container_id = node["container_id"]
         .as_str()
         .ok_or_else(|| ApiError::conflict("Docker node has no runtime container"))?;
@@ -3411,7 +5768,56 @@ async fn docker_console(
         .runtime
         .attach_process(container_id)
         .map_err(runtime_api_error)?;
-    Ok(websocket.on_upgrade(move |socket| docker_console_session(socket, process)))
+    let runtime = state.runtime.clone();
+    let container_id = container_id.to_owned();
+    Ok(websocket.on_upgrade(move |socket| {
+        docker_console_session(socket, process, runtime, container_id, true)
+    }))
+}
+
+async fn docker_aux_console(
+    State(state): State<AppState>,
+    Path((project_id, node_id)): Path<(Uuid, Uuid)>,
+    websocket: WebSocketUpgrade,
+) -> Result<Response, ApiError> {
+    let project_id = project_id.to_string();
+    let node_id = node_id.to_string();
+    let node = get_topology_object(state.store.pool(), &project_id, "node", &node_id)
+        .await?
+        .0;
+    if node["node_type"].as_str() != Some("docker") {
+        return Err(ApiError::conflict(
+            "Auxiliary Docker consoles are available for Docker nodes only",
+        ));
+    }
+    if node["aux_type"].as_str().unwrap_or("none") == "none" {
+        return Err(ApiError::conflict(
+            "Configure a Docker auxiliary console before opening it",
+        ));
+    }
+    let container_id = node["container_id"]
+        .as_str()
+        .ok_or_else(|| ApiError::conflict("Docker node has no runtime container"))?;
+    if state
+        .runtime
+        .container_status(container_id)
+        .await
+        .map_err(runtime_api_error)?
+        != "started"
+    {
+        return Err(ApiError::conflict(
+            "Start the Docker node before opening its auxiliary console",
+        ));
+    }
+    let process = state
+        .runtime
+        .attach_aux_process(container_id)
+        .map_err(runtime_api_error)?;
+    let runtime = state.runtime.clone();
+    let container_id = container_id.to_owned();
+    Ok(websocket.on_upgrade(move |socket| {
+        docker_console_session(socket, process, runtime, container_id, false)
+    }))
 }
 
 async fn vpcs_console(
@@ -3535,7 +5941,13 @@ async fn vpcs_console_session(socket: WebSocket, console: TcpStream) {
     let _ = websocket_sink.close().await;
 }
 
-async fn docker_console_session(socket: WebSocket, mut process: tokio::process::Child) {
+async fn docker_console_session(
+    socket: WebSocket,
+    mut process: tokio::process::Child,
+    runtime: DockerRuntime,
+    container_id: String,
+    resize_container_tty: bool,
+) {
     let (Some(mut stdin), Some(mut stdout), Some(mut stderr)) = (
         process.stdin.take(),
         process.stdout.take(),
@@ -3553,6 +5965,14 @@ async fn docker_console_session(socket: WebSocket, mut process: tokio::process::
         tokio::select! {
             incoming = websocket_stream.next() => match incoming {
                 Some(Ok(Message::Text(text))) => {
+                    if resize_container_tty
+                        && let Some((rows, columns)) = parse_docker_resize_control(text.as_str())
+                    {
+                        if let Err(error) = runtime.resize_tty(&container_id, rows, columns).await {
+                            tracing::warn!(container_id, error = %error.message(), "Could not resize Docker console TTY");
+                        }
+                        continue;
+                    }
                     if stdin.write_all(text.as_bytes()).await.is_err() { break; }
                 }
                 Some(Ok(Message::Binary(bytes))) => {
@@ -3590,6 +6010,16 @@ async fn docker_console_session(socket: WebSocket, mut process: tokio::process::
         let _ = process.wait().await;
     }
     let _ = websocket_sink.close().await;
+}
+
+fn parse_docker_resize_control(text: &str) -> Option<(u16, u16)> {
+    let message: Value = serde_json::from_str(text).ok()?;
+    if message.get("type")?.as_str()? != "resize" {
+        return None;
+    }
+    let rows = u16::try_from(message.get("rows")?.as_u64()?).ok()?;
+    let columns = u16::try_from(message.get("columns")?.as_u64()?).ok()?;
+    (rows > 0 && columns > 0).then_some((rows, columns))
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -3937,7 +6367,10 @@ mod tests {
     use tempfile::TempDir;
     use tower::ServiceExt;
 
-    use super::{AppState, router};
+    use super::{
+        AppState, parse_docker_resize_control, router, validate_node_configuration_patch,
+        vpcs_startup_script,
+    };
     use crate::storage::Store;
     use crate::{
         dynamips::DynamipsRuntime, qemu::QemuRuntime, runtime::DockerRuntime, vpcs::VpcsRuntime,
@@ -3951,9 +6384,11 @@ mod tests {
             .expect("test database connects");
         let docker = directory.path().join("docker-test-double");
         let state_file = directory.path().join("container-state");
+        let docker_arguments = directory.path().join("docker-arguments.log");
         let script = format!(
-            "#!/bin/sh\nstate_file='{}'\ncase \"$1\" in\n  info) echo 29.6.2 ;;\n  image) if [ \"$2\" = ls ]; then printf '{{\"Repository\":\"alpine\",\"Tag\":\"latest\",\"ID\":\"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}}\\n'; else echo sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef; fi ;;\n  create) echo 0123456789abcdef; echo created > \"$state_file\" ;;\n  inspect) cat \"$state_file\" ;;\n  start|unpause) echo running > \"$state_file\" ;;\n  stop|restart) echo exited > \"$state_file\" ;;\n  pause) echo paused > \"$state_file\" ;;\n  network) if [ \"$2\" = create ]; then echo test-network-id; fi; exit 0 ;;\n  ps) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
-            state_file.display()
+            "#!/bin/sh\nstate_file='{}'\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1\" in\n  info) echo 29.6.2 ;;\n  image) if [ \"$2\" = ls ]; then printf '{{\"Repository\":\"alpine\",\"Tag\":\"latest\",\"ID\":\"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}}\\n'; else echo sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef; fi ;;\n  create) echo 0123456789abcdef; echo created > \"$state_file\" ;;\n  inspect) cat \"$state_file\" ;;\n  start|unpause) echo running > \"$state_file\" ;;\n  stop|restart) echo exited > \"$state_file\" ;;\n  pause) echo paused > \"$state_file\" ;;\n  network) if [ \"$2\" = create ]; then echo test-network-id; fi; exit 0 ;;\n  ps) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+            state_file.display(),
+            docker_arguments.display()
         );
         let script = script.replace(
             "  ps) exit 0 ;;",
@@ -4005,9 +6440,60 @@ mod tests {
                     directory.path().join("dynamips-images"),
                     directory.path().join("dynamips-state"),
                 ),
+                crate::marketplace::MarketplaceCatalog::with_directory(
+                    directory.path().join("appliances"),
+                ),
             )),
             directory,
         )
+    }
+
+    #[tokio::test]
+    async fn vpcs_base_script_file_is_loaded_from_project_files_and_inline_script_wins() {
+        let directory = TempDir::new().expect("temporary test directory");
+        let store = Store::connect(
+            directory
+                .path()
+                .join("vpcs-config.sqlite")
+                .to_str()
+                .expect("UTF-8 database path"),
+        )
+        .await
+        .expect("test database connects");
+        let project_id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO projects(project_id, name, status, project_json) VALUES(?, ?, ?, ?)",
+        )
+        .bind(&project_id)
+        .bind("VPCS script lab")
+        .bind("opened")
+        .bind("{}")
+        .execute(store.pool())
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO project_files(project_id, file_path, contents) VALUES(?, ?, ?)")
+            .bind(&project_id)
+            .bind("configs/base.vpc")
+            .bind(b"ip 192.0.2.1/24\n".as_slice())
+            .execute(store.pool())
+            .await
+            .unwrap();
+        let node = serde_json::json!({
+            "startup_script": "",
+            "base_script_file": "configs/base.vpc"
+        });
+        assert!(matches!(
+            vpcs_startup_script(store.pool(), &project_id, &node).await,
+            Ok(Some(script)) if script == "ip 192.0.2.1/24\n"
+        ));
+        let inline = serde_json::json!({
+            "startup_script": "ip 198.51.100.2/24",
+            "base_script_file": "configs/base.vpc"
+        });
+        assert!(matches!(
+            vpcs_startup_script(store.pool(), &project_id, &inline).await,
+            Ok(Some(script)) if script == "ip 198.51.100.2/24"
+        ));
     }
 
     async fn request(
@@ -4047,6 +6533,40 @@ mod tests {
             })
         };
         (status, json)
+    }
+
+    async fn create_custom_from_runtime(app: &axum::Router, runtime: &str, name: &str) -> Value {
+        let (status, manager) = request(
+            app,
+            Method::GET,
+            "/v3/marketplace/gns3/manager".into(),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let source_template_id =
+            manager["custom_image_options"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|template| template["template_type"] == runtime)
+                .unwrap_or_else(|| panic!("test runtime {runtime} has no installed image option"))
+                ["template_id"]
+                .as_str()
+                .expect("runtime image has a template ID");
+        let (status, appliance) = request(
+            app,
+            Method::POST,
+            "/v3/marketplace/gns3/custom".into(),
+            Some(serde_json::json!({
+                "name": name,
+                "source_template_id": source_template_id,
+                "runtime_settings": {}
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        appliance
     }
 
     async fn websocket_status(app: &axum::Router, uri: String) -> StatusCode {
@@ -4176,18 +6696,49 @@ mod tests {
         assert_eq!(status, StatusCode::CREATED);
 
         let endpoints = serde_json::json!([
-            { "node_id": node_a["node_id"], "adapter_number": 0, "port_number": 0 },
-            { "node_id": node_b["node_id"], "adapter_number": 0, "port_number": 0 }
+            { "node_id": node_a["node_id"], "adapter_number": 0, "port_number": 0, "label": { "text": "A" } },
+            { "node_id": node_b["node_id"], "adapter_number": 0, "port_number": 0, "label": { "text": "B" } }
         ]);
+        let (status, error) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/links"),
+            Some(serde_json::json!({ "nodes": [endpoints[0], endpoints[1], endpoints[0]] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(error["message"].as_str().unwrap().contains("exactly two"));
+
         let (status, link) = request(
             &app,
             Method::POST,
             format!("/v3/projects/{project_id}/links"),
-            Some(serde_json::json!({ "nodes": endpoints })),
+            Some(serde_json::json!({
+                "nodes": endpoints,
+                "suspend": true,
+                "filters": { "delay": [10, 5, "normal"], "packet_loss": [10] },
+                "link_style": { "width": 2 }
+            })),
         )
         .await;
         assert_eq!(status, StatusCode::CREATED);
         assert_eq!(link["nodes"].as_array().map(Vec::len), Some(2));
+        assert_eq!(
+            link["nodes"][0]["runtime_peer_link_port"],
+            link["nodes"][1]["runtime_link_port"]
+        );
+        assert_eq!(
+            link["nodes"][1]["runtime_peer_link_port"],
+            link["nodes"][0]["runtime_link_port"]
+        );
+        assert_eq!(link["nodes"][0]["label"]["text"], "A");
+        assert_eq!(link["nodes"][1]["label"]["text"], "B");
+        assert_eq!(link["suspend"], true);
+        assert_eq!(
+            link["filters"]["delay"],
+            serde_json::json!([10, 5, "normal"])
+        );
+        assert_eq!(link["link_style"]["width"], 2);
 
         let (status, conflict) = request(
             &app,
@@ -4236,7 +6787,8 @@ mod tests {
 
     #[tokio::test]
     async fn templates_create_nodes_with_real_runtime_lifecycle_routes() {
-        let (app, _directory) = test_router().await;
+        let (app, directory) = test_router().await;
+        create_custom_from_runtime(&app, "docker", "Alpine custom").await;
         let (status, templates) = request(&app, Method::GET, "/v3/templates".into(), None).await;
         assert_eq!(status, StatusCode::OK);
         let template = templates
@@ -4272,6 +6824,49 @@ mod tests {
         assert_eq!(node["x"], 24);
         assert_eq!(node["start_command"], "/bin/sh -c 'sleep 3600'");
 
+        let node_id = node["node_id"].as_str().unwrap();
+        let (status, configured) = request(
+            &app,
+            Method::PUT,
+            format!("/v3/projects/{project_id}/nodes/{node_id}/config"),
+            Some(serde_json::json!({
+                "memory": 256,
+                "cpus": 1.5,
+                "adapters": 2,
+                "environment": "LAB_ROLE=router",
+                "extra_hosts": "gateway:192.0.2.1",
+                "extra_volumes": ["/etc/lab"]
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(configured["memory"], 256);
+        assert_eq!(configured["cpus"], 1.5);
+        assert_eq!(configured["adapters"], 2);
+        assert_eq!(configured["environment"], "LAB_ROLE=router");
+        assert_eq!(configured["extra_hosts"], "gateway:192.0.2.1");
+        assert_eq!(configured["extra_volumes"], serde_json::json!(["/etc/lab"]));
+        let docker_arguments =
+            std::fs::read_to_string(directory.path().join("docker-arguments.log"))
+                .expect("Docker create arguments were recorded");
+        let creates = docker_arguments
+            .lines()
+            .filter(|line| line.starts_with("create "))
+            .collect::<Vec<_>>();
+        assert!(
+            creates.len() >= 2,
+            "the edit replaces the stopped container"
+        );
+        assert!(creates.iter().all(|line| line.contains("--network none")));
+        assert!(creates.iter().all(|line| line.contains("--privileged")));
+        assert!(creates.iter().any(|line| line.contains("--memory 256m")));
+        assert!(creates.iter().any(|line| line.contains("--cpus 1.5")));
+        assert!(
+            creates
+                .iter()
+                .any(|line| line.contains("--env LAB_ROLE=router"))
+        );
+
         let (status, node) = request(
             &app,
             Method::POST,
@@ -4284,6 +6879,20 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(node["status"], "started");
+        let (status, error) = request(
+            &app,
+            Method::PUT,
+            format!("/v3/projects/{project_id}/nodes/{node_id}/config"),
+            Some(serde_json::json!({ "memory": 512 })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("Stop this device")
+        );
 
         let (status, node) = request(
             &app,
@@ -4301,8 +6910,9 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires the upstream VPCS executable; set NETWORK_SIMULATOR_TEST_VPCS and run with --ignored"]
-    async fn vpcs_template_creates_nodes_and_shared_segments_through_the_controller() {
+    async fn vpcs_template_creates_nodes_and_point_to_point_links_through_the_controller() {
         let (app, _directory) = test_router().await;
+        create_custom_from_runtime(&app, "vpcs", "VPCS").await;
         let (status, templates) = request(&app, Method::GET, "/v3/templates".into(), None).await;
         assert_eq!(status, StatusCode::OK);
         let template = templates
@@ -4477,6 +7087,9 @@ mod tests {
             crate::qemu::QemuRuntime::new(),
             VpcsRuntime::with_paths(vpcs_binary, directory.path().join("vpcs-state")),
             DynamipsRuntime::new(),
+            crate::marketplace::MarketplaceCatalog::with_directory(
+                directory.path().join("appliances"),
+            ),
         ));
         let mut project_id: Option<String> = None;
 
@@ -4543,11 +7156,13 @@ mod tests {
             )
             .await;
             if status != StatusCode::CREATED
-                || link["nodes"][0]["runtime_ubridge_segment"]
-                    .as_str()
-                    .is_none()
+                || link["nodes"][0]["runtime_link_port"].as_u64().is_none()
+                || link["nodes"][1]["runtime_link_port"].as_u64().is_none()
+                || link["nodes"][0]["runtime_ubridge_segment"].is_string()
             {
-                return Err(format!("mixed link create returned {status}: {link}"));
+                return Err(format!(
+                    "mixed UDP NIO link create returned {status}: {link}"
+                ));
             }
 
             for node in [&vpcs_node, &docker_node] {
@@ -4573,18 +7188,18 @@ mod tests {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("docker"));
             for args in [
-                vec!["ip", "addr", "add", "10.0.0.2/24", "dev", "eth1"],
-                vec!["ip", "link", "set", "eth1", "up"],
+                vec!["ip", "addr", "add", "10.0.0.2/24", "dev", "eth0"],
+                vec!["ip", "link", "set", "eth0", "up"],
             ] {
                 let output = Command::new(&docker_binary)
                     .args(["exec", container_id])
                     .args(args)
                     .output()
                     .await
-                    .map_err(|error| format!("could not configure Alpine eth1: {error}"))?;
+                    .map_err(|error| format!("could not configure Alpine eth0: {error}"))?;
                 if !output.status.success() {
                     return Err(format!(
-                        "could not configure Alpine eth1: {}",
+                        "could not configure Alpine eth0: {}",
                         String::from_utf8_lossy(&output.stderr).trim()
                     ));
                 }
@@ -4636,6 +7251,1167 @@ mod tests {
             cleanup.is_ok(),
             "live mixed-runtime cleanup failed: {cleanup:?}"
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker, upstream VPCS/uBridge, and uBridge CAP_NET_ADMIN/CAP_NET_RAW"]
+    async fn builtin_switch_live_connects_three_hosts_and_isolates_access_vlans() {
+        use std::{env, path::Path, path::PathBuf};
+
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            process::Command,
+            time::{Duration, timeout},
+        };
+
+        async fn require_status(
+            app: &axum::Router,
+            method: Method,
+            uri: String,
+            body: Option<Value>,
+            expected: StatusCode,
+        ) -> Result<Value, String> {
+            let (status, response) = request(app, method, uri.clone(), body).await;
+            if status != expected {
+                return Err(format!("{uri} returned {status}: {response}"));
+            }
+            Ok(response)
+        }
+
+        async fn docker_command(
+            binary: &Path,
+            container: &str,
+            arguments: &[&str],
+        ) -> Result<std::process::Output, String> {
+            Command::new(binary)
+                .args(["exec", container])
+                .args(arguments)
+                .output()
+                .await
+                .map_err(|error| format!("Docker command failed to run: {error}"))
+        }
+
+        async fn vpcs_ping(
+            console: &mut tokio::net::TcpStream,
+            address: &str,
+        ) -> Result<bool, String> {
+            for _ in 0..2 {
+                console
+                    .write_all(format!("ping {address} -c 1\r").as_bytes())
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let mut output = Vec::new();
+                timeout(Duration::from_secs(8), async {
+                    loop {
+                        let mut chunk = [0_u8; 2048];
+                        let length = console.read(&mut chunk).await?;
+                        output.extend_from_slice(&chunk[..length]);
+                        let text = String::from_utf8_lossy(&output);
+                        if text.contains("bytes from") || text.contains("VPCS>") {
+                            break Ok::<(), std::io::Error>(());
+                        }
+                    }
+                })
+                .await
+                .map_err(|_| format!("VPCS ping to {address} timed out"))?
+                .map_err(|error| error.to_string())?;
+                if String::from_utf8_lossy(&output).contains("bytes from") {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+
+        let directory = TempDir::new().expect("temporary builtin live test state");
+        let store = Store::connect(
+            directory
+                .path()
+                .join("controller.sqlite")
+                .to_str()
+                .expect("UTF-8 test database path"),
+        )
+        .await
+        .expect("test database connects");
+        let vpcs_binary = env::var_os("NETWORK_SIMULATOR_TEST_VPCS")
+            .expect("NETWORK_SIMULATOR_TEST_VPCS names upstream VPCS");
+        let ubridge_binary = env::var_os("NETWORK_SIMULATOR_TEST_UBRIDGE")
+            .expect("NETWORK_SIMULATOR_TEST_UBRIDGE names capable upstream uBridge");
+        let vpcs = VpcsRuntime::with_paths(vpcs_binary, directory.path().join("vpcs-state"));
+        let ubridge = crate::ubridge::UbridgeRuntime::with_paths(
+            PathBuf::from(ubridge_binary),
+            directory.path().join("ubridge.sock"),
+        );
+        let app = router(AppState::with_runtimes_and_ubridge(
+            store,
+            DockerRuntime::new(),
+            QemuRuntime::new(),
+            vpcs.clone(),
+            DynamipsRuntime::new(),
+            ubridge.clone(),
+            crate::marketplace::MarketplaceCatalog::with_directory(
+                directory.path().join("appliances"),
+            ),
+        ));
+        let docker_binary = env::var_os("NETWORK_SIMULATOR_DOCKER")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("docker"));
+        let mut project_id: Option<String> = None;
+        let mut switch_node_id: Option<String> = None;
+        let mut vpcs_node_id: Option<String> = None;
+        let mut link_endpoints = Vec::<Value>::new();
+        let mut docker_hosts = Vec::<(String, String, String, String)>::new();
+
+        let run: Result<(), String> = async {
+            let project = require_status(
+                &app,
+                Method::POST,
+                "/v3/projects".into(),
+                Some(serde_json::json!({ "name": "Builtin switch live test" })),
+                StatusCode::CREATED,
+            )
+            .await?;
+            let current_project_id = project["project_id"]
+                .as_str()
+                .ok_or_else(|| "project has no ID".to_owned())?
+                .to_owned();
+            project_id = Some(current_project_id.clone());
+
+            let switch = require_status(
+                &app,
+                Method::POST,
+                format!("/v3/projects/{current_project_id}/nodes"),
+                Some(serde_json::json!({
+                    "name":"SW1",
+                    "node_type":"ethernet_switch",
+                    "ports_mapping":[
+                        {"type":"access","vlan":10},
+                        {"type":"access","vlan":10},
+                        {"type":"access","vlan":10},
+                        {"type":"access","vlan":20}
+                    ]
+                })),
+                StatusCode::CREATED,
+            )
+            .await?;
+            let switch_id = switch["node_id"]
+                .as_str()
+                .ok_or_else(|| "switch has no ID".to_owned())?
+                .to_owned();
+            switch_node_id = Some(switch_id.clone());
+
+            let mut hosts = Vec::<(String, String, String)>::new();
+            for (name, address) in [
+                ("Docker A", "10.0.10.1/24"),
+                ("Docker B", "10.0.10.3/24"),
+                ("Docker VLAN20", "10.0.10.4/24"),
+            ] {
+                let node = require_status(
+                    &app,
+                    Method::POST,
+                    format!("/v3/projects/{current_project_id}/nodes"),
+                    Some(serde_json::json!({
+                        "name":name,
+                        "node_type":"docker",
+                        "image":"alpine:latest",
+                        "start_command":"/bin/sh -c 'sleep 3600'",
+                        "adapters":1
+                    })),
+                    StatusCode::CREATED,
+                )
+                .await?;
+                let node_id = node["node_id"]
+                    .as_str()
+                    .ok_or_else(|| format!("{name} has no ID"))?
+                    .to_owned();
+                let container_id = node["container_id"]
+                    .as_str()
+                    .ok_or_else(|| format!("{name} has no container ID"))?
+                    .to_owned();
+                hosts.push((node_id.clone(), address.to_owned(), name.to_owned()));
+                docker_hosts.push((container_id, node_id, address.to_owned(), name.to_owned()));
+            }
+            let vpcs_node = require_status(
+                &app,
+                Method::POST,
+                format!("/v3/projects/{current_project_id}/nodes"),
+                Some(serde_json::json!({
+                    "name":"VPCS C",
+                    "node_type":"vpcs",
+                    "startup_script":"ip 10.0.10.2/24"
+                })),
+                StatusCode::CREATED,
+            )
+            .await?;
+            let vpcs_id = vpcs_node["node_id"]
+                .as_str()
+                .ok_or_else(|| "VPCS node has no ID".to_owned())?
+                .to_owned();
+            vpcs_node_id = Some(vpcs_id.clone());
+            hosts.insert(
+                2,
+                (
+                    vpcs_id.clone(),
+                    "10.0.10.2/24".to_owned(),
+                    "VPCS C".to_owned(),
+                ),
+            );
+
+            for (port_number, (node_id, _, name)) in hosts.iter().enumerate() {
+                let link = require_status(
+                    &app,
+                    Method::POST,
+                    format!("/v3/projects/{current_project_id}/links"),
+                    Some(serde_json::json!({ "nodes": [
+                        {"node_id":switch_id,"adapter_number":0,"port_number":port_number},
+                        {"node_id":node_id,"adapter_number":0,"port_number":0}
+                    ]})),
+                    StatusCode::CREATED,
+                )
+                .await
+                .map_err(|error| format!("{name} switch link: {error}"))?;
+                link_endpoints.extend(link["nodes"].as_array().into_iter().flatten().cloned());
+            }
+
+            for (node_id, _, name) in &hosts {
+                let started = require_status(
+                    &app,
+                    Method::POST,
+                    format!("/v3/projects/{current_project_id}/nodes/{node_id}/start"),
+                    Some(serde_json::json!({})),
+                    StatusCode::OK,
+                )
+                .await
+                .map_err(|error| format!("start {name}: {error}"))?;
+                if started["status"] != "started" {
+                    return Err(format!("{name} did not start: {started}"));
+                }
+            }
+
+            for (container, _, address, name) in &docker_hosts {
+                for arguments in [
+                    vec!["ip", "link", "set", "eth0", "up"],
+                    vec!["ip", "addr", "add", address, "dev", "eth0"],
+                ] {
+                    let output = docker_command(&docker_binary, container, &arguments).await?;
+                    if !output.status.success() {
+                        return Err(format!(
+                            "configure {name}: {}",
+                            String::from_utf8_lossy(&output.stderr).trim()
+                        ));
+                    }
+                }
+            }
+
+            let mut console = vpcs
+                .connect_console(&vpcs_id)
+                .await
+                .map_err(|error| error.message().to_owned())?;
+            let mut prompt = Vec::new();
+            timeout(Duration::from_secs(10), async {
+                loop {
+                    let mut chunk = [0_u8; 2048];
+                    let length = console.read(&mut chunk).await?;
+                    prompt.extend_from_slice(&chunk[..length]);
+                    if String::from_utf8_lossy(&prompt).contains("VPCS>") {
+                        break Ok::<(), std::io::Error>(());
+                    }
+                }
+            })
+            .await
+            .map_err(|_| "VPCS console prompt timed out")?
+            .map_err(|error| error.to_string())?;
+
+            for (container, _, _, name) in &docker_hosts[..2] {
+                let targets = if name == "Docker A" {
+                    ["10.0.10.2", "10.0.10.3"]
+                } else {
+                    ["10.0.10.1", "10.0.10.2"]
+                };
+                for target in targets {
+                    let output = Command::new(&docker_binary)
+                        .args(["exec", container, "ping", "-c", "1", "-W", "2", target])
+                        .output()
+                        .await
+                        .map_err(|error| format!("Docker ping could not run: {error}"))?;
+                    if !output.status.success()
+                        || !String::from_utf8_lossy(&output.stdout).contains("1 packets received")
+                    {
+                        return Err(format!(
+                            "{name} could not ping {target}: {}{}",
+                            String::from_utf8_lossy(&output.stdout),
+                            String::from_utf8_lossy(&output.stderr)
+                        ));
+                    }
+                }
+            }
+            for target in ["10.0.10.1", "10.0.10.3"] {
+                if !vpcs_ping(&mut console, target).await? {
+                    return Err(format!("VPCS could not ping {target} on the switch"));
+                }
+            }
+            let isolated = Command::new(&docker_binary)
+                .args([
+                    "exec",
+                    &docker_hosts[2].0,
+                    "ping",
+                    "-c",
+                    "1",
+                    "-W",
+                    "2",
+                    "10.0.10.1",
+                ])
+                .output()
+                .await
+                .map_err(|error| format!("VLAN isolation ping could not run: {error}"))?;
+            if isolated.status.success() {
+                return Err("VLAN20 access port reached the VLAN10 Docker host".to_owned());
+            }
+            Ok(())
+        }
+        .await;
+
+        let cleanup = if let Some(project_id) = project_id.as_deref() {
+            let (status, body) = request(
+                &app,
+                Method::DELETE,
+                format!("/v3/projects/{project_id}"),
+                None,
+            )
+            .await;
+            (status == StatusCode::NO_CONTENT)
+                .then_some(())
+                .ok_or_else(|| format!("builtin live test cleanup returned {status}: {body}"))
+        } else {
+            Ok(())
+        };
+        for endpoint in &link_endpoints {
+            let endpoint_id = endpoint["runtime_endpoint_id"].as_str().unwrap_or_default();
+            assert!(
+                !ubridge.has_link_endpoint(endpoint_id).await,
+                "uBridge endpoint remained after cleanup: {endpoint_id}"
+            );
+            if let Some(node_id) = endpoint["node_id"].as_str()
+                && docker_hosts
+                    .iter()
+                    .any(|(_, docker_node, _, _)| docker_node == node_id)
+            {
+                let host = crate::ubridge::host_veth_name(endpoint_id).expect("Docker veth name");
+                let output = Command::new("ip")
+                    .args(["link", "show", "dev", &host])
+                    .output()
+                    .await
+                    .expect("inspect cleaned Docker veth");
+                assert!(
+                    !output.status.success(),
+                    "Docker host veth remained: {host}"
+                );
+            }
+        }
+        if let Some(node_id) = vpcs_node_id.as_deref() {
+            assert_eq!(
+                vpcs.status(node_id).await.expect("inspect cleaned VPCS"),
+                "stopped"
+            );
+        }
+        assert!(run.is_ok(), "builtin switch live test failed: {run:?}");
+        assert!(
+            cleanup.is_ok(),
+            "builtin switch cleanup failed: {cleanup:?}"
+        );
+        let _ = switch_node_id;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker, upstream VPCS/uBridge, and uBridge CAP_NET_ADMIN/CAP_NET_RAW"]
+    async fn builtin_hub_live_forwards_docker_vpcs_traffic_and_cleans_links() {
+        use std::{env, path::PathBuf};
+
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            process::Command,
+            time::{Duration, timeout},
+        };
+
+        let directory = TempDir::new().expect("temporary builtin hub live test state");
+        let store = Store::connect(
+            directory
+                .path()
+                .join("controller.sqlite")
+                .to_str()
+                .expect("UTF-8 test database path"),
+        )
+        .await
+        .expect("test database connects");
+        let vpcs_binary = env::var_os("NETWORK_SIMULATOR_TEST_VPCS")
+            .expect("NETWORK_SIMULATOR_TEST_VPCS names upstream VPCS");
+        let ubridge_binary = env::var_os("NETWORK_SIMULATOR_TEST_UBRIDGE")
+            .expect("NETWORK_SIMULATOR_TEST_UBRIDGE names capable upstream uBridge");
+        let vpcs = VpcsRuntime::with_paths(vpcs_binary, directory.path().join("vpcs-state"));
+        let ubridge = crate::ubridge::UbridgeRuntime::with_paths(
+            PathBuf::from(ubridge_binary),
+            directory.path().join("ubridge.sock"),
+        );
+        let app = router(AppState::with_runtimes_and_ubridge(
+            store,
+            DockerRuntime::new(),
+            QemuRuntime::new(),
+            vpcs.clone(),
+            DynamipsRuntime::new(),
+            ubridge.clone(),
+            crate::marketplace::MarketplaceCatalog::with_directory(
+                directory.path().join("appliances"),
+            ),
+        ));
+        let docker_binary = env::var_os("NETWORK_SIMULATOR_DOCKER")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("docker"));
+        let mut project_id = None;
+        let mut docker_node_id = None;
+        let mut docker_container_id = None;
+        let mut vpcs_node_id = None;
+        let mut endpoints = Vec::new();
+
+        let run: Result<(), String> = async {
+            let (status, project) = request(
+                &app,
+                Method::POST,
+                "/v3/projects".into(),
+                Some(serde_json::json!({"name":"Builtin hub live test"})),
+            )
+            .await;
+            if status != StatusCode::CREATED {
+                return Err(format!("create project returned {status}: {project}"));
+            }
+            let pid = project["project_id"]
+                .as_str()
+                .ok_or_else(|| "project has no ID".to_owned())?
+                .to_owned();
+            project_id = Some(pid.clone());
+
+            let (status, hub) = request(
+                &app,
+                Method::POST,
+                format!("/v3/projects/{pid}/nodes"),
+                Some(serde_json::json!({"name":"HUB1","node_type":"ethernet_hub"})),
+            )
+            .await;
+            if status != StatusCode::CREATED {
+                return Err(format!("create hub returned {status}: {hub}"));
+            }
+            let hub_id = hub["node_id"]
+                .as_str()
+                .ok_or_else(|| "hub has no ID".to_owned())?
+                .to_owned();
+
+            let (status, docker_node) = request(
+                &app,
+                Method::POST,
+                format!("/v3/projects/{pid}/nodes"),
+                Some(serde_json::json!({
+                    "name":"Docker hub host","node_type":"docker","image":"alpine:latest",
+                    "start_command":"/bin/sh -c 'sleep 3600'","adapters":1
+                })),
+            )
+            .await;
+            if status != StatusCode::CREATED {
+                return Err(format!(
+                    "create Docker node returned {status}: {docker_node}"
+                ));
+            }
+            let docker_id = docker_node["node_id"]
+                .as_str()
+                .ok_or_else(|| "Docker node has no ID".to_owned())?
+                .to_owned();
+            let container_id = docker_node["container_id"]
+                .as_str()
+                .ok_or_else(|| "Docker node has no container ID".to_owned())?
+                .to_owned();
+            docker_node_id = Some(docker_id.clone());
+            docker_container_id = Some(container_id.clone());
+
+            let (status, vpcs_node) = request(
+                &app,
+                Method::POST,
+                format!("/v3/projects/{pid}/nodes"),
+                Some(serde_json::json!({
+                    "name":"VPCS hub host","node_type":"vpcs","startup_script":"ip 10.20.0.2/24"
+                })),
+            )
+            .await;
+            if status != StatusCode::CREATED {
+                return Err(format!("create VPCS node returned {status}: {vpcs_node}"));
+            }
+            let vpcs_id = vpcs_node["node_id"]
+                .as_str()
+                .ok_or_else(|| "VPCS node has no ID".to_owned())?
+                .to_owned();
+            vpcs_node_id = Some(vpcs_id.clone());
+
+            for (port, host_id) in [(0_u64, docker_id.as_str()), (1, vpcs_id.as_str())] {
+                let (status, link) = request(
+                    &app,
+                    Method::POST,
+                    format!("/v3/projects/{pid}/links"),
+                    Some(serde_json::json!({"nodes":[
+                        {"node_id":hub_id,"adapter_number":0,"port_number":port},
+                        {"node_id":host_id,"adapter_number":0,"port_number":0}
+                    ]})),
+                )
+                .await;
+                if status != StatusCode::CREATED {
+                    return Err(format!("create hub link returned {status}: {link}"));
+                }
+                endpoints.extend(link["nodes"].as_array().into_iter().flatten().cloned());
+            }
+
+            for (node_id, name) in [(&docker_id, "Docker hub host"), (&vpcs_id, "VPCS hub host")] {
+                let (status, body) = request(
+                    &app,
+                    Method::POST,
+                    format!("/v3/projects/{pid}/nodes/{node_id}/start"),
+                    Some(serde_json::json!({})),
+                )
+                .await;
+                if status != StatusCode::OK || body["status"] != "started" {
+                    return Err(format!("start {name} returned {status}: {body}"));
+                }
+            }
+
+            for arguments in [
+                vec!["exec", &container_id, "ip", "link", "set", "eth0", "up"],
+                vec![
+                    "exec",
+                    &container_id,
+                    "ip",
+                    "addr",
+                    "add",
+                    "10.20.0.1/24",
+                    "dev",
+                    "eth0",
+                ],
+            ] {
+                let output = Command::new(&docker_binary)
+                    .args(arguments)
+                    .output()
+                    .await
+                    .map_err(|error| format!("Docker command failed: {error}"))?;
+                if !output.status.success() {
+                    return Err(format!(
+                        "configure Docker hub host failed: {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    ));
+                }
+            }
+
+            let mut console = vpcs
+                .connect_console(&vpcs_id)
+                .await
+                .map_err(|error| error.message().to_owned())?;
+            let mut prompt = Vec::new();
+            timeout(Duration::from_secs(10), async {
+                loop {
+                    let mut chunk = [0_u8; 2048];
+                    let length = console.read(&mut chunk).await?;
+                    prompt.extend_from_slice(&chunk[..length]);
+                    if String::from_utf8_lossy(&prompt).contains("VPCS>") {
+                        break Ok::<(), std::io::Error>(());
+                    }
+                }
+            })
+            .await
+            .map_err(|_| "VPCS console prompt timed out")?
+            .map_err(|error| error.to_string())?;
+            for attempt in 0..2 {
+                console
+                    .write_all(b"ping 10.20.0.1 -c 1\r")
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let mut output = Vec::new();
+                timeout(Duration::from_secs(8), async {
+                    loop {
+                        let mut chunk = [0_u8; 2048];
+                        let length = console.read(&mut chunk).await?;
+                        output.extend_from_slice(&chunk[..length]);
+                        let text = String::from_utf8_lossy(&output);
+                        if text.contains("bytes from") || text.contains("VPCS>") {
+                            break Ok::<(), std::io::Error>(());
+                        }
+                    }
+                })
+                .await
+                .map_err(|_| "VPCS hub ping timed out")?
+                .map_err(|error| error.to_string())?;
+                if String::from_utf8_lossy(&output).contains("bytes from") {
+                    break;
+                }
+                if attempt == 1 {
+                    return Err(format!(
+                        "VPCS could not ping Docker through hub: {}",
+                        String::from_utf8_lossy(&output)
+                    ));
+                }
+            }
+
+            let output = Command::new(&docker_binary)
+                .args([
+                    "exec",
+                    &container_id,
+                    "ping",
+                    "-c",
+                    "1",
+                    "-W",
+                    "2",
+                    "10.20.0.2",
+                ])
+                .output()
+                .await
+                .map_err(|error| format!("Docker ping could not run: {error}"))?;
+            if !output.status.success() {
+                return Err(format!(
+                    "Docker could not ping VPCS through hub: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            Ok(())
+        }
+        .await;
+
+        let cleanup = if let Some(pid) = project_id.as_deref() {
+            let (status, body) =
+                request(&app, Method::DELETE, format!("/v3/projects/{pid}"), None).await;
+            (status == StatusCode::NO_CONTENT)
+                .then_some(())
+                .ok_or_else(|| format!("hub live test cleanup returned {status}: {body}"))
+        } else {
+            Ok(())
+        };
+        for endpoint in &endpoints {
+            let endpoint_id = endpoint["runtime_endpoint_id"].as_str().unwrap_or_default();
+            assert!(
+                !ubridge.has_link_endpoint(endpoint_id).await,
+                "uBridge endpoint remained after hub cleanup: {endpoint_id}"
+            );
+        }
+        if let Some(node_id) = vpcs_node_id.as_deref() {
+            assert_eq!(
+                vpcs.status(node_id).await.expect("inspect VPCS cleanup"),
+                "stopped"
+            );
+        }
+        if let Some(node_id) = docker_node_id.as_deref() {
+            if let Some(endpoint) = endpoints
+                .iter()
+                .find(|endpoint| endpoint["node_id"] == node_id)
+            {
+                let host = crate::ubridge::host_veth_name(
+                    endpoint["runtime_endpoint_id"].as_str().unwrap_or_default(),
+                )
+                .expect("Docker host veth name");
+                let output = Command::new("ip")
+                    .args(["link", "show", "dev", &host])
+                    .output()
+                    .await
+                    .expect("inspect cleaned Docker veth");
+                assert!(
+                    !output.status.success(),
+                    "Docker host veth remained: {host}"
+                );
+            }
+        }
+        if let Some(container_id) = docker_container_id.as_deref() {
+            let output = Command::new(&docker_binary)
+                .args(["inspect", container_id])
+                .output()
+                .await
+                .expect("inspect removed Docker hub host");
+            assert!(
+                !output.status.success(),
+                "Docker container remained: {container_id}"
+            );
+        }
+        assert!(run.is_ok(), "builtin hub live test failed: {run:?}");
+        assert!(cleanup.is_ok(), "builtin hub cleanup failed: {cleanup:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker, upstream VPCS/uBridge, KVM, and the installed MikroTik CHR image"]
+    async fn chr_routes_vpcs_and_docker_over_controller_udp_nios() {
+        use std::{env, path::PathBuf};
+
+        use tokio::{
+            io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+            net::UnixStream,
+            process::Command,
+            time::{Duration, timeout},
+        };
+        use uuid::Uuid;
+
+        fn strip_ansi(input: &[u8]) -> String {
+            let mut output = String::new();
+            let mut index = 0;
+            while index < input.len() {
+                if input[index] == 0x1b {
+                    index += 1;
+                    if input.get(index) == Some(&b'[') {
+                        index += 1;
+                        while index < input.len() {
+                            let byte = input[index];
+                            index += 1;
+                            if (0x40..=0x7e).contains(&byte) {
+                                break;
+                            }
+                        }
+                    } else if index < input.len() {
+                        index += 1;
+                    }
+                } else {
+                    let byte = input[index];
+                    index += 1;
+                    if byte == b'\r' || byte == b'\n' || byte.is_ascii_graphic() || byte == b' ' {
+                        output.push(byte as char);
+                    }
+                }
+            }
+            output
+        }
+
+        async fn read_until(
+            serial: &mut BufReader<UnixStream>,
+            marker: &str,
+            duration: Duration,
+        ) -> Result<String, String> {
+            let mut bytes = Vec::new();
+            timeout(duration, async {
+                loop {
+                    let (read, found) = {
+                        let available =
+                            serial.fill_buf().await.map_err(|error| error.to_string())?;
+                        if available.is_empty() {
+                            return Err("QEMU serial socket closed".to_owned());
+                        }
+                        let previous_len = bytes.len();
+                        bytes.extend_from_slice(available);
+                        let marker_end = bytes
+                            .windows(marker.len())
+                            .position(|window| window == marker.as_bytes())
+                            .map(|position| position + marker.len());
+                        match marker_end {
+                            Some(end) => {
+                                (end.saturating_sub(previous_len).min(available.len()), true)
+                            }
+                            None => (available.len(), false),
+                        }
+                    };
+                    serial.consume(read);
+                    if found {
+                        return Ok::<String, String>(strip_ansi(&bytes));
+                    }
+                }
+            })
+            .await
+            .map_err(|_| {
+                format!(
+                    "timed out waiting for {marker:?}; output: {}",
+                    strip_ansi(&bytes)
+                )
+            })?
+        }
+
+        async fn routeros_command(
+            serial: &mut BufReader<UnixStream>,
+            command: &str,
+        ) -> Result<String, String> {
+            serial
+                .write_all(command.as_bytes())
+                .await
+                .map_err(|error| error.to_string())?;
+            serial
+                .write_all(b"\r")
+                .await
+                .map_err(|error| error.to_string())?;
+            read_until(serial, &format!("{command}\r\n"), Duration::from_secs(5)).await?;
+            read_until(serial, "[admin@CHR] >", Duration::from_secs(15)).await
+        }
+
+        fn qemu_test_mac(node_id: &str, adapter_number: u32) -> Result<String, String> {
+            let id = Uuid::parse_str(node_id).map_err(|error| error.to_string())?;
+            let bytes = id.as_bytes();
+            Ok(format!(
+                "52:54:00:{:02x}:{:02x}:{:02x}",
+                bytes[13] ^ ((adapter_number >> 16) as u8),
+                bytes[14] ^ ((adapter_number >> 8) as u8),
+                bytes[15] ^ (adapter_number as u8)
+            ))
+        }
+
+        fn qemu_interface_for_mac(output: &str, mac: &str) -> Option<String> {
+            let mut name = None;
+            for line in output.lines() {
+                if let Some((_, value)) = line.split_once("name=") {
+                    let value = value.trim_start_matches('"');
+                    let end = value
+                        .find('"')
+                        .or_else(|| value.find(char::is_whitespace))
+                        .unwrap_or(value.len());
+                    name = Some(value[..end].to_owned());
+                }
+                if line
+                    .to_ascii_lowercase()
+                    .contains(&mac.to_ascii_lowercase())
+                {
+                    return name;
+                }
+            }
+            None
+        }
+
+        let directory = TempDir::new().expect("temporary CHR test state");
+        let store = Store::connect(
+            directory
+                .path()
+                .join("controller.sqlite")
+                .to_str()
+                .expect("UTF-8 test database path"),
+        )
+        .await
+        .expect("test database connects");
+        let qemu = QemuRuntime::new();
+        let docker = DockerRuntime::new();
+        let vpcs_binary = env::var_os("NETWORK_SIMULATOR_TEST_VPCS")
+            .expect("NETWORK_SIMULATOR_TEST_VPCS names upstream VPCS");
+        let ubridge_binary = env::var_os("NETWORK_SIMULATOR_TEST_UBRIDGE")
+            .expect("NETWORK_SIMULATOR_TEST_UBRIDGE names capable upstream uBridge");
+        let vpcs = VpcsRuntime::with_paths(vpcs_binary, directory.path().join("vpcs-state"));
+        let ubridge = crate::ubridge::UbridgeRuntime::with_paths(
+            PathBuf::from(ubridge_binary),
+            directory.path().join("ubridge.sock"),
+        );
+        let app = router(AppState::with_runtimes_and_ubridge(
+            store,
+            docker.clone(),
+            qemu.clone(),
+            vpcs.clone(),
+            DynamipsRuntime::new(),
+            ubridge.clone(),
+            crate::marketplace::MarketplaceCatalog::with_directory(
+                directory.path().join("appliances"),
+            ),
+        ));
+        let mut project_id: Option<String> = None;
+        let mut qemu_vm = None;
+        let mut docker_container: Option<String> = None;
+        let mut vpcs_node_id: Option<String> = None;
+        let mut docker_node_id: Option<String> = None;
+        let mut link_endpoints = Vec::<Value>::new();
+
+        let run: Result<(), String> = async {
+            create_custom_from_runtime(&app, "qemu", "Live CHR").await;
+            let (status, templates) = request(&app, Method::GET, "/v3/templates".into(), None).await;
+            if status != StatusCode::OK {
+                return Err(format!("template list returned {status}: {templates}"));
+            }
+            let template_id = templates.as_array().into_iter().flatten()
+                .find(|template| template["name"] == "Live CHR · Default")
+                .and_then(|template| template["template_id"].as_str())
+                .ok_or_else(|| format!("CHR template is missing: {templates}"))?;
+            let (status, project) = request(
+                &app,
+                Method::POST,
+                "/v3/projects".into(),
+                Some(serde_json::json!({ "name": "Live CHR NIO matrix" })),
+            ).await;
+            if status != StatusCode::CREATED {
+                return Err(format!("project create returned {status}: {project}"));
+            }
+            let current_project_id = project["project_id"].as_str().ok_or("project has no ID")?.to_owned();
+            project_id = Some(current_project_id.clone());
+
+            let (status, chr) = request(
+                &app,
+                Method::POST,
+                format!("/v3/projects/{current_project_id}/templates/{template_id}"),
+                Some(serde_json::json!({
+                    "name": "CHR",
+                    "memory": 512,
+                    "cpus": 1,
+                    "adapters": 2,
+                    "adapter_type": "virtio-net-pci"
+                })),
+            ).await;
+            if status != StatusCode::CREATED {
+                return Err(format!("CHR node create returned {status}: {chr}"));
+            }
+            let chr_node_id = chr["node_id"].as_str().ok_or("CHR node has no ID")?;
+            let (status, configured_chr) = request(
+                &app,
+                Method::PUT,
+                format!("/v3/projects/{current_project_id}/nodes/{chr_node_id}/config"),
+                Some(serde_json::json!({ "adapters": 2 })),
+            ).await;
+            if status != StatusCode::OK {
+                return Err(format!("CHR adapter configuration returned {status}: {configured_chr}"));
+            }
+            qemu_vm = Some(qemu.vm_from_node(&configured_chr).map_err(|error| error.message().to_owned())?);
+
+            let (status, vpcs_node) = request(
+                &app,
+                Method::POST,
+                format!("/v3/projects/{current_project_id}/nodes"),
+                Some(serde_json::json!({
+                    "name": "VPCS peer",
+                    "node_type": "vpcs",
+                    "startup_script": "ip 10.0.1.2/24"
+                })),
+            ).await;
+            if status != StatusCode::CREATED {
+                return Err(format!("VPCS node create returned {status}: {vpcs_node}"));
+            }
+            vpcs_node_id = vpcs_node["node_id"].as_str().map(str::to_owned);
+            let (status, docker_node) = request(
+                &app,
+                Method::POST,
+                format!("/v3/projects/{current_project_id}/nodes"),
+                Some(serde_json::json!({
+                    "name": "Alpine peer",
+                    "node_type": "docker",
+                    "image": "alpine:latest",
+                    "start_command": "/bin/sh -c 'sleep 3600'",
+                    "adapters": 1
+                })),
+            ).await;
+            if status != StatusCode::CREATED {
+                return Err(format!("Docker node create returned {status}: {docker_node}"));
+            }
+            docker_node_id = docker_node["node_id"].as_str().map(str::to_owned);
+            docker_container = docker_node["container_id"].as_str().map(str::to_owned);
+
+            let vpcs_link = serde_json::json!({ "nodes": [
+                { "node_id": chr["node_id"], "adapter_number": 0, "port_number": 0 },
+                { "node_id": vpcs_node["node_id"], "adapter_number": 0, "port_number": 0 }
+            ] });
+            let (status, vpcs_link) = request(
+                &app,
+                Method::POST,
+                format!("/v3/projects/{current_project_id}/links"),
+                Some(vpcs_link),
+            ).await;
+            if status != StatusCode::CREATED {
+                return Err(format!("CHR↔VPCS link returned {status}: {vpcs_link}"));
+            }
+            link_endpoints.extend(vpcs_link["nodes"].as_array().into_iter().flatten().cloned());
+
+            let docker_link = serde_json::json!({ "nodes": [
+                { "node_id": chr["node_id"], "adapter_number": 1, "port_number": 0 },
+                { "node_id": docker_node["node_id"], "adapter_number": 0, "port_number": 0 }
+            ] });
+            let (status, docker_link) = request(
+                &app,
+                Method::POST,
+                format!("/v3/projects/{current_project_id}/links"),
+                Some(docker_link),
+            ).await;
+            if status != StatusCode::CREATED {
+                return Err(format!("CHR↔Docker link returned {status}: {docker_link}"));
+            }
+            link_endpoints.extend(docker_link["nodes"].as_array().into_iter().flatten().cloned());
+
+            for node in [&chr, &vpcs_node, &docker_node] {
+                let node_id = node["node_id"].as_str().ok_or("node has no ID")?;
+                let (status, started) = request(
+                    &app,
+                    Method::POST,
+                    format!("/v3/projects/{current_project_id}/nodes/{node_id}/start"),
+                    Some(serde_json::json!({})),
+                ).await;
+                if status != StatusCode::OK || started["status"] != "started" {
+                    return Err(format!("node start returned {status}: {started}"));
+                }
+            }
+
+            let vm = qemu_vm.as_ref().ok_or("CHR runtime model missing")?;
+            let serial_socket = UnixStream::connect(&vm.serial_socket)
+                .await
+                .map_err(|error| format!("CHR serial socket did not open: {error}"))?;
+            let mut serial = BufReader::new(serial_socket);
+            read_until(&mut serial, "CHR Login:", Duration::from_secs(180)).await?;
+            serial.write_all(b"admin\r").await.map_err(|error| error.to_string())?;
+            read_until(&mut serial, "Password:", Duration::from_secs(10)).await?;
+            serial.write_all(b"\r").await.map_err(|error| error.to_string())?;
+            read_until(
+                &mut serial,
+                "Do you want to see the software license? [Y/n]:",
+                Duration::from_secs(30),
+            ).await?;
+            serial.write_all(b"n\r").await.map_err(|error| error.to_string())?;
+            read_until(&mut serial, "new password>", Duration::from_secs(20)).await?;
+            serial.write_all(b"\x03").await.map_err(|error| error.to_string())?;
+            read_until(&mut serial, "[admin@CHR] >", Duration::from_secs(20)).await?;
+
+            let interface_output = routeros_command(&mut serial, "/interface ethernet print detail").await?;
+            let interface0 = qemu_interface_for_mac(
+                &interface_output,
+                &qemu_test_mac(chr["node_id"].as_str().ok_or("CHR node has no ID")?, 0)?,
+            );
+            let interface1 = qemu_interface_for_mac(
+                &interface_output,
+                &qemu_test_mac(chr["node_id"].as_str().ok_or("CHR node has no ID")?, 1)?,
+            );
+            let (Some(interface0), Some(interface1)) = (interface0, interface1) else {
+                return Err(format!("CHR did not expose both linked interfaces: {interface_output}"));
+            };
+            routeros_command(&mut serial, &format!("/ip address add address=10.0.1.1/24 interface={interface0}")).await?;
+            routeros_command(&mut serial, &format!("/ip address add address=10.0.2.1/24 interface={interface1}")).await?;
+
+            let container_id = docker_container.as_deref().ok_or("Docker node has no container ID")?;
+            let docker_binary = env::var_os("NETWORK_SIMULATOR_DOCKER")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("docker"));
+            for args in [
+                vec!["ip", "addr", "add", "10.0.2.2/24", "dev", "eth0"],
+                vec!["ip", "link", "set", "eth0", "up"],
+            ] {
+                let output = Command::new(&docker_binary)
+                    .args(["exec", container_id])
+                    .args(args)
+                    .output()
+                    .await
+                    .map_err(|error| format!("could not configure Alpine eth0: {error}"))?;
+                if !output.status.success() {
+                    return Err(format!("could not configure Alpine eth0: {}", String::from_utf8_lossy(&output.stderr).trim()));
+                }
+            }
+            let output = Command::new(&docker_binary)
+                .args(["exec", container_id, "ping", "-c", "1", "-W", "4", "10.0.2.1"])
+                .output()
+                .await
+                .map_err(|error| format!("could not ping CHR from Alpine: {error}"))?;
+            let docker_ping_ok = output.status.success()
+                && String::from_utf8_lossy(&output.stdout).contains("1 packets received");
+            let docker_ping_output = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let chr_ping_output = routeros_command(&mut serial, "/ping 10.0.2.2 count=1").await?;
+
+            let mut vpcs_console = vpcs.connect_console(vpcs_node["node_id"].as_str().ok_or("VPCS node has no ID")?)
+                .await.map_err(|error| error.message().to_owned())?;
+            let mut vpcs_output = Vec::new();
+            timeout(Duration::from_secs(5), async {
+                loop {
+                    let mut chunk = [0_u8; 2048];
+                    let length = vpcs_console.read(&mut chunk).await?;
+                    vpcs_output.extend_from_slice(&chunk[..length]);
+                    if String::from_utf8_lossy(&vpcs_output).contains("VPCS>") { break Ok::<(), std::io::Error>(()); }
+                }
+            }).await.map_err(|_| "VPCS console prompt timed out")?
+                .map_err(|error| error.to_string())?;
+            vpcs_output.clear();
+            let mut vpcs_ping_ok = false;
+            for _ in 0..3 {
+                vpcs_console.write_all(b"ping 10.0.1.1 -c 1\r").await.map_err(|error| error.to_string())?;
+                let mut attempt_output = Vec::new();
+                timeout(Duration::from_secs(8), async {
+                    loop {
+                        let mut chunk = [0_u8; 2048];
+                        let length = vpcs_console.read(&mut chunk).await?;
+                        attempt_output.extend_from_slice(&chunk[..length]);
+                        let text = String::from_utf8_lossy(&attempt_output);
+                        if text.contains("bytes from 10.0.1.1") || text.contains("VPCS>") {
+                            break Ok::<(), std::io::Error>(());
+                        }
+                    }
+                }).await.map_err(|_| format!("VPCS↔CHR ping timed out: {}", String::from_utf8_lossy(&attempt_output)))?
+                    .map_err(|error| error.to_string())?;
+                vpcs_ping_ok = String::from_utf8_lossy(&attempt_output).contains("bytes from 10.0.1.1");
+                vpcs_output.extend_from_slice(&attempt_output);
+                if vpcs_ping_ok { break; }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            if !docker_ping_ok || !chr_ping_output.contains("received=1") || !vpcs_ping_ok {
+                return Err(format!(
+                    "QEMU connectivity failed; Alpine ping: {docker_ping_output}; CHR ping: {chr_ping_output}; VPCS ping: {}",
+                    String::from_utf8_lossy(&vpcs_output)
+                ));
+            }
+            Ok(())
+        }
+        .await;
+
+        let cleanup = if let Some(project_id) = project_id {
+            let (status, body) = request(
+                &app,
+                Method::DELETE,
+                format!("/v3/projects/{project_id}"),
+                None,
+            )
+            .await;
+            (status == StatusCode::NO_CONTENT)
+                .then_some(())
+                .ok_or_else(|| format!("temporary CHR project cleanup returned {status}: {body}"))
+        } else {
+            Ok(())
+        };
+        if let Some(vm) = qemu_vm.as_ref() {
+            assert_eq!(
+                qemu.status(vm).await.expect("inspect cleaned CHR"),
+                "stopped"
+            );
+            assert!(
+                !vm.pid_file.exists(),
+                "QEMU pid file remained after project deletion"
+            );
+        }
+        for endpoint in &link_endpoints {
+            assert!(
+                !ubridge
+                    .has_link_endpoint(endpoint["runtime_endpoint_id"].as_str().unwrap_or_default())
+                    .await
+            );
+        }
+        if let Some(node_id) = vpcs_node_id.as_deref() {
+            assert_eq!(
+                vpcs.status(node_id).await.expect("inspect cleaned VPCS"),
+                "stopped"
+            );
+        }
+        if let Some(container_id) = docker_container.as_deref() {
+            let docker_binary = env::var_os("NETWORK_SIMULATOR_DOCKER")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("docker"));
+            let inspect = Command::new(&docker_binary)
+                .args(["inspect", container_id])
+                .output()
+                .await
+                .expect("inspect cleaned Alpine container");
+            assert!(
+                !inspect.status.success(),
+                "Alpine container remained after project deletion"
+            );
+        }
+        if let Some(node_id) = docker_node_id.as_deref() {
+            for endpoint in link_endpoints
+                .iter()
+                .filter(|endpoint| endpoint["node_id"].as_str() == Some(node_id))
+            {
+                let host = crate::ubridge::host_veth_name(
+                    endpoint["runtime_endpoint_id"].as_str().unwrap(),
+                )
+                .expect("Docker host veth name");
+                let inspect = Command::new("ip")
+                    .args(["link", "show", "dev", &host])
+                    .output()
+                    .await
+                    .expect("inspect cleaned Docker host veth");
+                assert!(
+                    !inspect.status.success(),
+                    "Docker host veth remained after project deletion: {host}"
+                );
+            }
+        }
+        assert!(run.is_ok(), "live CHR NIO matrix failed: {run:?}");
+        assert!(cleanup.is_ok(), "live CHR cleanup failed: {cleanup:?}");
     }
 
     #[tokio::test]
@@ -4726,6 +8502,7 @@ mod tests {
     #[tokio::test]
     async fn qemu_templates_create_private_disks_and_exercise_qmp_process_lifecycle() {
         let (app, directory) = test_router().await;
+        create_custom_from_runtime(&app, "qemu", "Test Router").await;
         let (status, templates) = request(&app, Method::GET, "/v3/templates".into(), None).await;
         assert_eq!(status, StatusCode::OK);
         let template = templates
@@ -4733,20 +8510,22 @@ mod tests {
             .unwrap()
             .iter()
             .find(|template| template["template_type"] == "qemu")
-            .expect("local QEMU disk template is listed");
+            .unwrap_or_else(|| {
+                panic!("custom QEMU appliance did not create a palette template: {templates:#}")
+            });
         let template_id = template["template_id"].as_str().unwrap();
-        assert_eq!(template["name"], "router.qcow2");
+        assert_eq!(template["name"], "Test Router · Default");
 
         let (_, project) = request(
             &app,
             Method::POST,
             "/v3/projects".into(),
-            Some(serde_json::json!({ "name": "QEMU link lab" })),
+            Some(serde_json::json!({ "name": "QEMU lifecycle lab" })),
         )
         .await;
         let project_id = project["project_id"].as_str().unwrap();
         let mut qemu_nodes = Vec::new();
-        for name in ["Router A", "Router B", "Router C"] {
+        for name in ["Router A"] {
             let (status, node) = request(
                 &app,
                 Method::POST,
@@ -4760,6 +8539,27 @@ mod tests {
             assert_eq!(node["status"], "stopped");
             qemu_nodes.push(node);
         }
+        let node_a = qemu_nodes[0]["node_id"].as_str().unwrap();
+        let (status, configured) = request(
+            &app,
+            Method::PUT,
+            format!("/v3/projects/{project_id}/nodes/{node_a}/config"),
+            Some(serde_json::json!({
+                "memory": 1024,
+                "cpus": 2,
+                "adapters": 2,
+                "adapter_type": "virtio-net-pci",
+                "hda_disk_interface": "virtio",
+                "boot_priority": "dc"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(configured["memory"], 1024);
+        assert_eq!(configured["cpus"], 2);
+        assert_eq!(configured["adapter_type"], "virtio-net-pci");
+        assert_eq!(configured["hda_disk_interface"], "virtio");
+        assert_eq!(configured["boot_priority"], "dc");
 
         let console_path = format!(
             "/v3/compute/projects/{project_id}/qemu/nodes/{}/console/ws",
@@ -4770,30 +8570,6 @@ mod tests {
             StatusCode::CONFLICT
         );
 
-        let (status, link) = request(
-            &app,
-            Method::POST,
-            format!("/v3/projects/{project_id}/links"),
-            Some(serde_json::json!({
-                "nodes": [
-                    { "node_id": qemu_nodes[0]["node_id"], "adapter_number": 0, "port_number": 0 },
-                    { "node_id": qemu_nodes[1]["node_id"], "adapter_number": 1, "port_number": 0 },
-                    { "node_id": qemu_nodes[2]["node_id"], "adapter_number": 0, "port_number": 0 }
-                ]
-            })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED);
-        let multicast_address = link["nodes"][0]["runtime_multicast_address"]
-            .as_str()
-            .unwrap();
-        let multicast_port = link["nodes"][0]["runtime_multicast_port"].as_u64().unwrap();
-        assert!(link["nodes"].as_array().unwrap().iter().all(|endpoint| {
-            endpoint["runtime_multicast_address"] == multicast_address
-                && endpoint["runtime_multicast_port"] == multicast_port
-        }));
-
-        let node_a = qemu_nodes[0]["node_id"].as_str().unwrap();
         let (status, node) = request(
             &app,
             Method::POST,
@@ -4803,6 +8579,20 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(node["status"], "started");
+        let (status, error) = request(
+            &app,
+            Method::PUT,
+            format!("/v3/projects/{project_id}/nodes/{node_a}/config"),
+            Some(serde_json::json!({ "memory": 2048 })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("Stop this device")
+        );
         assert_eq!(
             websocket_status(&app, console_path).await,
             StatusCode::SERVICE_UNAVAILABLE
@@ -4834,55 +8624,15 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
 
-        let node_b = qemu_nodes[1]["node_id"].as_str().unwrap();
-        let (status, node) = request(
-            &app,
-            Method::POST,
-            format!("/v3/projects/{project_id}/nodes/{node_b}/start"),
-            Some(serde_json::json!({})),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(node["status"], "started");
-        let node_c = qemu_nodes[2]["node_id"].as_str().unwrap();
-        let (status, node) = request(
-            &app,
-            Method::POST,
-            format!("/v3/projects/{project_id}/nodes/{node_c}/start"),
-            Some(serde_json::json!({})),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(node["status"], "started");
         let args = std::fs::read_to_string(directory.path().join("qemu-arguments.log"))
             .expect("QEMU launch arguments were recorded");
-        let netdev = format!(
-            "socket,id=ns_{}",
-            link["link_id"].as_str().unwrap().replace('-', "")
-        );
-        assert!(args.contains(&netdev));
-        assert!(args.contains(&format!("mcast={multicast_address}:{multicast_port}")));
+        assert!(args.contains("-nic none"));
         assert!(args.contains("-chardev socket,id=serial0,path="));
         assert!(args.contains("server=on,wait=off -serial chardev:serial0"));
-        let (status, error) = request(
-            &app,
-            Method::DELETE,
-            format!(
-                "/v3/projects/{project_id}/links/{}",
-                link["link_id"].as_str().unwrap()
-            ),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert!(
-            error["message"]
-                .as_str()
-                .unwrap()
-                .contains("Stop all QEMU nodes")
-        );
-
-        for node_id in [node_a, node_b, node_c] {
+        assert!(args.contains("-m 1024 -smp cpus=2,maxcpus=2,sockets=1 -boot order=dc"));
+        assert!(args.contains("if=virtio,index=0,media=disk,id=drive0,format=qcow2"));
+        for node in &qemu_nodes {
+            let node_id = node["node_id"].as_str().unwrap();
             let (status, node) = request(
                 &app,
                 Method::POST,
@@ -4946,6 +8696,42 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
+                .all(|template| template["template_type"] != "qemu"),
+            "an uploaded disk image must not create a palette template: {templates:#}"
+        );
+        let (_, manager) = request(
+            &app,
+            Method::GET,
+            "/v3/marketplace/gns3/manager".into(),
+            None,
+        )
+        .await;
+        let source_template_id = manager["custom_image_options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|template| template["hda_disk_image"] == uploaded["image"])
+            .unwrap()["template_id"]
+            .as_str()
+            .unwrap();
+        let (status, _) = request(
+            &app,
+            Method::POST,
+            "/v3/marketplace/gns3/custom".into(),
+            Some(serde_json::json!({
+                "name": "Uploaded custom disk",
+                "source_template_id": source_template_id
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, templates) = request(&app, Method::GET, "/v3/templates".into(), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            templates
+                .as_array()
+                .unwrap()
+                .iter()
                 .any(|template| template["hda_disk_image"] == uploaded["image"])
         );
     }
@@ -4965,7 +8751,7 @@ mod tests {
             &app,
             Method::POST,
             format!("/v3/projects/{project_id}/nodes"),
-            Some(serde_json::json!({ "name": "Fake switch", "node_type": "ethernet_switch" })),
+            Some(serde_json::json!({ "name": "Fake device", "node_type": "not-a-runtime" })),
         )
         .await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
@@ -4973,8 +8759,372 @@ mod tests {
             error["message"]
                 .as_str()
                 .unwrap()
-                .contains("Executable node types")
+                .contains("Unsupported node type")
         );
+    }
+
+    #[tokio::test]
+    async fn builtin_templates_create_persistent_nodes_with_gns3_ports() {
+        let (app, _directory) = test_router().await;
+        let (_, project) = request(
+            &app,
+            Method::POST,
+            "/v3/projects".into(),
+            Some(serde_json::json!({ "name": "Builtin nodes" })),
+        )
+        .await;
+        let project_id = project["project_id"].as_str().unwrap();
+
+        let (status, templates) = request(&app, Method::GET, "/v3/templates".into(), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let switch_template = templates
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|template| template["template_type"] == "ethernet_switch")
+            .unwrap();
+        assert_eq!(
+            switch_template["ports_mapping"].as_array().unwrap().len(),
+            8
+        );
+        let template_id = switch_template["template_id"].as_str().unwrap();
+
+        let (status, switch) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/templates/{template_id}"),
+            Some(serde_json::json!({
+                "name": "SW1",
+                "ports_mapping": [
+                    {"type":"access", "vlan":10},
+                    {"type":"access", "vlan":20}
+                ]
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(switch["node_type"], "ethernet_switch");
+        assert_eq!(switch["status"], "started");
+        assert_eq!(switch["ports_mapping"][0]["name"], "Ethernet0");
+        assert_eq!(switch["ports_mapping"][1]["port_number"], 1);
+        assert_eq!(switch["ports_mapping"][1]["vlan"], 20);
+
+        let (status, nodes) = request(
+            &app,
+            Method::GET,
+            format!("/v3/projects/{project_id}/nodes"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(nodes.as_array().unwrap().len(), 1);
+        assert_eq!(nodes[0]["node_id"], switch["node_id"]);
+    }
+
+    #[tokio::test]
+    async fn builtin_http_lifecycle_matches_always_running_nodes() {
+        let (app, _directory) = test_router().await;
+        let (_, project) = request(
+            &app,
+            Method::POST,
+            "/v3/projects".into(),
+            Some(serde_json::json!({ "name": "Always on builtins" })),
+        )
+        .await;
+        let project_id = project["project_id"].as_str().unwrap();
+        let (status, switch) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/nodes"),
+            Some(serde_json::json!({ "name": "SW1", "node_type": "ethernet_switch" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let switch_id = switch["node_id"].as_str().unwrap();
+        for action in ["start", "stop", "suspend", "reload"] {
+            let (status, _) = request(
+                &app,
+                Method::POST,
+                format!("/v3/projects/{project_id}/nodes/{switch_id}/{action}"),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "switch {action}");
+        }
+
+        let (status, cloud) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/nodes"),
+            Some(serde_json::json!({
+                "name": "Cloud1",
+                "node_type": "cloud",
+                "ports_mapping": [{"type":"ethernet","interface":"ens33"}]
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let cloud_id = cloud["node_id"].as_str().unwrap();
+        let (status, started) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/nodes/{cloud_id}/start"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(started["status"], "started");
+        let (status, _) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/nodes/{cloud_id}/stop"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn builtin_node_http_validation_rejects_bad_vlan_and_cloud_nio_values() {
+        let (app, _directory) = test_router().await;
+        let (_, project) = request(
+            &app,
+            Method::POST,
+            "/v3/projects".into(),
+            Some(serde_json::json!({ "name": "Builtin validation" })),
+        )
+        .await;
+        let project_id = project["project_id"].as_str().unwrap();
+        let (status, error) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/nodes"),
+            Some(serde_json::json!({
+                "name":"Bad switch",
+                "node_type":"ethernet_switch",
+                "ports_mapping":[{"type":"access","vlan":4095}]
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(error["message"].as_str().unwrap().contains("VLAN"));
+
+        let (status, error) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/nodes"),
+            Some(serde_json::json!({
+                "name":"Bad cloud",
+                "node_type":"cloud",
+                "ports_mapping":[{"type":"udp","lport":4001,"rhost":"127.0.0.1;false","rport":4002}]
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(error["message"].as_str().unwrap().contains("remote host"));
+    }
+
+    #[tokio::test]
+    async fn builtin_configuration_uses_flat_fields_and_preserves_always_running_status() {
+        let (app, _directory) = test_router().await;
+        let (_, project) = request(
+            &app,
+            Method::POST,
+            "/v3/projects".into(),
+            Some(serde_json::json!({ "name": "Builtin configuration" })),
+        )
+        .await;
+        let project_id = project["project_id"].as_str().unwrap();
+
+        let (_, switch) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/nodes"),
+            Some(serde_json::json!({
+                "name":"SW1","node_type":"ethernet_switch",
+                "ports_mapping":[
+                    {"type":"access","vlan":1},
+                    {"type":"access","vlan":1}
+                ]
+            })),
+        )
+        .await;
+        let switch_id = switch["node_id"].as_str().unwrap();
+        let (status, configured_switch) = request(
+            &app,
+            Method::PUT,
+            format!("/v3/projects/{project_id}/nodes/{switch_id}/config"),
+            Some(serde_json::json!({
+                "name":"SW1-updated",
+                "ports_mapping":[
+                    {"type":"access","vlan":10},
+                    {"type":"dot1q","vlan":10}
+                ],
+                "console_type":"telnet"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(configured_switch["name"], "SW1-updated");
+        assert_eq!(configured_switch["status"], "started");
+        assert_eq!(configured_switch["ports_count"], 2);
+        assert_eq!(configured_switch["ports_mapping"][1]["type"], "dot1q");
+
+        let (_, hub) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/nodes"),
+            Some(serde_json::json!({"name":"Hub1","node_type":"ethernet_hub"})),
+        )
+        .await;
+        let hub_id = hub["node_id"].as_str().unwrap();
+        let (status, configured_hub) = request(
+            &app,
+            Method::PUT,
+            format!("/v3/projects/{project_id}/nodes/{hub_id}/config"),
+            Some(serde_json::json!({
+                "properties": {
+                    "ports_mapping": [
+                        {"name":"old","port_number":9},
+                        {"name":"old2","port_number":9}
+                    ]
+                }
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(configured_hub["status"], "started");
+        assert_eq!(configured_hub["ports_mapping"].as_array().unwrap().len(), 2);
+        assert!(configured_hub["properties"]["ports_mapping"].is_null());
+
+        let (_, cloud) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/nodes"),
+            Some(serde_json::json!({
+                "name":"Cloud1","node_type":"cloud",
+                "ports_mapping":[{"type":"udp","lport":4100,"rhost":"127.0.0.1","rport":4101}]
+            })),
+        )
+        .await;
+        let cloud_id = cloud["node_id"].as_str().unwrap();
+        let (status, configured_cloud) = request(
+            &app,
+            Method::PUT,
+            format!("/v3/projects/{project_id}/nodes/{cloud_id}/config"),
+            Some(serde_json::json!({
+                "remote_console_host":"192.0.2.5",
+                "remote_console_port":2323,
+                "remote_console_type":"telnet",
+                "remote_console_http_path":"/console"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(configured_cloud["status"], "started");
+        assert_eq!(configured_cloud["remote_console_host"], "192.0.2.5");
+        assert_eq!(configured_cloud["remote_console_port"], 2323);
+
+        let (_, nat) = request(
+            &app,
+            Method::POST,
+            format!("/v3/projects/{project_id}/nodes"),
+            Some(serde_json::json!({"name":"NAT1","node_type":"nat"})),
+        )
+        .await;
+        let nat_id = nat["node_id"].as_str().unwrap();
+        let (status, configured_nat) = request(
+            &app,
+            Method::PUT,
+            format!("/v3/projects/{project_id}/nodes/{nat_id}/config"),
+            Some(serde_json::json!({"name":"NAT1-updated"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(configured_nat["name"], "NAT1-updated");
+        assert_eq!(configured_nat["status"], "started");
+        assert_eq!(configured_nat["ports_mapping"][0]["interface"], "virbr0");
+    }
+
+    #[test]
+    fn validates_only_runtime_settings_supported_by_each_runtime() {
+        let qemu = validate_node_configuration_patch(
+            "qemu",
+            serde_json::json!({
+                "memory": 2048,
+                "cpus": 4,
+                "adapters": 3,
+                "adapter_type": "virtio-net-pci",
+                "hda_disk_interface": "scsi",
+                "boot_priority": "dc"
+            }),
+        )
+        .unwrap_or_else(|_| panic!("QEMU's implemented settings should be accepted"));
+        assert_eq!(qemu["memory"], 2048);
+        assert!(
+            validate_node_configuration_patch(
+                "qemu",
+                serde_json::json!({ "adapter_type": "unsupported-nic" })
+            )
+            .is_err()
+        );
+
+        let docker = validate_node_configuration_patch(
+            "docker",
+            serde_json::json!({
+                "memory": 0,
+                "cpus": 0.5,
+                "adapters": 4,
+                "environment": "LAB_MODE=router",
+                "extra_hosts": "gateway:192.0.2.1",
+                "extra_volumes": ["/etc/lab"],
+                "console_type": "none"
+            }),
+        )
+        .unwrap_or_else(|_| panic!("Docker's implemented settings should be accepted"));
+        assert_eq!(docker["cpus"], 0.5);
+        assert_eq!(docker["console_type"], "none");
+        assert!(
+            validate_node_configuration_patch(
+                "docker",
+                serde_json::json!({ "runtime_overlay": "/tmp/image.qcow2" })
+            )
+            .is_err()
+        );
+
+        let vpcs = validate_node_configuration_patch(
+            "vpcs",
+            serde_json::json!({ "startup_script": "ip 192.0.2.2/24" }),
+        )
+        .unwrap_or_else(|_| panic!("VPCS startup scripts should be configurable"));
+        assert_eq!(vpcs["startup_script"], "ip 192.0.2.2/24");
+        let dynamips = validate_node_configuration_patch(
+            "dynamips",
+            serde_json::json!({ "startup_config": "hostname R1\n" }),
+        )
+        .unwrap_or_else(|_| panic!("Dynamips startup config should be configurable"));
+        assert_eq!(dynamips["startup_config"], "hostname R1\n");
+        assert!(
+            validate_node_configuration_patch("dynamips", serde_json::json!({ "ram": 512 }))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn parses_docker_console_resize_control_frames() {
+        assert_eq!(
+            parse_docker_resize_control(r#"{"type":"resize","rows":40,"columns":120}"#),
+            Some((40, 120))
+        );
+        assert_eq!(
+            parse_docker_resize_control(r#"{"type":"resize","rows":0,"columns":120}"#),
+            None
+        );
+        assert_eq!(
+            parse_docker_resize_control(r#"{"type":"input","rows":40,"columns":120}"#),
+            None
+        );
+        assert_eq!(parse_docker_resize_control("show version"), None);
     }
 }
 

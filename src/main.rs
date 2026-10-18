@@ -1,6 +1,10 @@
+#![recursion_limit = "256"]
+
 mod api;
+mod builtin;
 mod dynamips;
 mod image_paths;
+mod links;
 mod marketplace;
 mod qemu;
 mod runtime;
@@ -34,7 +38,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .unwrap_or_else(|_| "127.0.0.1:3080".to_owned())
         .parse()?;
     let store = storage::Store::connect(&database_path).await?;
-    let app = api::router(api::AppState::new(store));
+    let state = api::AppState::new(store);
+    state.reattach_running_links().await;
+    let app = api::router(state);
     let listener = tokio::net::TcpListener::bind(bind_address).await?;
 
     tracing::info!(

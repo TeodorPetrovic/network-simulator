@@ -1,0 +1,1581 @@
+//! Builtin Ethernet devices that plug into the point-to-point link engine.
+//!
+//! Ethernet switches and hubs use one local UDP NIO per configured port. A
+//! node-scoped forwarding task joins those NIOs, while cloud and NAT nodes
+//! attach their selected host NIO directly to the uBridge endpoint.
+
+use std::{
+    collections::{HashMap, HashSet},
+    net::{Ipv4Addr, SocketAddr},
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+use serde_json::{Value, json};
+use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
+use uuid::Uuid;
+
+use crate::{links::AdapterNio, runtime::RuntimeError};
+
+const DEFAULT_PORTS: usize = 8;
+const MAX_PORTS: usize = 256;
+const FDB_AGE: Duration = Duration::from_secs(300);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SwitchPortMode {
+    Access { vlan: u16 },
+    Dot1q { native_vlan: u16 },
+    QinQ { vlan: u16, ethertype: u16 },
+}
+
+#[derive(Clone)]
+struct RuntimePort {
+    socket: Arc<UdpSocket>,
+    relay_address: SocketAddr,
+    mode: Option<SwitchPortMode>,
+}
+
+#[derive(Clone)]
+struct LearnedAddress {
+    port: u16,
+    learned_at: Instant,
+}
+
+struct ForwardingNode {
+    node_type: String,
+    modes: HashMap<u16, SwitchPortMode>,
+    ports: HashMap<u16, RuntimePort>,
+    learned: HashMap<(u16, [u8; 6]), LearnedAddress>,
+}
+
+struct ActivePort {
+    task: JoinHandle<()>,
+}
+
+#[derive(Default)]
+struct BuiltinState {
+    forwarding: HashMap<String, Arc<Mutex<ForwardingNode>>>,
+    active_ports: HashMap<(String, u16), ActivePort>,
+}
+
+/// Runtime state for builtins. These nodes do not start a separate VM process;
+/// the only long-running work is the UDP forwarding task for each switch/hub
+/// port that is attached to a topology link.
+#[derive(Clone, Default)]
+pub struct BuiltinRuntime {
+    state: Arc<Mutex<BuiltinState>>,
+}
+
+impl BuiltinRuntime {
+    pub fn templates() -> Vec<Value> {
+        let switch_id = builtin_template_id("ethernet_switch");
+        let hub_id = builtin_template_id("ethernet_hub");
+        let cloud_id = builtin_template_id("cloud");
+        let nat_id = builtin_template_id("nat");
+        vec![
+            json!({
+                "template_id": switch_id,
+                "name": "Ethernet switch",
+                "template_type": "ethernet_switch",
+                "compute_id": "local",
+                "category": "switch",
+                "default_name_format": "Switch{0}",
+                "symbol": "ethernet_switch",
+                "builtin": true,
+                "console_type": "none",
+                "ports_mapping": default_switch_ports()
+            }),
+            json!({
+                "template_id": hub_id,
+                "name": "Ethernet hub",
+                "template_type": "ethernet_hub",
+                "compute_id": "local",
+                "category": "switch",
+                "default_name_format": "Hub{0}",
+                "symbol": "hub",
+                "builtin": true,
+                "ports_mapping": default_hub_ports()
+            }),
+            json!({
+                "template_id": cloud_id,
+                "name": "Cloud",
+                "template_type": "cloud",
+                "compute_id": "local",
+                "category": "guest",
+                "default_name_format": "Cloud{0}",
+                "symbol": "cloud",
+                "builtin": true,
+                "ports_mapping": [],
+                "remote_console_host": "127.0.0.1",
+                "remote_console_port": 23,
+                "remote_console_type": "none",
+                "remote_console_http_path": "/"
+            }),
+            json!({
+                "template_id": nat_id,
+                "name": "NAT",
+                "template_type": "nat",
+                "compute_id": "local",
+                "category": "guest",
+                "default_name_format": "NAT{0}",
+                "symbol": "nat",
+                "builtin": true,
+                "ports_mapping": [{
+                    "name": "nat0", "port_number": 0, "type": "ethernet",
+                    "interface": default_nat_interface()
+                }],
+                "nat_interface": default_nat_interface(),
+                "usage": "Linux NAT requires an active libvirt default network on virbr0."
+            }),
+        ]
+    }
+
+    pub fn is_type(node_type: &str) -> bool {
+        matches!(
+            node_type,
+            "ethernet_switch" | "ethernet_hub" | "cloud" | "nat"
+        )
+    }
+
+    pub fn normalize_template_ports(node_type: &str, mapping: Value) -> Result<Value, String> {
+        let ports = match node_type {
+            "ethernet_switch" => normalize_switch_ports(Some(mapping))?,
+            "ethernet_hub" => normalize_hub_ports(Some(mapping))?,
+            "cloud" => normalize_cloud_ports(Some(mapping))?,
+            "nat" => {
+                let mut object = serde_json::Map::new();
+                normalize_nat_ports(&mut object, Some(mapping))?
+            }
+            _ => return Err(format!("Unsupported builtin node type '{node_type}'")),
+        };
+        Ok(json!(ports))
+    }
+
+    /// Normalize a builtin node or template-derived node into the persisted
+    /// GNS3-shaped representation. Adapter numbering is always adapter 0,
+    /// port N for these devices.
+    pub fn normalize_node(mut node: Value) -> Result<Value, String> {
+        let object = node
+            .as_object_mut()
+            .ok_or_else(|| "Builtin node body must be a JSON object".to_owned())?;
+        let node_type = object
+            .get("node_type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "node_type is required".to_owned())?
+            .to_owned();
+        if !Self::is_type(&node_type) {
+            return Err(format!("Unsupported builtin node type '{node_type}'"));
+        }
+        if object
+            .get("compute_id")
+            .and_then(Value::as_str)
+            .is_some_and(|compute_id| compute_id != "local")
+        {
+            return Err("Builtin nodes can run only on the local compute".to_owned());
+        }
+        let name = object
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty() && name.len() <= 128)
+            .ok_or_else(|| "name must contain 1 to 128 characters".to_owned())?
+            .to_owned();
+        object.insert("name".into(), json!(name));
+        object.insert("node_type".into(), json!(node_type));
+        object.insert("compute_id".into(), json!("local"));
+        object.insert("status".into(), json!("started"));
+        object.entry("x").or_insert(json!(0));
+        object.entry("y").or_insert(json!(0));
+        object.entry("z").or_insert(json!(1));
+        object.entry("locked").or_insert(json!(false));
+        object.entry("properties").or_insert(json!({}));
+
+        let mapping = object.get("ports_mapping").cloned();
+        let ports_mapping = match node_type.as_str() {
+            "ethernet_switch" => normalize_switch_ports(mapping)?,
+            "ethernet_hub" => normalize_hub_ports(mapping)?,
+            "cloud" => normalize_cloud_ports(mapping)?,
+            "nat" => normalize_nat_ports(object, mapping)?,
+            _ => unreachable!(),
+        };
+        object.insert("ports_count".into(), json!(ports_mapping.len()));
+        object.insert("ports_mapping".into(), json!(ports_mapping));
+        if node_type == "ethernet_switch" {
+            object.insert(
+                "console_type".into(),
+                json!(
+                    object
+                        .get("console_type")
+                        .and_then(Value::as_str)
+                        .unwrap_or("none")
+                ),
+            );
+        }
+        if node_type == "cloud" {
+            normalize_cloud_console(object)?;
+        }
+        if node_type == "nat" {
+            let interface = object["ports_mapping"][0]["interface"].clone();
+            object.insert("nat_interface".into(), interface);
+        }
+        Ok(node)
+    }
+
+    /// Normalize the flat per-node configuration contract. `properties` is
+    /// accepted as a legacy input wrapper for clients that used the GNS3
+    /// compute-node shape; normalized values are always stored at top level.
+    pub fn normalize_configuration_patch(node: &Value, patch: Value) -> Result<Value, String> {
+        let input = patch
+            .as_object()
+            .ok_or_else(|| "device configuration must be an object".to_owned())?;
+        if input.is_empty() {
+            return Err("device configuration is empty".to_owned());
+        }
+        let node_type = node["node_type"]
+            .as_str()
+            .ok_or_else(|| "node_type is required".to_owned())?;
+        let allowed: &[&str] = match node_type {
+            "ethernet_switch" => &["name", "usage", "ports_mapping", "console_type"],
+            "ethernet_hub" => &["name", "usage", "ports_mapping"],
+            "cloud" => &[
+                "name",
+                "usage",
+                "ports_mapping",
+                "remote_console_host",
+                "remote_console_port",
+                "remote_console_type",
+                "remote_console_http_path",
+            ],
+            // NAT's port mapping is fixed by its host NAT interface, matching
+            // the upstream NAT configurator, which exposes only its name.
+            "nat" => &["name", "usage"],
+            _ => return Err(format!("Unsupported builtin node type '{node_type}'")),
+        };
+
+        let mut requested = serde_json::Map::new();
+        for (key, value) in input {
+            if key == "properties" {
+                let properties = value
+                    .as_object()
+                    .ok_or_else(|| "properties must be an object".to_owned())?;
+                for (property, value) in properties {
+                    if !allowed.contains(&property.as_str()) {
+                        return Err(format!(
+                            "'{property}' cannot be changed in this {node_type} configuration"
+                        ));
+                    }
+                    requested
+                        .entry(property.clone())
+                        .or_insert_with(|| value.clone());
+                }
+                continue;
+            }
+            if !allowed.contains(&key.as_str()) {
+                return Err(format!(
+                    "'{key}' cannot be changed in this {node_type} configuration"
+                ));
+            }
+            requested.insert(key.clone(), value.clone());
+        }
+        if requested.is_empty() {
+            return Err("device configuration is empty".to_owned());
+        }
+        if let Some(console_type) = requested.get("console_type")
+            && !matches!(console_type.as_str(), Some("none" | "telnet"))
+        {
+            return Err("unsupported switch console_type".to_owned());
+        }
+        if let Some(usage) = requested.get("usage")
+            && usage.as_str().is_none_or(|text| text.len() > 65_536)
+        {
+            return Err("usage must be text under 64 KiB".to_owned());
+        }
+
+        let mut candidate = node.clone();
+        for (key, value) in &requested {
+            candidate[key] = value.clone();
+        }
+        let normalized = Self::normalize_node(candidate)?;
+        let mut result = serde_json::Map::new();
+        for key in requested.keys() {
+            result.insert(key.clone(), normalized[key].clone());
+        }
+        if requested.contains_key("ports_mapping") {
+            result.insert("ports_count".to_owned(), normalized["ports_count"].clone());
+            if node_type == "nat" {
+                result.insert(
+                    "nat_interface".to_owned(),
+                    normalized["nat_interface"].clone(),
+                );
+            }
+        }
+        Ok(Value::Object(result))
+    }
+
+    /// Resolve the adapter NIO described by a builtin node's port mapping.
+    pub fn adapter_nio(node: &Value, endpoint: &Value) -> Result<AdapterNio, RuntimeError> {
+        let node_type = node["node_type"].as_str().unwrap_or_default();
+        let port_number = endpoint["port_number"].as_u64().unwrap_or_default() as usize;
+        let mapping = node["ports_mapping"]
+            .as_array()
+            .and_then(|ports| ports.get(port_number))
+            .ok_or_else(|| {
+                RuntimeError::Failed(format!("Port {port_number} does not exist on {node_type}"))
+            })?;
+        match node_type {
+            "ethernet_switch" | "ethernet_hub" => Ok(AdapterNio::Udp {
+                adapter_port: port_from_endpoint(endpoint, "runtime_adapter_port")?,
+                runtime_port: port_from_endpoint(endpoint, "runtime_udp_port")?,
+            }),
+            "cloud" | "nat" => match mapping["type"].as_str().unwrap_or_default() {
+                "ethernet" => Ok(AdapterNio::HostEthernet {
+                    interface: required_mapping_text(mapping, "interface")?,
+                    tap_interface: host_ethernet_tap_name(endpoint)?,
+                }),
+                "tap" => Ok(AdapterNio::Tap {
+                    interface: required_mapping_text(mapping, "interface")?,
+                }),
+                "udp" => Ok(AdapterNio::ExternalUdp {
+                    local_port: port_from_mapping(mapping, "lport")?,
+                    remote_host: safe_remote_host(mapping)?,
+                    remote_port: port_from_mapping(mapping, "rport")?,
+                }),
+                other => Err(RuntimeError::Failed(format!(
+                    "Unsupported builtin port type '{other}'"
+                ))),
+            },
+            other => Err(RuntimeError::Failed(format!(
+                "Unsupported builtin node type '{other}'"
+            ))),
+        }
+    }
+
+    /// Add a switch/hub adapter to its node-scoped forwarder. Called before the
+    /// link endpoint's NIO is attached so an in-flight frame always has a peer.
+    pub async fn attach_switch_port(
+        &self,
+        node: &Value,
+        endpoint: &Value,
+    ) -> Result<(), RuntimeError> {
+        let node_type = node["node_type"].as_str().unwrap_or_default();
+        if node_type != "ethernet_switch" && node_type != "ethernet_hub" {
+            return Ok(());
+        }
+        let node_id = node["node_id"].as_str().unwrap_or_default().to_owned();
+        let port_number = endpoint["port_number"].as_u64().unwrap_or_default() as u16;
+        let adapter_port = port_from_endpoint(endpoint, "runtime_adapter_port")?;
+        let runtime_port = port_from_endpoint(endpoint, "runtime_udp_port")?;
+        let local = SocketAddr::from((Ipv4Addr::LOCALHOST, runtime_port));
+        let socket = Arc::new(UdpSocket::bind(local).await.map_err(|error| {
+            RuntimeError::Failed(format!(
+                "Could not bind builtin adapter UDP port {runtime_port}: {error}"
+            ))
+        })?);
+        let relay_address = SocketAddr::from((Ipv4Addr::LOCALHOST, adapter_port));
+        let mode = if node_type == "ethernet_switch" {
+            Some(switch_mode(&node["ports_mapping"][port_number as usize])?)
+        } else {
+            None
+        };
+        let key = (node_id.clone(), port_number);
+        let forwarding = {
+            let mut state = self.state.lock().await;
+            if let Some(existing) = state.active_ports.get(&key) {
+                existing.task.abort();
+            }
+            let instance = state
+                .forwarding
+                .entry(node_id.clone())
+                .or_insert_with(|| {
+                    let modes = node["ports_mapping"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .enumerate()
+                        .filter_map(|(index, port)| {
+                            (node_type == "ethernet_switch")
+                                .then(|| switch_mode(port).ok().map(|mode| (index as u16, mode)))
+                                .flatten()
+                        })
+                        .collect();
+                    Arc::new(Mutex::new(ForwardingNode {
+                        node_type: node_type.to_owned(),
+                        modes,
+                        ports: HashMap::new(),
+                        learned: HashMap::new(),
+                    }))
+                })
+                .clone();
+            instance.lock().await.ports.insert(
+                port_number,
+                RuntimePort {
+                    socket: socket.clone(),
+                    relay_address,
+                    mode,
+                },
+            );
+            instance
+        };
+        let task_socket = socket.clone();
+        let task = tokio::spawn(async move {
+            let mut buffer = vec![0u8; 65_536];
+            loop {
+                let Ok((length, _)) = task_socket.recv_from(&mut buffer).await else {
+                    break;
+                };
+                let frame = buffer[..length].to_vec();
+                for (target_socket, target_address, output) in
+                    forward_frame(&forwarding, port_number, frame).await
+                {
+                    let _ = target_socket.send_to(&output, target_address).await;
+                }
+            }
+        });
+        self.state
+            .lock()
+            .await
+            .active_ports
+            .insert(key, ActivePort { task });
+        Ok(())
+    }
+
+    pub async fn detach_switch_port(&self, node_id: &str, port_number: u16) {
+        let key = (node_id.to_owned(), port_number);
+        let mut state = self.state.lock().await;
+        if let Some(active) = state.active_ports.remove(&key) {
+            active.task.abort();
+        }
+        let remove_forwarder = if let Some(node) = state.forwarding.get(node_id) {
+            let mut node = node.lock().await;
+            node.ports.remove(&port_number);
+            node.learned
+                .retain(|_, learned| learned.port != port_number);
+            node.ports.is_empty()
+        } else {
+            false
+        };
+        if remove_forwarder {
+            state.forwarding.remove(node_id);
+        }
+    }
+
+    /// Apply updated switch VLAN settings without stopping the always-on
+    /// builtin node or disturbing its attached link endpoints.
+    pub async fn update_switch_configuration(&self, node: &Value) {
+        if node["node_type"].as_str() != Some("ethernet_switch") {
+            return;
+        }
+        let node_id = node["node_id"].as_str().unwrap_or_default();
+        let instance = self.state.lock().await.forwarding.get(node_id).cloned();
+        let Some(instance) = instance else {
+            return;
+        };
+        let modes = node["ports_mapping"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter_map(|(index, port)| switch_mode(port).ok().map(|mode| (index as u16, mode)))
+            .collect::<HashMap<_, _>>();
+        let mut forwarding = instance.lock().await;
+        forwarding.modes = modes.clone();
+        for (port_number, port) in &mut forwarding.ports {
+            port.mode = modes.get(port_number).cloned();
+        }
+        forwarding.learned.clear();
+    }
+
+    pub async fn stop_node(&self, node_id: &str) {
+        let mut state = self.state.lock().await;
+        let keys = state
+            .active_ports
+            .keys()
+            .filter(|(candidate, _)| candidate == node_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in keys {
+            if let Some(active) = state.active_ports.remove(&key) {
+                active.task.abort();
+            }
+        }
+        state.forwarding.remove(node_id);
+    }
+}
+
+fn builtin_template_id(node_type: &str) -> String {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!("network-simulator/builtin/{node_type}").as_bytes(),
+    )
+    .to_string()
+}
+
+fn default_switch_ports() -> Vec<Value> {
+    (0..DEFAULT_PORTS)
+        .map(|index| json!({"name":format!("Ethernet{index}"),"port_number":index,"type":"access","vlan":1,"ethertype":"0x8100"}))
+        .collect()
+}
+
+fn default_hub_ports() -> Vec<Value> {
+    (0..DEFAULT_PORTS)
+        .map(|index| json!({"name":format!("Ethernet{index}"),"port_number":index}))
+        .collect()
+}
+
+fn default_nat_interface() -> String {
+    std::env::var("NETWORK_SIMULATOR_NAT_INTERFACE").unwrap_or_else(|_| "virbr0".to_owned())
+}
+
+fn default_host_interfaces() -> Vec<Value> {
+    let Ok(entries) = std::fs::read_dir("/sys/class/net") else {
+        return Vec::new();
+    };
+    let mut interfaces = entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| {
+            name != "lo"
+                && !name.starts_with("docker")
+                && !name.starts_with("br-")
+                && !name.starts_with("veth")
+                && !name.starts_with("ns")
+                && !name.starts_with("gns3")
+        })
+        .collect::<Vec<_>>();
+    interfaces.sort();
+    interfaces
+        .into_iter()
+        .enumerate()
+        .map(|(index, interface)| {
+            json!({"name":format!("Ethernet{index}"),"port_number":index,"type":"ethernet","interface":interface})
+        })
+        .collect()
+}
+
+fn normalize_switch_ports(mapping: Option<Value>) -> Result<Vec<Value>, String> {
+    let ports = mapping
+        .as_ref()
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_else(default_switch_ports);
+    validate_port_count(&ports)?;
+    ports
+        .into_iter()
+        .enumerate()
+        .map(|(index, mut port)| {
+            let object = port
+                .as_object_mut()
+                .ok_or_else(|| "Each switch port must be an object".to_owned())?;
+            let kind = object
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("access")
+                .to_owned();
+            if !matches!(kind.as_str(), "access" | "dot1q" | "qinq") {
+                return Err(format!("Unsupported switch port type '{kind}'"));
+            }
+            let vlan = object.get("vlan").and_then(Value::as_u64).unwrap_or(1);
+            if !(1..=4094).contains(&vlan) {
+                return Err("Switch VLAN must be from 1 to 4094".to_owned());
+            }
+            let ethertype = object
+                .get("ethertype")
+                .and_then(Value::as_str)
+                .unwrap_or("0x8100")
+                .to_ascii_lowercase();
+            if !matches!(
+                ethertype.as_str(),
+                "0x8100" | "0x88a8" | "0x9100" | "0x9200"
+            ) {
+                return Err(format!("Unsupported QinQ ethertype '{ethertype}'"));
+            }
+            if kind != "qinq" && ethertype != "0x8100" {
+                return Err("Non-default ethertype is valid only on QinQ ports".to_owned());
+            }
+            object.insert("name".into(), json!(format!("Ethernet{index}")));
+            object.insert("port_number".into(), json!(index));
+            object.insert("type".into(), json!(kind.clone()));
+            object.insert("vlan".into(), json!(vlan));
+            object.insert("ethertype".into(), json!(ethertype));
+            Ok(port)
+        })
+        .collect()
+}
+
+fn normalize_hub_ports(mapping: Option<Value>) -> Result<Vec<Value>, String> {
+    let ports = mapping
+        .as_ref()
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_else(default_hub_ports);
+    validate_port_count(&ports)?;
+    ports
+        .into_iter()
+        .enumerate()
+        .map(|(index, mut port)| {
+            let object = port
+                .as_object_mut()
+                .ok_or_else(|| "Each hub port must be an object".to_owned())?;
+            object.insert("name".into(), json!(format!("Ethernet{index}")));
+            object.insert("port_number".into(), json!(index));
+            Ok(port)
+        })
+        .collect()
+}
+
+fn normalize_cloud_ports(mapping: Option<Value>) -> Result<Vec<Value>, String> {
+    let ports = mapping
+        .as_ref()
+        .and_then(Value::as_array)
+        .filter(|ports| !ports.is_empty())
+        .cloned()
+        .unwrap_or_else(default_host_interfaces);
+    if ports.len() > MAX_PORTS {
+        return Err(format!("Builtin nodes support at most {MAX_PORTS} ports"));
+    }
+    let mut used_interfaces = HashSet::new();
+    ports
+        .into_iter()
+        .enumerate()
+        .map(|(index, mut port)| {
+            let object = port
+                .as_object_mut()
+                .ok_or_else(|| "Each cloud port must be an object".to_owned())?;
+            let kind = object
+                .get("type")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "Cloud ports require a type".to_owned())?
+                .to_owned();
+            if !matches!(kind.as_str(), "ethernet" | "tap" | "udp") {
+                return Err(format!("Unsupported cloud port type '{kind}'"));
+            }
+            let name = object
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.trim().is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("Ethernet{index}"));
+            object.insert("name".into(), json!(name));
+            object.insert("port_number".into(), json!(index));
+            object.insert("type".into(), json!(kind.clone()));
+            match kind.as_str() {
+                "ethernet" | "tap" => {
+                    let interface =
+                        safe_interface_name(object.get("interface").and_then(Value::as_str))?;
+                    if !used_interfaces.insert(interface.clone()) {
+                        return Err(format!(
+                            "Cloud interface '{interface}' is mapped more than once"
+                        ));
+                    }
+                    object.insert("interface".into(), json!(interface));
+                }
+                "udp" => {
+                    let local = object
+                        .get("lport")
+                        .and_then(Value::as_u64)
+                        .unwrap_or_default();
+                    let remote = object
+                        .get("rport")
+                        .and_then(Value::as_u64)
+                        .unwrap_or_default();
+                    if !(1..=65535).contains(&local) || !(1..=65535).contains(&remote) {
+                        return Err("Cloud UDP ports must be from 1 to 65535".to_owned());
+                    }
+                    let remote_host = object
+                        .get("rhost")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned();
+                    validate_remote_host(&remote_host)?;
+                    object.insert("lport".into(), json!(local));
+                    object.insert("rport".into(), json!(remote));
+                    object.insert("rhost".into(), json!(remote_host));
+                }
+                _ => unreachable!(),
+            }
+            Ok(port)
+        })
+        .collect()
+}
+
+fn normalize_nat_ports(
+    object: &mut serde_json::Map<String, Value>,
+    mapping: Option<Value>,
+) -> Result<Vec<Value>, String> {
+    let default = default_nat_interface();
+    let interface = mapping
+        .as_ref()
+        .and_then(Value::as_array)
+        .and_then(|ports| ports.first())
+        .and_then(|port| port.get("interface"))
+        .and_then(Value::as_str)
+        .or_else(|| object.get("nat_interface").and_then(Value::as_str))
+        .unwrap_or(&default);
+    let interface = safe_interface_name(Some(interface))?;
+    Ok(vec![
+        json!({"name":"nat0","port_number":0,"type":"ethernet","interface":interface}),
+    ])
+}
+
+fn normalize_cloud_console(object: &mut serde_json::Map<String, Value>) -> Result<(), String> {
+    let host = object
+        .get("remote_console_host")
+        .and_then(Value::as_str)
+        .unwrap_or("127.0.0.1")
+        .to_owned();
+    if host.len() > 255 || host.bytes().any(|byte| byte.is_ascii_control()) {
+        return Err("remote_console_host is invalid".to_owned());
+    }
+    let port = object
+        .get("remote_console_port")
+        .and_then(Value::as_u64)
+        .unwrap_or(23);
+    if !(1..=65535).contains(&port) {
+        return Err("remote_console_port must be from 1 to 65535".to_owned());
+    }
+    let console_type = object
+        .get("remote_console_type")
+        .and_then(Value::as_str)
+        .unwrap_or("none")
+        .to_owned();
+    if !matches!(
+        console_type.as_str(),
+        "none" | "telnet" | "ssh" | "vnc" | "spice" | "http" | "https"
+    ) {
+        return Err("Unsupported cloud remote console type".to_owned());
+    }
+    let path = object
+        .get("remote_console_http_path")
+        .and_then(Value::as_str)
+        .unwrap_or("/")
+        .to_owned();
+    if !path.starts_with('/') || path.bytes().any(|byte| byte.is_ascii_control()) {
+        return Err("remote_console_http_path must be an absolute path".to_owned());
+    }
+    object.insert("remote_console_host".into(), json!(host));
+    object.insert("remote_console_port".into(), json!(port));
+    object.insert("remote_console_type".into(), json!(console_type));
+    object.insert("remote_console_http_path".into(), json!(path));
+    Ok(())
+}
+
+fn validate_port_count(ports: &[Value]) -> Result<(), String> {
+    if ports.is_empty() || ports.len() > MAX_PORTS {
+        return Err(format!(
+            "Builtin nodes require between 1 and {MAX_PORTS} ports"
+        ));
+    }
+    Ok(())
+}
+
+fn safe_interface_name(name: Option<&str>) -> Result<String, String> {
+    let name = name
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && name.len() <= 15)
+        .ok_or_else(|| "A host interface name is required".to_owned())?;
+    if !name
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    {
+        return Err(
+            "Host interface names may contain only letters, digits, '.', '-', or '_'".to_owned(),
+        );
+    }
+    Ok(name.to_owned())
+}
+
+fn validate_remote_host(host: &str) -> Result<(), String> {
+    if host.is_empty()
+        || host.len() > 255
+        || !host.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b':' | b'%' | b'[' | b']')
+        })
+    {
+        return Err("Cloud UDP remote host must be an IP address or safe hostname".to_owned());
+    }
+    Ok(())
+}
+
+fn switch_mode(port: &Value) -> Result<SwitchPortMode, RuntimeError> {
+    let vlan = port["vlan"].as_u64().unwrap_or(1) as u16;
+    match port["type"].as_str().unwrap_or("access") {
+        "access" => Ok(SwitchPortMode::Access { vlan }),
+        "dot1q" => Ok(SwitchPortMode::Dot1q { native_vlan: vlan }),
+        "qinq" => {
+            let ethertype = port["ethertype"]
+                .as_str()
+                .unwrap_or("0x8100")
+                .trim_start_matches("0x");
+            let ethertype = u16::from_str_radix(ethertype, 16).map_err(|_| {
+                RuntimeError::Failed("Switch port has an invalid QinQ ethertype".to_owned())
+            })?;
+            Ok(SwitchPortMode::QinQ { vlan, ethertype })
+        }
+        kind => Err(RuntimeError::Failed(format!(
+            "Unsupported switch port type '{kind}'"
+        ))),
+    }
+}
+
+fn port_from_endpoint(endpoint: &Value, key: &str) -> Result<u16, RuntimeError> {
+    endpoint
+        .get(key)
+        .and_then(Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+        .filter(|port| *port != 0)
+        .ok_or_else(|| RuntimeError::Failed(format!("Builtin link endpoint has no valid {key}")))
+}
+
+fn port_from_mapping(mapping: &Value, key: &str) -> Result<u16, RuntimeError> {
+    mapping
+        .get(key)
+        .and_then(Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+        .filter(|port| *port != 0)
+        .ok_or_else(|| RuntimeError::Failed(format!("Cloud UDP port has no valid {key}")))
+}
+
+fn required_mapping_text(mapping: &Value, key: &str) -> Result<String, RuntimeError> {
+    mapping
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| RuntimeError::Failed(format!("Builtin port mapping has no {key}")))
+}
+
+fn safe_remote_host(mapping: &Value) -> Result<String, RuntimeError> {
+    let host = required_mapping_text(mapping, "rhost")?;
+    validate_remote_host(&host).map_err(|message| RuntimeError::Failed(message))?;
+    Ok(host)
+}
+
+fn host_ethernet_tap_name(endpoint: &Value) -> Result<String, RuntimeError> {
+    let endpoint_id = endpoint
+        .get("runtime_endpoint_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            RuntimeError::Failed("Builtin link endpoint has no runtime ID".to_owned())
+        })?;
+    let compact = endpoint_id
+        .chars()
+        .filter(|character| character.is_ascii_hexdigit())
+        .take(11)
+        .collect::<String>();
+    if compact.len() != 11 {
+        return Err(RuntimeError::Failed(
+            "Builtin link endpoint ID is invalid".to_owned(),
+        ));
+    }
+    Ok(format!("nsct{compact}"))
+}
+
+async fn forward_frame(
+    forwarding: &Arc<Mutex<ForwardingNode>>,
+    source_port: u16,
+    mut frame: Vec<u8>,
+) -> Vec<(Arc<UdpSocket>, SocketAddr, Vec<u8>)> {
+    let mut node = forwarding.lock().await;
+    if node.node_type == "ethernet_hub" {
+        return node
+            .ports
+            .iter()
+            .filter(|(port, _)| **port != source_port)
+            .map(|(_, target)| (target.socket.clone(), target.relay_address, frame.clone()))
+            .collect();
+    }
+    let Some(source_mode) = node.modes.get(&source_port).cloned() else {
+        return Vec::new();
+    };
+    let Some((vlan, stripped_frame)) = classify_ingress(&source_mode, &frame) else {
+        return Vec::new();
+    };
+    frame = stripped_frame;
+    if frame.len() < 14 {
+        return Vec::new();
+    }
+    let source_mac: [u8; 6] = frame[6..12].try_into().unwrap_or([0; 6]);
+    let destination_mac: [u8; 6] = frame[0..6].try_into().unwrap_or([0; 6]);
+    if !is_multicast(source_mac) && source_mac != [0; 6] {
+        node.learned.insert(
+            (vlan, source_mac),
+            LearnedAddress {
+                port: source_port,
+                learned_at: Instant::now(),
+            },
+        );
+    }
+    node.learned
+        .retain(|_, learned| learned.learned_at.elapsed() < FDB_AGE);
+
+    let known_destination = (!is_multicast(destination_mac))
+        .then(|| {
+            node.learned
+                .get(&(vlan, destination_mac))
+                .map(|entry| entry.port)
+        })
+        .flatten();
+    node.ports
+        .iter()
+        .filter(|(port, target)| {
+            **port != source_port
+                && known_destination.map_or(true, |known| known == **port)
+                && target
+                    .mode
+                    .as_ref()
+                    .is_some_and(|mode| vlan_allowed(mode, vlan))
+        })
+        .filter_map(|(_, target)| {
+            let output = classify_egress(target.mode.as_ref()?, vlan, &frame)?;
+            Some((target.socket.clone(), target.relay_address, output))
+        })
+        .collect()
+}
+
+fn is_multicast(mac: [u8; 6]) -> bool {
+    mac[0] & 1 == 1
+}
+
+fn vlan_allowed(mode: &SwitchPortMode, vlan: u16) -> bool {
+    match mode {
+        SwitchPortMode::Access { vlan: access_vlan }
+        | SwitchPortMode::QinQ {
+            vlan: access_vlan, ..
+        } => *access_vlan == vlan,
+        SwitchPortMode::Dot1q { .. } => true,
+    }
+}
+
+fn classify_ingress(mode: &SwitchPortMode, frame: &[u8]) -> Option<(u16, Vec<u8>)> {
+    if frame.len() < 14 {
+        return None;
+    }
+    let ethertype = u16::from_be_bytes([frame[12], frame[13]]);
+    let tagged = matches!(ethertype, 0x8100 | 0x88a8 | 0x9100 | 0x9200) && frame.len() >= 18;
+    let tagged_vlan = tagged.then(|| u16::from_be_bytes([frame[14], frame[15]]) & 0x0fff);
+    match mode {
+        SwitchPortMode::Access { vlan } => match tagged_vlan {
+            Some(tag) if tag != *vlan => None,
+            _ => Some((*vlan, frame.to_vec())),
+        },
+        SwitchPortMode::Dot1q { native_vlan } => {
+            Some((tagged_vlan.unwrap_or(*native_vlan), frame.to_vec()))
+        }
+        SwitchPortMode::QinQ {
+            vlan,
+            ethertype: qinq_type,
+        } => {
+            if tagged && ethertype != *qinq_type {
+                return None;
+            }
+            Some((tagged_vlan.unwrap_or(*vlan), frame.to_vec()))
+        }
+    }
+}
+
+fn classify_egress(mode: &SwitchPortMode, vlan: u16, frame: &[u8]) -> Option<Vec<u8>> {
+    let (kind, native_vlan, ethertype) = match mode {
+        SwitchPortMode::Access { vlan } => ("access", *vlan, 0x8100),
+        SwitchPortMode::Dot1q { native_vlan } => ("dot1q", *native_vlan, 0x8100),
+        SwitchPortMode::QinQ { vlan, ethertype } => ("qinq", *vlan, *ethertype),
+    };
+    let frame = remove_outer_vlan(frame);
+    if kind == "access" || (kind == "dot1q" && vlan == native_vlan) {
+        return Some(frame);
+    }
+    Some(insert_vlan(&frame, ethertype, vlan))
+}
+
+fn remove_outer_vlan(frame: &[u8]) -> Vec<u8> {
+    if frame.len() >= 18
+        && matches!(
+            u16::from_be_bytes([frame[12], frame[13]]),
+            0x8100 | 0x88a8 | 0x9100 | 0x9200
+        )
+    {
+        let mut output = Vec::with_capacity(frame.len() - 4);
+        output.extend_from_slice(&frame[..12]);
+        output.extend_from_slice(&frame[16..]);
+        output
+    } else {
+        frame.to_vec()
+    }
+}
+
+fn insert_vlan(frame: &[u8], ethertype: u16, vlan: u16) -> Vec<u8> {
+    if frame.len() < 14 {
+        return frame.to_vec();
+    }
+    let mut output = Vec::with_capacity(frame.len() + 4);
+    output.extend_from_slice(&frame[..12]);
+    output.extend_from_slice(&ethertype.to_be_bytes());
+    output.extend_from_slice(&(vlan & 0x0fff).to_be_bytes());
+    output.extend_from_slice(&frame[12..]);
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ethernet_frame(destination: [u8; 6], source: [u8; 6]) -> Vec<u8> {
+        let mut frame = Vec::from(destination);
+        frame.extend_from_slice(&source);
+        frame.extend_from_slice(&[0x08, 0x00, 0, 1, 2, 3]);
+        frame
+    }
+
+    #[test]
+    fn builtin_templates_have_upstream_names_and_port_shapes() {
+        let templates = BuiltinRuntime::templates();
+        assert_eq!(templates.len(), 4);
+        assert_eq!(templates[0]["ports_mapping"].as_array().unwrap().len(), 8);
+        assert_eq!(templates[0]["ports_mapping"][7]["name"], "Ethernet7");
+        assert_eq!(templates[1]["ports_mapping"].as_array().unwrap().len(), 8);
+        assert_eq!(templates[2]["template_type"], "cloud");
+        assert_eq!(templates[3]["ports_mapping"][0]["name"], "nat0");
+    }
+
+    #[test]
+    fn switch_access_vlan_rejects_cross_vlan_ingress_and_normalizes_ports() {
+        let node = BuiltinRuntime::normalize_node(json!({
+            "name":"S1","node_type":"ethernet_switch",
+            "ports_mapping":[
+                {"type":"access","vlan":7},
+                {"type":"access","vlan":8}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(node["ports_mapping"][1]["name"], "Ethernet1");
+        let frame = ethernet_frame([0xff; 6], [0x02, 0, 0, 0, 0, 1]);
+        assert_eq!(
+            classify_ingress(&switch_mode(&node["ports_mapping"][0]).unwrap(), &frame)
+                .unwrap()
+                .0,
+            7
+        );
+        assert!(!vlan_allowed(
+            &switch_mode(&node["ports_mapping"][1]).unwrap(),
+            7
+        ));
+    }
+
+    #[test]
+    fn dot1q_and_qinq_egress_preserve_vlan_tags() {
+        let frame = ethernet_frame([0x02, 0, 0, 0, 0, 2], [0x02, 0, 0, 0, 0, 1]);
+        let tagged =
+            classify_egress(&SwitchPortMode::Dot1q { native_vlan: 1 }, 42, &frame).unwrap();
+        assert_eq!(&tagged[12..16], &[0x81, 0x00, 0x00, 0x2a]);
+        let qinq = classify_egress(
+            &SwitchPortMode::QinQ {
+                vlan: 42,
+                ethertype: 0x88a8,
+            },
+            42,
+            &frame,
+        )
+        .unwrap();
+        assert_eq!(&qinq[12..16], &[0x88, 0xa8, 0x00, 0x2a]);
+    }
+
+    #[test]
+    fn normalizes_cloud_ethernet_udp_and_tap_ports() {
+        let node = BuiltinRuntime::normalize_node(json!({
+            "name":"cloud1","node_type":"cloud",
+            "ports_mapping":[
+                {"type":"ethernet","interface":"ens33"},
+                {"type":"tap","interface":"tap0"},
+                {"type":"udp","lport":4001,"rhost":"127.0.0.1","rport":4002}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(node["ports_mapping"][2]["port_number"], 2);
+        assert_eq!(
+            BuiltinRuntime::adapter_nio(
+                &node,
+                &json!({"port_number":0,"runtime_endpoint_id":"0123456789ab-cdef"})
+            )
+            .unwrap(),
+            AdapterNio::HostEthernet {
+                interface: "ens33".to_owned(),
+                tap_interface: "nsct0123456789a".to_owned(),
+            }
+        );
+        assert_eq!(
+            BuiltinRuntime::adapter_nio(&node, &json!({"port_number":1})).unwrap(),
+            AdapterNio::Tap {
+                interface: "tap0".to_owned(),
+            }
+        );
+        assert_eq!(
+            BuiltinRuntime::adapter_nio(&node, &json!({"port_number":2})).unwrap(),
+            AdapterNio::ExternalUdp {
+                local_port: 4001,
+                remote_host: "127.0.0.1".to_owned(),
+                remote_port: 4002,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_vlan_and_shell_syntax_in_host_mapping() {
+        let invalid_vlan = BuiltinRuntime::normalize_node(json!({
+            "name":"S1","node_type":"ethernet_switch",
+            "ports_mapping":[{"type":"access","vlan":4095}]
+        }));
+        assert!(invalid_vlan.is_err());
+        let invalid_interface = BuiltinRuntime::normalize_node(json!({
+            "name":"cloud1","node_type":"cloud",
+            "ports_mapping":[{"type":"ethernet","interface":"eth0;reboot"}]
+        }));
+        assert!(invalid_interface.is_err());
+    }
+
+    #[tokio::test]
+    async fn hub_floods_every_frame_to_all_other_active_ports() {
+        let mut ports = HashMap::new();
+        for port in 0..3u16 {
+            let socket = Arc::new(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap());
+            ports.insert(
+                port,
+                RuntimePort {
+                    socket,
+                    relay_address: SocketAddr::from((Ipv4Addr::LOCALHOST, 20000 + port)),
+                    mode: None,
+                },
+            );
+        }
+        let forwarding = Arc::new(Mutex::new(ForwardingNode {
+            node_type: "ethernet_hub".to_owned(),
+            modes: HashMap::new(),
+            ports,
+            learned: HashMap::new(),
+        }));
+        let frame = ethernet_frame([0x02, 0, 0, 0, 0, 2], [0x02, 0, 0, 0, 0, 1]);
+        let forwarded = forward_frame(&forwarding, 0, frame.clone()).await;
+        assert_eq!(forwarded.len(), 2);
+        assert!(forwarded.iter().all(|(_, _, packet)| packet == &frame));
+    }
+
+    #[tokio::test]
+    async fn switch_learns_unicast_and_keeps_access_vlans_isolated() {
+        let socket =
+            || async { Arc::new(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap()) };
+        let port_socket_0 = socket().await;
+        let port_socket_1 = socket().await;
+        let port_socket_2 = socket().await;
+        let ports = HashMap::from([
+            (
+                0,
+                RuntimePort {
+                    socket: port_socket_0,
+                    relay_address: SocketAddr::from((Ipv4Addr::LOCALHOST, 20000)),
+                    mode: Some(SwitchPortMode::Access { vlan: 10 }),
+                },
+            ),
+            (
+                1,
+                RuntimePort {
+                    socket: port_socket_1,
+                    relay_address: SocketAddr::from((Ipv4Addr::LOCALHOST, 20001)),
+                    mode: Some(SwitchPortMode::Access { vlan: 10 }),
+                },
+            ),
+            (
+                2,
+                RuntimePort {
+                    socket: port_socket_2,
+                    relay_address: SocketAddr::from((Ipv4Addr::LOCALHOST, 20002)),
+                    mode: Some(SwitchPortMode::Access { vlan: 20 }),
+                },
+            ),
+        ]);
+        let forwarding = Arc::new(Mutex::new(ForwardingNode {
+            node_type: "ethernet_switch".to_owned(),
+            modes: HashMap::from([
+                (0, SwitchPortMode::Access { vlan: 10 }),
+                (1, SwitchPortMode::Access { vlan: 10 }),
+                (2, SwitchPortMode::Access { vlan: 20 }),
+            ]),
+            ports,
+            learned: HashMap::new(),
+        }));
+        let host_a = [0x02, 0, 0, 0, 0, 1];
+        let host_b = [0x02, 0, 0, 0, 0, 2];
+        let flood = forward_frame(&forwarding, 0, ethernet_frame([0xff; 6], host_a)).await;
+        assert_eq!(flood.len(), 1);
+        assert_eq!(flood[0].1.port(), 20001);
+
+        let learned = forward_frame(&forwarding, 1, ethernet_frame(host_a, host_b)).await;
+        assert_eq!(learned.len(), 1);
+        assert_eq!(learned[0].1.port(), 20000);
+
+        let isolated = forward_frame(
+            &forwarding,
+            2,
+            ethernet_frame(host_a, [0x02, 0, 0, 0, 0, 3]),
+        )
+        .await;
+        assert!(isolated.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires upstream uBridge with CAP_NET_ADMIN and CAP_NET_RAW"]
+    async fn cloud_udp_nio_exchanges_frames_with_the_link_engine() {
+        use std::{env, path::PathBuf};
+
+        use crate::{links::LinkEngine, ubridge::UbridgeRuntime};
+        use tokio::time::timeout;
+
+        let binary = env::var_os("NETWORK_SIMULATOR_TEST_UBRIDGE")
+            .expect("NETWORK_SIMULATOR_TEST_UBRIDGE names a capable upstream uBridge");
+        let directory = tempfile::tempdir().expect("temporary uBridge state");
+        let ubridge = UbridgeRuntime::with_paths(
+            PathBuf::from(binary),
+            directory.path().join("ubridge.sock"),
+        );
+        let engine = LinkEngine::new(ubridge.clone());
+        let external_peer = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind Cloud UDP peer");
+        let external_port = external_peer.local_addr().unwrap().port();
+        let cloud_local_port = ubridge.reserve_udp_port().await.unwrap();
+        let cloud_id = Uuid::new_v4().to_string();
+        let peer_id = Uuid::new_v4().to_string();
+        let cloud = BuiltinRuntime::normalize_node(json!({
+            "node_id": cloud_id,
+            "name": "Cloud UDP live test",
+            "node_type": "cloud",
+            "ports_mapping": [{
+                "name": "External UDP",
+                "type": "udp",
+                "lport": cloud_local_port,
+                "rhost": "127.0.0.1",
+                "rport": external_port
+            }]
+        }))
+        .expect("normalize Cloud UDP mapping");
+        let mut link = json!({
+            "link_id": Uuid::new_v4().to_string(),
+            "nodes": [
+                {"node_id": cloud_id, "node_type": "cloud", "adapter_number": 0, "port_number": 0},
+                {"node_id": peer_id, "node_type": "qemu", "adapter_number": 0, "port_number": 0}
+            ]
+        });
+        engine
+            .reserve_pair(&mut link)
+            .await
+            .expect("allocate link NIO ports");
+        let endpoints = link["nodes"].as_array().unwrap();
+        let cloud_endpoint = endpoints[0].clone();
+        let peer_endpoint = endpoints[1].clone();
+        let runtime_port = peer_endpoint["runtime_udp_port"].as_u64().unwrap() as u16;
+        let adapter_port = peer_endpoint["runtime_adapter_port"].as_u64().unwrap() as u16;
+        let peer_runtime = UdpSocket::bind((Ipv4Addr::LOCALHOST, runtime_port))
+            .await
+            .expect("bind peer runtime NIO");
+        let run: Result<(), String> = async {
+            let cloud_nio = BuiltinRuntime::adapter_nio(&cloud, &cloud_endpoint)
+                .map_err(|error| error.message().to_owned())?;
+            engine
+                .attach_endpoint(&cloud_endpoint, cloud_nio, &json!({}), false, None)
+                .await
+                .map_err(|error| error.message().to_owned())?;
+            engine
+                .attach_endpoint(
+                    &peer_endpoint,
+                    AdapterNio::Udp {
+                        adapter_port,
+                        runtime_port,
+                    },
+                    &json!({}),
+                    false,
+                    None,
+                )
+                .await
+                .map_err(|error| error.message().to_owned())?;
+
+            let from_cloud = vec![
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02, 0, 0, 0, 0, 1, 0x88, 0xb5, 1, 2, 3,
+            ];
+            external_peer
+                .send_to(&from_cloud, (Ipv4Addr::LOCALHOST, cloud_local_port))
+                .await
+                .map_err(|error| error.to_string())?;
+            let mut received = [0u8; 128];
+            let (length, _) = timeout(
+                Duration::from_secs(3),
+                peer_runtime.recv_from(&mut received),
+            )
+            .await
+            .map_err(|_| "Cloud UDP frame did not reach the link peer".to_owned())?
+            .map_err(|error| error.to_string())?;
+            if received[..length] != from_cloud {
+                return Err("Cloud UDP link changed the incoming Ethernet frame".to_owned());
+            }
+
+            let from_peer = vec![
+                0x02, 0, 0, 0, 0, 1, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x88, 0xb5, 4, 5, 6,
+            ];
+            peer_runtime
+                .send_to(&from_peer, (Ipv4Addr::LOCALHOST, adapter_port))
+                .await
+                .map_err(|error| error.to_string())?;
+            let (length, _) = timeout(
+                Duration::from_secs(3),
+                external_peer.recv_from(&mut received),
+            )
+            .await
+            .map_err(|_| "Link peer frame did not reach the Cloud UDP peer".to_owned())?
+            .map_err(|error| error.to_string())?;
+            if received[..length] != from_peer {
+                return Err("Cloud UDP link changed the outgoing Ethernet frame".to_owned());
+            }
+            Ok(())
+        }
+        .await;
+
+        let _ = engine.detach_endpoint(&cloud_endpoint).await;
+        let _ = engine.detach_endpoint(&peer_endpoint).await;
+        assert!(
+            !ubridge
+                .has_link_endpoint(cloud_endpoint["runtime_endpoint_id"].as_str().unwrap())
+                .await
+        );
+        assert!(
+            !ubridge
+                .has_link_endpoint(peer_endpoint["runtime_endpoint_id"].as_str().unwrap())
+                .await
+        );
+        assert!(run.is_ok(), "Cloud UDP live test failed: {run:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker, alpine:latest, an active libvirt NAT network, and capable uBridge"]
+    async fn nat_live_routes_docker_traffic_through_libvirt() {
+        use std::{env, path::PathBuf};
+
+        use crate::{
+            links::{LinkEngine, NioAdapter},
+            runtime::{DockerRuntime, NodeAction},
+            ubridge::UbridgeRuntime,
+        };
+        use tokio::{process::Command, time::timeout};
+
+        let ubridge_binary = env::var_os("NETWORK_SIMULATOR_TEST_UBRIDGE")
+            .expect("NETWORK_SIMULATOR_TEST_UBRIDGE names a capable upstream uBridge");
+        let directory = tempfile::tempdir().expect("temporary builtin NAT test state");
+        let ubridge = UbridgeRuntime::with_paths(
+            PathBuf::from(ubridge_binary),
+            directory.path().join("ubridge.sock"),
+        );
+        let docker = DockerRuntime::new();
+        let engine = LinkEngine::new(ubridge.clone());
+        let docker_binary = env::var_os("NETWORK_SIMULATOR_DOCKER")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("docker"));
+        let project_id = Uuid::new_v4().to_string();
+        let nat_id = Uuid::new_v4().to_string();
+        let docker_id = Uuid::new_v4().to_string();
+        let mut nat = BuiltinRuntime::normalize_node(json!({
+            "node_id": nat_id,
+            "name": "NAT live test",
+            "node_type": "nat",
+            "ports_mapping": [{"type":"ethernet", "interface":"virbr0"}]
+        }))
+        .expect("normalize libvirt NAT node");
+        nat["project_id"] = json!(project_id);
+        let mut link = json!({
+            "link_id": Uuid::new_v4().to_string(),
+            "nodes": [
+                {"node_id": nat_id, "node_type":"nat", "adapter_number":0, "port_number":0},
+                {"node_id": docker_id, "node_type":"docker", "adapter_number":0, "port_number":0}
+            ]
+        });
+        engine
+            .reserve_pair(&mut link)
+            .await
+            .expect("allocate NAT link NIO ports");
+        let endpoints = link["nodes"].as_array().unwrap();
+        let nat_endpoint = endpoints[0].clone();
+        let docker_endpoint = endpoints[1].clone();
+        let nat_tap = host_ethernet_tap_name(&nat_endpoint).expect("derive NAT bridge TAP");
+        let docker_host = crate::ubridge::host_veth_name(
+            docker_endpoint["runtime_endpoint_id"].as_str().unwrap(),
+        )
+        .expect("derive Docker host veth");
+        let docker_guest = crate::ubridge::guest_veth_name(
+            docker_endpoint["runtime_endpoint_id"].as_str().unwrap(),
+        )
+        .expect("derive Docker guest veth");
+        let docker_node = Uuid::parse_str(&docker_id).unwrap();
+        let mac = format!(
+            "02:{:02x}:{:02x}:{:02x}:{:02x}:00",
+            docker_node.as_bytes()[0],
+            docker_node.as_bytes()[1],
+            docker_node.as_bytes()[2],
+            docker_node.as_bytes()[3]
+        );
+        let mut container_id = None;
+
+        let run: Result<(), String> = async {
+            let (created, _) = docker
+                .create_container(
+                    &project_id,
+                    &docker_id,
+                    "alpine:latest",
+                    "Built-in NAT live test",
+                    Some("/bin/sh -c 'sleep 3600'"),
+                    None,
+                    None,
+                )
+                .await
+                .map_err(|error| error.message().to_owned())?;
+            container_id = Some(created.clone());
+            docker
+                .lifecycle(&created, NodeAction::Start)
+                .await
+                .map_err(|error| error.message().to_owned())?;
+            let pid = docker
+                .container_pid(&created)
+                .await
+                .map_err(|error| error.message().to_owned())?;
+            ubridge
+                .create_veth_pair(&docker_host, &docker_guest)
+                .await
+                .map_err(|error| error.message().to_owned())?;
+            ubridge
+                .set_docker_mac_address(&docker_guest, &mac)
+                .await
+                .map_err(|error| error.message().to_owned())?;
+            ubridge
+                .set_interface_up(&docker_guest)
+                .await
+                .map_err(|error| error.message().to_owned())?;
+            ubridge
+                .set_interface_up(&docker_host)
+                .await
+                .map_err(|error| error.message().to_owned())?;
+            ubridge
+                .move_veth_to_container(&docker_guest, pid, "eth0")
+                .await
+                .map_err(|error| error.message().to_owned())?;
+
+            let nat_nio = BuiltinRuntime::adapter_nio(&nat, &nat_endpoint)
+                .map_err(|error| error.message().to_owned())?;
+            engine
+                .attach_endpoint(&nat_endpoint, nat_nio, &json!({}), false, None)
+                .await
+                .map_err(|error| error.message().to_owned())?;
+            let bridge_ports = Command::new("bridge")
+                .args(["link", "show", "master", "virbr0"])
+                .output()
+                .await
+                .map_err(|error| format!("Could not inspect virbr0 bridge ports: {error}"))?;
+            if !String::from_utf8_lossy(&bridge_ports.stdout).contains(&nat_tap) {
+                return Err(format!(
+                    "Cloud/NAT TAP {nat_tap} is not enslaved to virbr0: {}",
+                    String::from_utf8_lossy(&bridge_ports.stdout)
+                ));
+            }
+            let docker_nio = docker
+                .adapter_nio(&docker_endpoint)
+                .map_err(|error| error.message().to_owned())?;
+            engine
+                .attach_endpoint(&docker_endpoint, docker_nio, &json!({}), false, None)
+                .await
+                .map_err(|error| error.message().to_owned())?;
+
+            for arguments in [
+                vec!["ip", "link", "set", "eth0", "up"],
+                vec!["ip", "addr", "add", "192.168.122.250/24", "dev", "eth0"],
+                vec!["ip", "route", "replace", "default", "via", "192.168.122.1"],
+            ] {
+                let output = Command::new(&docker_binary)
+                    .args(["exec", &created])
+                    .args(arguments)
+                    .output()
+                    .await
+                    .map_err(|error| {
+                        format!("Could not configure Alpine NAT interface: {error}")
+                    })?;
+                if !output.status.success() {
+                    return Err(format!(
+                        "Could not configure Alpine NAT interface: {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    ));
+                }
+            }
+
+            for destination in ["192.168.122.1", "1.1.1.1"] {
+                let output = timeout(
+                    Duration::from_secs(8),
+                    Command::new(&docker_binary)
+                        .args(["exec", &created, "ping", "-c", "1", "-W", "5", destination])
+                        .output(),
+                )
+                .await
+                .map_err(|_| format!("Alpine ping to {destination} timed out"))?
+                .map_err(|error| format!("Alpine ping to {destination} could not run: {error}"))?;
+                if !output.status.success() {
+                    let neighbors = Command::new(&docker_binary)
+                        .args(["exec", &created, "ip", "neigh", "show", "dev", "eth0"])
+                        .output()
+                        .await
+                        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+                        .unwrap_or_default();
+                    let tap_state = Command::new("ip")
+                        .args(["-d", "link", "show", "dev", &nat_tap])
+                        .output()
+                        .await
+                        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+                        .unwrap_or_default();
+                    return Err(format!(
+                        "Alpine could not ping {destination}: {}{}; neighbors={neighbors}; tap={tap_state}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    ));
+                }
+            }
+            Ok(())
+        }
+        .await;
+
+        let _ = engine.detach_endpoint(&nat_endpoint).await;
+        let _ = engine.detach_endpoint(&docker_endpoint).await;
+        let _ = ubridge.delete_veth(&docker_host).await;
+        if let Some(container_id) = container_id.as_deref() {
+            let _ = docker
+                .remove_node_resources(&docker_id, Some(container_id))
+                .await;
+        }
+        let nat_tap_remaining = Command::new("ip")
+            .args(["link", "show", "dev", &nat_tap])
+            .output()
+            .await
+            .expect("inspect cleaned NAT TAP");
+        let docker_veth_remaining = Command::new("ip")
+            .args(["link", "show", "dev", &docker_host])
+            .output()
+            .await
+            .expect("inspect cleaned Docker veth");
+        assert!(
+            !nat_tap_remaining.status.success(),
+            "NAT bridge TAP remained: {nat_tap}"
+        );
+        assert!(
+            !docker_veth_remaining.status.success(),
+            "Docker host veth remained: {docker_host}"
+        );
+        assert!(
+            !ubridge
+                .has_link_endpoint(nat_endpoint["runtime_endpoint_id"].as_str().unwrap())
+                .await
+        );
+        assert!(
+            !ubridge
+                .has_link_endpoint(docker_endpoint["runtime_endpoint_id"].as_str().unwrap())
+                .await
+        );
+        assert!(run.is_ok(), "NAT live test failed: {run:?}");
+    }
+}

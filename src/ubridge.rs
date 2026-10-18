@@ -28,7 +28,8 @@ pub struct UbridgeRuntime {
     binary: PathBuf,
     socket: PathBuf,
     daemon: Arc<Mutex<Option<Child>>>,
-    udp_endpoints: Arc<Mutex<HashMap<String, u16>>>,
+    link_bridges: Arc<Mutex<HashMap<String, String>>>,
+    host_bridge_taps: Arc<Mutex<HashMap<String, (String, String)>>>,
 }
 
 #[derive(Serialize)]
@@ -51,7 +52,8 @@ impl UbridgeRuntime {
             ),
             socket: state_dir.join("ubridge.sock"),
             daemon: Arc::new(Mutex::new(None)),
-            udp_endpoints: Arc::new(Mutex::new(HashMap::new())),
+            link_bridges: Arc::new(Mutex::new(HashMap::new())),
+            host_bridge_taps: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -61,7 +63,8 @@ impl UbridgeRuntime {
             binary: binary.into(),
             socket: socket.into(),
             daemon: Arc::new(Mutex::new(None)),
-            udp_endpoints: Arc::new(Mutex::new(HashMap::new())),
+            link_bridges: Arc::new(Mutex::new(HashMap::new())),
+            host_bridge_taps: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -79,20 +82,31 @@ impl UbridgeRuntime {
         match self.version().await {
             Ok(version) => {
                 let probe = uuid::Uuid::new_v4().to_string();
-                match self.create_segment(&probe).await {
-                    Ok(segment) => match self.delete_segment(&segment).await {
-                        Ok(()) => UbridgeRuntimeInfo {
-                            available: true,
-                            binary: self.binary.display().to_string(),
-                            version: Some(version),
-                            error: None,
+                match endpoint_name(&probe) {
+                    Ok(bridge) => match self.command(&format!("bridge create {bridge}")).await {
+                        Ok(_) => match self.command(&format!("bridge delete {bridge}")).await {
+                            Ok(_) => UbridgeRuntimeInfo {
+                                available: true,
+                                binary: self.binary.display().to_string(),
+                                version: Some(version),
+                                error: None,
+                            },
+                            Err(error) => UbridgeRuntimeInfo {
+                                available: false,
+                                binary: self.binary.display().to_string(),
+                                version: Some(version),
+                                error: Some(format!(
+                                    "Could not remove uBridge capability probe: {}",
+                                    error.message()
+                                )),
+                            },
                         },
                         Err(error) => UbridgeRuntimeInfo {
                             available: false,
                             binary: self.binary.display().to_string(),
                             version: Some(version),
                             error: Some(format!(
-                                "uBridge can create a kernel segment but could not remove its capability probe: {}",
+                                "Could not create a uBridge NIO relay: {}",
                                 error.message()
                             )),
                         },
@@ -101,11 +115,7 @@ impl UbridgeRuntime {
                         available: false,
                         binary: self.binary.display().to_string(),
                         version: Some(version),
-                        error: Some(format!(
-                            "uBridge {} is installed but cannot create Linux bridges; mixed-runtime Ethernet requires CAP_NET_ADMIN and CAP_NET_RAW: {}",
-                            self.binary.display(),
-                            error.message()
-                        )),
+                        error: Some(error.message().to_owned()),
                     },
                 }
             }
@@ -118,53 +128,11 @@ impl UbridgeRuntime {
         }
     }
 
-    pub async fn create_segment(&self, link_id: &str) -> Result<String, RuntimeError> {
-        let bridge = segment_name(link_id)?;
-        self.command(&format!("brctl create {bridge}")).await?;
-        if let Err(error) = self.set_interface_up(&bridge).await {
-            let _ = self.delete_segment(&bridge).await;
-            return Err(error);
-        }
-        Ok(bridge)
-    }
-
-    pub async fn create_tap(&self, tap_name: &str, segment: &str) -> Result<(), RuntimeError> {
-        validate_interface_name(tap_name)?;
-        validate_interface_name(segment)?;
-        let uid = libc_uid();
-        self.command(&format!("tap create {tap_name}")).await?;
-        if let Err(error) = self
-            .command(&format!("tap set_owner {tap_name} {uid}"))
-            .await
-        {
-            let _ = self.command(&format!("tap delete {tap_name}")).await;
-            return Err(error);
-        }
-        if let Err(error) = self
-            .command(&format!("brctl addif {segment} {tap_name}"))
-            .await
-        {
-            let _ = self.command(&format!("tap delete {tap_name}")).await;
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    pub async fn create_veth(
-        &self,
-        host: &str,
-        guest: &str,
-        segment: &str,
-    ) -> Result<(), RuntimeError> {
+    pub async fn create_veth_pair(&self, host: &str, guest: &str) -> Result<(), RuntimeError> {
         validate_interface_name(host)?;
         validate_interface_name(guest)?;
-        validate_interface_name(segment)?;
         self.command(&format!("docker create_veth {host} {guest}"))
             .await?;
-        if let Err(error) = self.command(&format!("brctl addif {segment} {host}")).await {
-            let _ = self.command(&format!("docker delete_veth {host}")).await;
-            return Err(error);
-        }
         Ok(())
     }
 
@@ -188,6 +156,27 @@ impl UbridgeRuntime {
         Ok(())
     }
 
+    pub async fn set_docker_mac_address(
+        &self,
+        interface: &str,
+        mac_address: &str,
+    ) -> Result<(), RuntimeError> {
+        validate_interface_name(interface)?;
+        let octets = mac_address.split(':').collect::<Vec<_>>();
+        if octets.len() != 6
+            || octets.iter().any(|octet| {
+                octet.len() != 2 || !octet.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+        {
+            return Err(RuntimeError::Failed(
+                "Docker interface MAC address must contain six hexadecimal octets".to_owned(),
+            ));
+        }
+        self.command(&format!("docker set_mac_addr {interface} {mac_address}"))
+            .await?;
+        Ok(())
+    }
+
     pub async fn set_interface_up(&self, interface: &str) -> Result<(), RuntimeError> {
         validate_interface_name(interface)?;
         self.command(&format!("link set {interface} up")).await?;
@@ -198,77 +187,355 @@ impl UbridgeRuntime {
         available_udp_port().await
     }
 
-    pub async fn attach_udp_to_tap_at(
+    /// Attach one endpoint of a point-to-point link to a runtime adapter.
+    /// Each endpoint owns a uBridge bridge joining the runtime NIO to the
+    /// reciprocal link UDP tunnel NIO. Docker adapters use an Ethernet NIO;
+    /// the emulators use a local UDP NIO.
+    pub async fn attach_link_endpoint(
         &self,
         endpoint_id: &str,
-        tap_name: &str,
-        switch_port: u16,
-        emulator_port: u16,
+        link_local_port: u16,
+        peer_link_port: u16,
+        runtime_local_port: Option<u16>,
+        runtime_peer_port: Option<u16>,
+        ethernet_interface: Option<&str>,
+        filters: &serde_json::Value,
+        suspended: bool,
+        capture_file: Option<&str>,
     ) -> Result<(), RuntimeError> {
-        validate_interface_name(tap_name)?;
+        self.attach_link_endpoint_with_peer(
+            endpoint_id,
+            link_local_port,
+            peer_link_port,
+            runtime_local_port,
+            runtime_peer_port,
+            ethernet_interface,
+            None,
+            None,
+            filters,
+            suspended,
+            capture_file,
+        )
+        .await
+    }
+
+    /// Attach an endpoint to either a runtime UDP NIO or a host-side Cloud
+    /// NIO. Cloud ports use Ethernet, TAP, or a separately configured UDP
+    /// peer; ordinary VM ports keep the reciprocal runtime UDP tunnel.
+    pub async fn attach_link_endpoint_with_peer(
+        &self,
+        endpoint_id: &str,
+        link_local_port: u16,
+        peer_link_port: u16,
+        runtime_local_port: Option<u16>,
+        runtime_peer_port: Option<u16>,
+        ethernet_interface: Option<&str>,
+        tap_interface: Option<&str>,
+        external_udp: Option<(u16, &str, u16)>,
+        filters: &serde_json::Value,
+        suspended: bool,
+        capture_file: Option<&str>,
+    ) -> Result<(), RuntimeError> {
+        self.attach_link_endpoint_internal(
+            endpoint_id,
+            link_local_port,
+            peer_link_port,
+            runtime_local_port,
+            runtime_peer_port,
+            ethernet_interface,
+            tap_interface,
+            external_udp,
+            None,
+            filters,
+            suspended,
+            capture_file,
+        )
+        .await
+    }
+
+    /// Attach a host Ethernet interface through Linux's appropriate NIO.
+    /// Physical interfaces use uBridge raw Ethernet; bridge interfaces use a
+    /// temporary TAP enslaved to the selected bridge, matching Cloud/NAT.
+    pub async fn attach_link_endpoint_with_host_ethernet(
+        &self,
+        endpoint_id: &str,
+        link_local_port: u16,
+        peer_link_port: u16,
+        host_interface: &str,
+        tap_interface: &str,
+        filters: &serde_json::Value,
+        suspended: bool,
+        capture_file: Option<&str>,
+    ) -> Result<(), RuntimeError> {
+        self.attach_link_endpoint_internal(
+            endpoint_id,
+            link_local_port,
+            peer_link_port,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some((host_interface, tap_interface)),
+            filters,
+            suspended,
+            capture_file,
+        )
+        .await
+    }
+
+    async fn attach_link_endpoint_internal(
+        &self,
+        endpoint_id: &str,
+        link_local_port: u16,
+        peer_link_port: u16,
+        runtime_local_port: Option<u16>,
+        runtime_peer_port: Option<u16>,
+        ethernet_interface: Option<&str>,
+        tap_interface: Option<&str>,
+        external_udp: Option<(u16, &str, u16)>,
+        host_ethernet: Option<(&str, &str)>,
+        filters: &serde_json::Value,
+        suspended: bool,
+        capture_file: Option<&str>,
+    ) -> Result<(), RuntimeError> {
         let bridge = endpoint_name(endpoint_id)?;
-        if let Some(existing_port) = self.udp_endpoints.lock().await.get(endpoint_id)
-            && *existing_port == switch_port
-        {
+        if self.link_bridges.lock().await.get(endpoint_id) == Some(&bridge) {
+            self.update_link_endpoint(endpoint_id, filters, suspended)
+                .await?;
+            if let Some(path) = capture_file {
+                self.start_link_capture(endpoint_id, path).await?;
+            }
             return Ok(());
         }
+
         let mut created = false;
+        let mut host_bridge_tap = None;
         let setup = async {
             self.command(&format!("bridge create {bridge}")).await?;
             created = true;
-            self.command(&format!("bridge add_nio_tap {bridge} {tap_name}"))
+            if let Some((interface, tap)) = host_ethernet {
+                validate_interface_name(interface)?;
+                validate_interface_name(tap)?;
+                if is_linux_bridge_interface(interface) {
+                    self.command(&format!("bridge add_nio_tap {bridge} \"{tap}\""))
+                        .await?;
+                    self.command(&format!("brctl addif \"{interface}\" \"{tap}\""))
+                        .await?;
+                    host_bridge_tap = Some((interface.to_owned(), tap.to_owned()));
+                } else {
+                    self.command(&format!(
+                        "bridge add_nio_linux_raw {bridge} \"{interface}\""
+                    ))
+                    .await?;
+                }
+            } else if let Some(interface) = ethernet_interface {
+                validate_interface_name(interface)?;
+                self.command(&format!("bridge add_nio_ethernet {bridge} {interface}"))
+                    .await?;
+            } else if let Some(interface) = tap_interface {
+                validate_interface_name(interface)?;
+                self.command(&format!("bridge add_nio_tap {bridge} {interface}"))
+                    .await?;
+            } else if let Some((local_port, remote_host, remote_port)) = external_udp {
+                validate_remote_host(remote_host)?;
+                if local_port == 0 || remote_port == 0 {
+                    return Err(RuntimeError::Failed(
+                        "Cloud UDP ports must be between 1 and 65535".to_owned(),
+                    ));
+                }
+                self.command(&format!(
+                    "bridge add_nio_udp {bridge} {local_port} {remote_host} {remote_port}"
+                ))
                 .await?;
+            } else {
+                let local = runtime_local_port.ok_or_else(|| {
+                    RuntimeError::Failed("runtime UDP NIO has no local port".to_owned())
+                })?;
+                let peer = runtime_peer_port.ok_or_else(|| {
+                    RuntimeError::Failed("runtime UDP NIO has no peer port".to_owned())
+                })?;
+                self.command(&format!(
+                    "bridge add_nio_udp {bridge} {local} 127.0.0.1 {peer}"
+                ))
+                .await?;
+            }
             self.command(&format!(
-                "bridge add_nio_udp {bridge} {switch_port} 127.0.0.1 {emulator_port}"
+                "bridge add_nio_udp {bridge} {link_local_port} 127.0.0.1 {peer_link_port}"
             ))
             .await?;
             self.command(&format!("bridge start {bridge}")).await?;
+            self.apply_link_filters(&bridge, filters, suspended).await?;
+            if let Some(path) = capture_file {
+                self.command(&format!(
+                    "bridge start_capture {bridge} \"{}\"",
+                    escape_ubridge_arg(path)
+                ))
+                .await?;
+            }
             Ok::<(), RuntimeError>(())
         }
         .await;
         if let Err(error) = setup {
+            if let Some((interface, tap)) = host_bridge_tap.as_ref() {
+                let _ = self
+                    .command(&format!("brctl delif \"{interface}\" \"{tap}\""))
+                    .await;
+            }
             if created {
                 let _ = self.command(&format!("bridge delete {bridge}")).await;
             }
             return Err(error);
         }
-        self.udp_endpoints
+        if let Some(host_bridge_tap) = host_bridge_tap {
+            self.host_bridge_taps
+                .lock()
+                .await
+                .insert(endpoint_id.to_owned(), host_bridge_tap);
+        }
+        self.link_bridges
             .lock()
             .await
-            .insert(endpoint_id.to_owned(), switch_port);
+            .insert(endpoint_id.to_owned(), bridge);
         Ok(())
     }
 
-    pub async fn delete_udp_tap_endpoint(&self, endpoint_id: &str) -> Result<(), RuntimeError> {
+    pub async fn update_link_endpoint(
+        &self,
+        endpoint_id: &str,
+        filters: &serde_json::Value,
+        suspended: bool,
+    ) -> Result<(), RuntimeError> {
         let bridge = endpoint_name(endpoint_id)?;
-        self.command(&format!("bridge delete {bridge}")).await?;
-        self.udp_endpoints.lock().await.remove(endpoint_id);
-        Ok(())
-    }
-
-    pub async fn delete_tap(&self, tap_name: &str, segment: &str) -> Result<(), RuntimeError> {
-        validate_interface_name(tap_name)?;
-        validate_interface_name(segment)?;
-        let detach = self
-            .command(&format!("brctl delif {segment} {tap_name}"))
-            .await;
-        let delete = self.command(&format!("tap delete {tap_name}")).await;
-        if delete.is_ok() {
+        if !self.link_bridges.lock().await.contains_key(endpoint_id) {
             return Ok(());
         }
-        detach?;
-        delete.map(|_| ())
+        self.apply_link_filters(&bridge, filters, suspended).await
+    }
+
+    async fn apply_link_filters(
+        &self,
+        bridge: &str,
+        filters: &serde_json::Value,
+        suspended: bool,
+    ) -> Result<(), RuntimeError> {
+        self.command(&format!("bridge reset_packet_filters {bridge}"))
+            .await?;
+        if suspended {
+            self.command(&format!(
+                "bridge add_packet_filter {bridge} suspended frequency_drop -1"
+            ))
+            .await?;
+            return Ok(());
+        }
+        let Some(filters) = filters.as_object() else {
+            return Ok(());
+        };
+        let mut index = 0usize;
+        for (kind, values) in filters {
+            if !matches!(kind.as_str(), "delay" | "packet_loss" | "corrupt" | "bpf") {
+                return Err(RuntimeError::Failed(format!(
+                    "Unsupported uBridge link filter '{kind}'"
+                )));
+            }
+            let Some(values) = values.as_array() else {
+                return Err(RuntimeError::Failed(format!(
+                    "Link filter '{kind}' must contain an array of values"
+                )));
+            };
+            if kind == "bpf" {
+                let Some(expression) = values.first().and_then(serde_json::Value::as_str) else {
+                    return Err(RuntimeError::Failed(
+                        "BPF link filter must begin with a text expression".to_owned(),
+                    ));
+                };
+                for line in expression
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                {
+                    let extra = values
+                        .iter()
+                        .skip(1)
+                        .map(filter_value)
+                        .collect::<Result<Vec<_>, _>>()?
+                        .join(" ");
+                    self.command(&format!(
+                        "bridge add_packet_filter {bridge} filter{index} bpf \"{}\" {extra}",
+                        escape_ubridge_arg(line)
+                    ))
+                    .await?;
+                    index += 1;
+                }
+            } else {
+                let arguments = values
+                    .iter()
+                    .map(filter_value)
+                    .collect::<Result<Vec<_>, _>>()?
+                    .join(" ");
+                self.command(&format!(
+                    "bridge add_packet_filter {bridge} filter{index} {kind} {arguments}"
+                ))
+                .await?;
+                index += 1;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn start_link_capture(
+        &self,
+        endpoint_id: &str,
+        capture_file: &str,
+    ) -> Result<(), RuntimeError> {
+        if !self.link_bridges.lock().await.contains_key(endpoint_id) {
+            return Err(RuntimeError::Failed(
+                "Link capture requires a running endpoint".to_owned(),
+            ));
+        }
+        let bridge = endpoint_name(endpoint_id)?;
+        self.command(&format!(
+            "bridge start_capture {bridge} \"{}\"",
+            escape_ubridge_arg(capture_file)
+        ))
+        .await?;
+        Ok(())
+    }
+
+    pub async fn stop_link_capture(&self, endpoint_id: &str) -> Result<(), RuntimeError> {
+        if !self.link_bridges.lock().await.contains_key(endpoint_id) {
+            return Ok(());
+        }
+        let bridge = endpoint_name(endpoint_id)?;
+        self.command(&format!("bridge stop_capture {bridge}"))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn delete_link_endpoint(&self, endpoint_id: &str) -> Result<(), RuntimeError> {
+        if !self.link_bridges.lock().await.contains_key(endpoint_id) {
+            return Ok(());
+        }
+        let bridge = endpoint_name(endpoint_id)?;
+        if let Some((interface, tap)) = self.host_bridge_taps.lock().await.get(endpoint_id).cloned()
+        {
+            let _ = self
+                .command(&format!("brctl delif \"{interface}\" \"{tap}\""))
+                .await;
+        }
+        self.command(&format!("bridge delete {bridge}")).await?;
+        self.link_bridges.lock().await.remove(endpoint_id);
+        self.host_bridge_taps.lock().await.remove(endpoint_id);
+        Ok(())
+    }
+
+    pub async fn has_link_endpoint(&self, endpoint_id: &str) -> bool {
+        self.link_bridges.lock().await.contains_key(endpoint_id)
     }
 
     pub async fn delete_veth(&self, host: &str) -> Result<(), RuntimeError> {
         validate_interface_name(host)?;
         self.command(&format!("docker delete_veth {host}")).await?;
-        Ok(())
-    }
-
-    pub async fn delete_segment(&self, segment: &str) -> Result<(), RuntimeError> {
-        validate_interface_name(segment)?;
-        self.command(&format!("brctl delete {segment}")).await?;
         Ok(())
     }
 
@@ -344,6 +611,7 @@ impl UbridgeRuntime {
             wait_for_socket(&self.socket).await?;
             return Ok(());
         }
+        self.link_bridges.lock().await.clear();
         if let Some(parent) = self.socket.parent() {
             fs::create_dir_all(parent).map_err(|error| {
                 RuntimeError::Failed(format!("Could not create uBridge state directory: {error}"))
@@ -417,29 +685,51 @@ fn validate_interface_name(name: &str) -> Result<(), RuntimeError> {
     Ok(())
 }
 
-pub fn segment_name(link_id: &str) -> Result<String, RuntimeError> {
-    let compact = link_id
-        .chars()
-        .filter(|character| character.is_ascii_hexdigit())
-        .collect::<String>();
-    if compact.len() < 8 {
+fn validate_remote_host(host: &str) -> Result<(), RuntimeError> {
+    if host.is_empty()
+        || host.len() > 255
+        || !host
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b':' | b'%'))
+    {
         return Err(RuntimeError::Failed(
-            "Link ID must contain at least eight hexadecimal characters".to_owned(),
+            "Cloud UDP remote host must be an IP address or safe hostname".to_owned(),
         ));
     }
-    Ok(format!("nsb{}", &compact[..12.min(compact.len())]))
+    Ok(())
 }
 
-pub fn tap_name(endpoint_id: &str) -> Result<String, RuntimeError> {
-    Ok(format!("nst{}", compact_id(endpoint_id)?))
+fn filter_value(value: &serde_json::Value) -> Result<String, RuntimeError> {
+    match value {
+        serde_json::Value::Number(number) => Ok(number.to_string()),
+        serde_json::Value::String(text) if !text.contains(['\n', '\r']) && !text.is_empty() => {
+            Ok(format!("\"{}\"", escape_ubridge_arg(text)))
+        }
+        _ => Err(RuntimeError::Failed(
+            "Link filter values must be numbers or single-line text".to_owned(),
+        )),
+    }
+}
+
+fn escape_ubridge_arg(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 pub fn host_veth_name(endpoint_id: &str) -> Result<String, RuntimeError> {
     Ok(format!("nsv{}", compact_id(endpoint_id)?))
 }
 
+#[cfg(test)]
 pub fn guest_veth_name(endpoint_id: &str) -> Result<String, RuntimeError> {
     Ok(format!("nsg{}", compact_id(endpoint_id)?))
+}
+
+fn is_linux_bridge_interface(interface: &str) -> bool {
+    cfg!(target_os = "linux")
+        && std::path::Path::new("/sys/class/net")
+            .join(interface)
+            .join("bridge")
+            .exists()
 }
 
 fn endpoint_name(endpoint_id: &str) -> Result<String, RuntimeError> {
@@ -473,10 +763,6 @@ async fn available_udp_port() -> Result<u16, RuntimeError> {
         })
 }
 
-fn libc_uid() -> u32 {
-    unsafe { libc::geteuid() }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{env, path::PathBuf, time::Duration};
@@ -487,21 +773,16 @@ mod tests {
         time::timeout,
     };
 
-    use super::{
-        UbridgeRuntime, compact_id, endpoint_name, guest_veth_name, host_veth_name, is_final_reply,
-        segment_name, tap_name,
-    };
+    use super::{UbridgeRuntime, endpoint_name, guest_veth_name, host_veth_name, is_final_reply};
     use crate::{
         runtime::{DockerRuntime, NodeAction, RuntimeError},
         vpcs::VpcsRuntime,
     };
 
     #[test]
-    fn generates_linux_names_that_fit_interface_limits() {
+    fn generates_endpoint_and_veth_names_that_fit_linux_limits() {
         let id = "01234567-89ab-cdef-0123-456789abcdef";
         for name in [
-            segment_name(id).unwrap(),
-            tap_name(id).unwrap(),
             host_veth_name(id).unwrap(),
             guest_veth_name(id).unwrap(),
             endpoint_name(id).unwrap(),
@@ -512,7 +793,7 @@ mod tests {
                     .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
             );
         }
-        assert_eq!(compact_id(id).unwrap(), "0123456789ab");
+        assert_eq!(super::compact_id(id).unwrap(), "0123456789ab");
     }
 
     #[test]
@@ -524,7 +805,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires Docker, alpine:latest, upstream VPCS, and uBridge CAP_NET_ADMIN/CAP_NET_RAW"]
-    async fn alpine_and_vpcs_exchange_icmp_over_a_real_ubridge_segment() {
+    async fn alpine_and_vpcs_exchange_icmp_over_reciprocal_udp_nio_bridges() {
         let ubridge_binary = env::var_os("NETWORK_SIMULATOR_TEST_UBRIDGE")
             .expect("NETWORK_SIMULATOR_TEST_UBRIDGE names a capable upstream uBridge binary");
         let vpcs_binary = env::var_os("NETWORK_SIMULATOR_TEST_VPCS")
@@ -540,20 +821,19 @@ mod tests {
         let project_id = uuid::Uuid::new_v4().to_string();
         let vpcs_id = uuid::Uuid::new_v4().to_string();
         let docker_node_id = uuid::Uuid::new_v4().to_string();
-        let link_id = uuid::Uuid::new_v4().to_string();
         let vpcs_endpoint_id = uuid::Uuid::new_v4().to_string();
         let docker_endpoint_id = uuid::Uuid::new_v4().to_string();
-        let segment_name = segment_name(&link_id).expect("stable Linux bridge name");
-        let vpcs_tap = tap_name(&vpcs_endpoint_id).expect("stable VPCS TAP name");
-        let docker_host = host_veth_name(&docker_endpoint_id).expect("stable Docker veth name");
-        let docker_guest = guest_veth_name(&docker_endpoint_id).expect("stable Docker peer name");
-        let vpcs_switch_port = ubridge.reserve_udp_port().await.expect("VPCS UDP port");
-        let mut container_id = None;
-        let mut segment_created = false;
-        let mut tap_created = false;
-        let mut veth_created = false;
+        let vpcs_link_port = ubridge.reserve_udp_port().await.expect("VPCS link port");
+        let docker_link_port = ubridge.reserve_udp_port().await.expect("Docker link port");
+        let adapter_port = ubridge.reserve_udp_port().await.expect("VPCS adapter port");
+        let runtime_port = ubridge.reserve_udp_port().await.expect("VPCS runtime port");
+        let docker_host = host_veth_name(&docker_endpoint_id).expect("stable Docker host veth");
+        let docker_guest = guest_veth_name(&docker_endpoint_id).expect("stable Docker guest veth");
+        let docker_binary = env::var_os("NETWORK_SIMULATOR_DOCKER")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("docker"));
+        let mut container_id: Option<String> = None;
         let mut vpcs_started = false;
-        let mut udp_bridge_created = false;
 
         let run: Result<(), RuntimeError> = async {
             let (created_container, _) = docker
@@ -568,13 +848,24 @@ mod tests {
                 )
                 .await?;
             container_id = Some(created_container.clone());
-            let segment = ubridge.create_segment(&link_id).await?;
-            segment_created = true;
-            ubridge.create_tap(&vpcs_tap, &segment).await?;
-            tap_created = true;
+            docker
+                .lifecycle(&created_container, NodeAction::Start)
+                .await?;
+            let namespace_pid = docker.container_pid(&created_container).await?;
+            ubridge
+                .create_veth_pair(&docker_host, &docker_guest)
+                .await?;
+            ubridge
+                .set_docker_mac_address(&docker_guest, "02:00:00:00:00:01")
+                .await?;
+            ubridge.set_interface_up(&docker_guest).await?;
+            ubridge.set_interface_up(&docker_host).await?;
+            ubridge
+                .move_veth_to_container(&docker_guest, namespace_pid, "eth0")
+                .await?;
 
-            vpcs.set_link(&link_id, vec![vpcs_id.clone()]).await;
-            vpcs.set_bridge_port(&vpcs_id, vpcs_switch_port).await;
+            vpcs.set_nio_ports(&vpcs_id, adapter_port, runtime_port)
+                .await;
             vpcs.lifecycle(
                 &project_id,
                 &vpcs_id,
@@ -584,83 +875,54 @@ mod tests {
             )
             .await?;
             vpcs_started = true;
-            let vpcs_local_port = vpcs.active_udp_port(&vpcs_id).await.ok_or_else(|| {
-                RuntimeError::Failed("VPCS did not allocate its Ethernet UDP port".to_owned())
-            })?;
+
             ubridge
-                .attach_udp_to_tap_at(
-                    &vpcs_endpoint_id,
-                    &vpcs_tap,
-                    vpcs_switch_port,
-                    vpcs_local_port,
+                .attach_link_endpoint(
+                    &docker_endpoint_id,
+                    docker_link_port,
+                    vpcs_link_port,
+                    None,
+                    None,
+                    Some(&docker_host),
+                    &serde_json::json!({}),
+                    false,
+                    None,
                 )
                 .await?;
-            udp_bridge_created = true;
-
-            docker
-                .lifecycle(&created_container, NodeAction::Start)
-                .await?;
-            let namespace_pid = docker.container_pid(&created_container).await?;
             ubridge
-                .create_veth(&docker_host, &docker_guest, &segment)
-                .await?;
-            veth_created = true;
-            ubridge.set_interface_up(&docker_guest).await?;
-            ubridge
-                .move_veth_to_container(&docker_guest, namespace_pid, "eth1")
+                .attach_link_endpoint(
+                    &vpcs_endpoint_id,
+                    vpcs_link_port,
+                    docker_link_port,
+                    Some(adapter_port),
+                    Some(runtime_port),
+                    None,
+                    &serde_json::json!({}),
+                    false,
+                    None,
+                )
                 .await?;
 
-            let docker_binary = env::var_os("NETWORK_SIMULATOR_DOCKER")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("docker"));
-            let output = Command::new(docker_binary)
-                .args([
-                    "exec",
-                    &created_container,
-                    "ip",
-                    "addr",
-                    "add",
-                    "10.0.0.2/24",
-                    "dev",
-                    "eth1",
-                ])
-                .output()
-                .await
-                .map_err(|error| {
-                    RuntimeError::Unavailable(format!(
-                        "Could not configure the Alpine test interface: {error}"
-                    ))
-                })?;
-            if !output.status.success() {
-                return Err(RuntimeError::Failed(format!(
-                    "Could not configure Alpine eth1: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                )));
-            }
-            let output = Command::new(
-                env::var_os("NETWORK_SIMULATOR_DOCKER")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("docker")),
-            )
-            .args([
-                "exec",
-                &created_container,
-                "ip",
-                "link",
-                "set",
-                "eth1",
-                "up",
-            ])
-            .output()
-            .await
-            .map_err(|error| {
-                RuntimeError::Unavailable(format!("Could not bring up Alpine eth1: {error}"))
-            })?;
-            if !output.status.success() {
-                return Err(RuntimeError::Failed(format!(
-                    "Could not bring up Alpine eth1: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                )));
+            for args in [
+                vec!["ip", "addr", "add", "10.0.0.2/24", "dev", "eth0"],
+                vec!["ip", "link", "set", "eth0", "up"],
+            ] {
+                let output = Command::new(&docker_binary)
+                    .args(["exec", &created_container])
+                    .args(args)
+                    .output()
+                    .await
+                    .map_err(|error| {
+                        RuntimeError::Unavailable(format!(
+                            "Could not configure Alpine eth0: {error}"
+                        ))
+                    })?;
+                if !output.status.success() {
+                    return Err(RuntimeError::Failed(format!(
+                        "Could not configure Alpine eth0: {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    )));
+                }
             }
 
             let mut console = vpcs.connect_console(&vpcs_id).await?;
@@ -685,7 +947,7 @@ mod tests {
                     RuntimeError::Unavailable(format!("VPCS console failed: {error}"))
                 })?;
             let mut ping_output = Vec::new();
-            let ping_result = timeout(Duration::from_secs(15), async {
+            timeout(Duration::from_secs(15), async {
                 loop {
                     let mut chunk = [0_u8; 4096];
                     let length = console.read(&mut chunk).await?;
@@ -695,82 +957,214 @@ mod tests {
                     }
                 }
             })
-            .await;
-            if ping_result.is_err() {
-                let bridge = endpoint_name(&vpcs_endpoint_id)
-                    .expect("the test endpoint ID is valid");
-                let stats = ubridge
-                    .command(&format!("bridge get_stats {bridge}"))
-                    .await
-                    .unwrap_or_else(|error| error.message().to_owned());
-                let mut interfaces = String::new();
-                for interface in [&segment_name, &vpcs_tap, &docker_host] {
-                    let output = Command::new("ip")
-                        .args(["-s", "link", "show", "dev", interface])
-                        .output()
-                        .await;
-                    interfaces.push_str(&format!(
-                        "{}: {}\n",
-                        interface,
-                        output
-                            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
-                            .unwrap_or_else(|error| error.to_string())
-                    ));
-                }
-                let docker_binary = env::var_os("NETWORK_SIMULATOR_DOCKER")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("docker"));
-                let guest_interface = Command::new(docker_binary)
-                    .args([
-                        "exec",
-                        container_id.as_deref().unwrap_or_default(),
-                        "ip",
-                        "-s",
-                        "link",
-                        "show",
-                        "dev",
-                        "eth1",
-                    ])
-                    .output()
-                    .await
-                    .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
-                    .unwrap_or_else(|error| error.to_string());
-                return Err(RuntimeError::Unavailable(format!(
-                    "No ICMP reply from Alpine over uBridge: {}; bridge counters: {stats}; host interfaces: {interfaces}; Alpine eth1: {guest_interface}",
-                    String::from_utf8_lossy(&ping_output).trim(),
-                )));
-            }
-            ping_result
-                .expect("timeout was checked above")
-                .map_err(|error| RuntimeError::Unavailable(format!("VPCS console failed: {error}")))?;
+            .await
+            .map_err(|_| {
+                RuntimeError::Unavailable(format!(
+                    "No ICMP reply from Alpine: {}",
+                    String::from_utf8_lossy(&ping_output).trim()
+                ))
+            })?
+            .map_err(|error| RuntimeError::Unavailable(format!("VPCS console failed: {error}")))?;
             Ok(())
         }
         .await;
 
-        if udp_bridge_created {
-            let _ = ubridge.delete_udp_tap_endpoint(&vpcs_endpoint_id).await;
-        }
+        let _ = ubridge.delete_link_endpoint(&vpcs_endpoint_id).await;
+        let _ = ubridge.delete_link_endpoint(&docker_endpoint_id).await;
         if vpcs_started {
             let _ = vpcs.stop(&vpcs_id).await;
-        }
-        if veth_created {
-            let _ = ubridge.delete_veth(&docker_host).await;
         }
         if let Some(container_id) = container_id.as_deref() {
             let _ = docker
                 .remove_node_resources(&docker_node_id, Some(container_id))
                 .await;
         }
-        if tap_created {
-            let _ = ubridge.delete_tap(&vpcs_tap, &segment_name).await;
-        }
-        if segment_created {
-            let _ = ubridge.delete_segment(&segment_name).await;
-        }
-        vpcs.remove_link(&link_id).await;
+        let _ = ubridge.delete_veth(&docker_host).await;
         if let Err(error) = run {
             panic!(
-                "real Alpine-to-VPCS uBridge test failed: {}",
+                "real Alpine-to-VPCS UDP NIO test failed: {}",
+                error.message()
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker, alpine:latest, and uBridge CAP_NET_ADMIN/CAP_NET_RAW"]
+    async fn alpine_containers_exchange_icmp_over_reciprocal_udp_nio_bridges() {
+        let ubridge_binary = env::var_os("NETWORK_SIMULATOR_TEST_UBRIDGE")
+            .expect("NETWORK_SIMULATOR_TEST_UBRIDGE names a capable upstream uBridge binary");
+        let directory = tempfile::tempdir().expect("temporary uBridge state");
+        let ubridge = UbridgeRuntime::with_paths(
+            PathBuf::from(ubridge_binary),
+            directory.path().join("ubridge.sock"),
+        );
+        let docker = DockerRuntime::new();
+        let project_id = uuid::Uuid::new_v4().to_string();
+        let nodes = [
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+        ];
+        let endpoints = [
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+        ];
+        let link_ports = [
+            ubridge.reserve_udp_port().await.expect("first link port"),
+            ubridge.reserve_udp_port().await.expect("second link port"),
+        ];
+        let hosts = [
+            host_veth_name(&endpoints[0]).expect("first host veth name"),
+            host_veth_name(&endpoints[1]).expect("second host veth name"),
+        ];
+        let guests = [
+            guest_veth_name(&endpoints[0]).expect("first guest veth name"),
+            guest_veth_name(&endpoints[1]).expect("second guest veth name"),
+        ];
+        let mut containers = [None::<String>, None::<String>];
+
+        let run: Result<(), RuntimeError> = async {
+            for index in 0..2 {
+                let (container_id, _) = docker
+                    .create_container(
+                        &project_id,
+                        &nodes[index],
+                        "alpine:latest",
+                        &format!("UDP NIO Alpine {index}"),
+                        Some("/bin/sh -c 'sleep 3600'"),
+                        None,
+                        None,
+                    )
+                    .await?;
+                containers[index] = Some(container_id.clone());
+                docker.lifecycle(&container_id, NodeAction::Start).await?;
+                let pid = docker.container_pid(&container_id).await?;
+                ubridge
+                    .create_veth_pair(&hosts[index], &guests[index])
+                    .await?;
+                ubridge
+                    .set_docker_mac_address(
+                        &guests[index],
+                        if index == 0 {
+                            "02:00:00:00:00:01"
+                        } else {
+                            "02:00:00:00:00:02"
+                        },
+                    )
+                    .await?;
+                ubridge.set_interface_up(&guests[index]).await?;
+                ubridge.set_interface_up(&hosts[index]).await?;
+                ubridge
+                    .move_veth_to_container(&guests[index], pid, "eth0")
+                    .await?;
+                ubridge
+                    .attach_link_endpoint(
+                        &endpoints[index],
+                        link_ports[index],
+                        link_ports[1 - index],
+                        None,
+                        None,
+                        Some(&hosts[index]),
+                        &serde_json::json!({}),
+                        false,
+                        None,
+                    )
+                    .await?;
+                let docker_binary = env::var_os("NETWORK_SIMULATOR_DOCKER")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("docker"));
+                for args in [
+                    vec![
+                        "ip",
+                        "addr",
+                        "add",
+                        if index == 0 {
+                            "10.0.0.1/24"
+                        } else {
+                            "10.0.0.2/24"
+                        },
+                        "dev",
+                        "eth0",
+                    ],
+                    vec!["ip", "link", "set", "eth0", "up"],
+                ] {
+                    let output = Command::new(&docker_binary)
+                        .args(["exec", &container_id])
+                        .args(args)
+                        .output()
+                        .await
+                        .map_err(|error| {
+                            RuntimeError::Unavailable(format!(
+                                "Could not configure Alpine interface: {error}"
+                            ))
+                        })?;
+                    if !output.status.success() {
+                        return Err(RuntimeError::Failed(format!(
+                            "Could not configure Alpine interface: {}",
+                            String::from_utf8_lossy(&output.stderr).trim()
+                        )));
+                    }
+                }
+            }
+
+            let docker_binary = env::var_os("NETWORK_SIMULATOR_DOCKER")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("docker"));
+            let output = Command::new(docker_binary)
+                .args([
+                    "exec",
+                    containers[0].as_deref().unwrap_or_default(),
+                    "ping",
+                    "-c",
+                    "1",
+                    "-W",
+                    "3",
+                    "10.0.0.2",
+                ])
+                .output()
+                .await
+                .map_err(|error| {
+                    RuntimeError::Unavailable(format!(
+                        "Could not run Alpine-to-Alpine ping: {error}"
+                    ))
+                })?;
+            if !output.status.success()
+                || !String::from_utf8_lossy(&output.stdout).contains("1 packets received")
+            {
+                return Err(RuntimeError::Failed(format!(
+                    "Alpine-to-Alpine ICMP failed: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                )));
+            }
+            Ok(())
+        }
+        .await;
+
+        for endpoint in &endpoints {
+            let _ = ubridge.delete_link_endpoint(endpoint).await;
+        }
+        for (index, container_id) in containers.iter().enumerate() {
+            if let Some(container_id) = container_id.as_deref() {
+                let _ = docker
+                    .remove_node_resources(&nodes[index], Some(container_id))
+                    .await;
+            }
+            let _ = ubridge.delete_veth(&hosts[index]).await;
+        }
+        for host in &hosts {
+            let output = Command::new("ip")
+                .args(["link", "show", "dev", host])
+                .output()
+                .await
+                .expect("inspect cleaned-up veth");
+            assert!(
+                !output.status.success(),
+                "orphan host veth remained: {host}"
+            );
+        }
+        if let Err(error) = run {
+            panic!(
+                "real Alpine-to-Alpine UDP NIO test failed: {}",
                 error.message()
             );
         }

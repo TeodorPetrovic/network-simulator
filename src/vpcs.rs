@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     path::PathBuf,
@@ -15,7 +15,6 @@ use tokio::{
     net::{TcpStream, UdpSocket},
     process::{Child, Command},
     sync::{Mutex, RwLock},
-    task::JoinHandle,
     time::{sleep, timeout},
 };
 use uuid::Uuid;
@@ -32,27 +31,14 @@ pub struct VpcsRuntime {
     binary: PathBuf,
     state_dir: PathBuf,
     processes: Arc<Mutex<HashMap<String, ManagedVpcs>>>,
-    links: Arc<RwLock<HashMap<String, Vec<String>>>>,
     active_ports: Arc<RwLock<HashMap<String, u16>>>,
     bridge_ports: Arc<RwLock<HashMap<String, u16>>>,
-    external_ports: Arc<RwLock<HashMap<String, HashSet<u16>>>>,
-    segment_switches: Arc<Mutex<HashMap<String, ManagedSegmentSwitch>>>,
+    requested_runtime_ports: Arc<RwLock<HashMap<String, u16>>>,
 }
 
 struct ManagedVpcs {
     child: Child,
     console: SocketAddr,
-}
-
-struct ManagedSegmentSwitch {
-    port: u16,
-    task: JoinHandle<()>,
-}
-
-impl Drop for ManagedSegmentSwitch {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
 }
 
 #[derive(Serialize)]
@@ -70,11 +56,9 @@ impl VpcsRuntime {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("data/vpcs")),
             processes: Arc::new(Mutex::new(HashMap::new())),
-            links: Arc::new(RwLock::new(HashMap::new())),
             active_ports: Arc::new(RwLock::new(HashMap::new())),
             bridge_ports: Arc::new(RwLock::new(HashMap::new())),
-            external_ports: Arc::new(RwLock::new(HashMap::new())),
-            segment_switches: Arc::new(Mutex::new(HashMap::new())),
+            requested_runtime_ports: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -84,11 +68,9 @@ impl VpcsRuntime {
             binary: binary.into(),
             state_dir: state_dir.into(),
             processes: Arc::new(Mutex::new(HashMap::new())),
-            links: Arc::new(RwLock::new(HashMap::new())),
             active_ports: Arc::new(RwLock::new(HashMap::new())),
             bridge_ports: Arc::new(RwLock::new(HashMap::new())),
-            external_ports: Arc::new(RwLock::new(HashMap::new())),
-            segment_switches: Arc::new(Mutex::new(HashMap::new())),
+            requested_runtime_ports: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -121,19 +103,15 @@ impl VpcsRuntime {
             "adapters": 1,
             "memory": 0,
             "cpus": 0,
-            "startup_script": ""
+            "startup_script": "",
+            "base_script_file": "vpcs_base_config.txt",
+            "console_type": "telnet",
+            "console_auto_start": false
         })])
     }
 
     pub async fn ensure_available(&self) -> Result<String, RuntimeError> {
         self.version().await
-    }
-
-    pub async fn set_link(&self, link_id: &str, node_ids: Vec<String>) {
-        self.links
-            .write()
-            .await
-            .insert(link_id.to_owned(), node_ids);
     }
 
     pub async fn set_bridge_port(&self, node_id: &str, port: u16) {
@@ -143,49 +121,23 @@ impl VpcsRuntime {
             .insert(node_id.to_owned(), port);
     }
 
-    pub async fn remove_bridge_port(&self, node_id: &str) {
-        self.bridge_ports.write().await.remove(node_id);
+    pub async fn adapter_udp_port(&self, node_id: &str) -> Option<u16> {
+        self.bridge_ports.read().await.get(node_id).copied()
+    }
+
+    pub async fn set_nio_ports(&self, node_id: &str, adapter_port: u16, runtime_port: u16) {
+        self.bridge_ports
+            .write()
+            .await
+            .insert(node_id.to_owned(), adapter_port);
+        self.requested_runtime_ports
+            .write()
+            .await
+            .insert(node_id.to_owned(), runtime_port);
     }
 
     pub async fn active_udp_port(&self, node_id: &str) -> Option<u16> {
         self.active_ports.read().await.get(node_id).copied()
-    }
-
-    pub async fn create_segment(
-        &self,
-        link_id: &str,
-        node_ids: Vec<String>,
-    ) -> Result<u16, RuntimeError> {
-        self.set_link(link_id, node_ids).await;
-        self.ensure_segment_switch(link_id).await
-    }
-
-    pub async fn register_external_endpoint(&self, node_id: &str, udp_port: u16) {
-        self.external_ports
-            .write()
-            .await
-            .entry(node_id.to_owned())
-            .or_default()
-            .insert(udp_port);
-    }
-
-    pub async fn remove_external_endpoint(&self, node_id: &str, udp_port: Option<u16>) {
-        let mut endpoints = self.external_ports.write().await;
-        if let Some(ports) = endpoints.get_mut(node_id) {
-            if let Some(udp_port) = udp_port {
-                ports.remove(&udp_port);
-            } else {
-                ports.clear();
-            }
-            if ports.is_empty() {
-                endpoints.remove(node_id);
-            }
-        }
-    }
-
-    pub async fn remove_link(&self, link_id: &str) {
-        self.links.write().await.remove(link_id);
-        self.segment_switches.lock().await.remove(link_id);
     }
 
     pub async fn lifecycle(
@@ -199,6 +151,8 @@ impl VpcsRuntime {
         match action {
             NodeAction::Start => self.start(project_id, node_id, name, startup_script).await,
             NodeAction::Stop => self.stop(node_id).await,
+            // TODO(RUNTIME-NET VPCS suspend hook): apply node suspension by
+            // dropping the connected NIO carrier; the VPCS process itself stays running.
             NodeAction::Suspend => Err(RuntimeError::Failed(
                 "VPCS does not support process suspension".to_owned(),
             )),
@@ -259,7 +213,8 @@ impl VpcsRuntime {
 
     pub async fn remove_node(&self, project_id: &str, node_id: &str) -> Result<(), RuntimeError> {
         self.stop(node_id).await?;
-        self.remove_external_endpoint(node_id, None).await;
+        self.bridge_ports.write().await.remove(node_id);
+        self.requested_runtime_ports.write().await.remove(node_id);
         let project_id = parse_id(project_id)?;
         let node_id = parse_id(node_id)?;
         let node_dir = self
@@ -294,27 +249,12 @@ impl VpcsRuntime {
             return Ok("started".to_owned());
         }
 
-        let node_links = {
-            let links = self.links.read().await;
-            links
-                .iter()
-                .filter(|(_, members)| members.iter().any(|member| member == node_id))
-                .map(|(link_id, _)| link_id.clone())
-                .collect::<Vec<_>>()
-        };
-        if node_links.len() > 1 {
-            return Err(RuntimeError::Failed(
-                "VPCS has one Ethernet adapter and cannot join multiple segments".to_owned(),
-            ));
-        }
-        let switch_port = if let Some(link_id) = node_links.first() {
-            if let Some(port) = self.bridge_ports.read().await.get(node_id).copied() {
-                port
-            } else {
-                self.ensure_segment_switch(link_id).await?
-            }
+        let switch_port = if let Some(port) = self.adapter_udp_port(node_id).await {
+            port
         } else {
-            available_udp_port().await?
+            let port = available_udp_port().await?;
+            self.set_bridge_port(node_id, port).await;
+            port
         };
 
         let node_dir = self
@@ -325,20 +265,20 @@ impl VpcsRuntime {
             RuntimeError::Failed(format!("Could not create VPCS node directory: {error}"))
         })?;
 
-        let script_path =
-            if let Some(script) = startup_script.filter(|script| !script.trim().is_empty()) {
-                let path = node_dir.join("startup.vpc");
-                let script = script.replace("%h", name);
-                fs::write(&path, script).map_err(|error| {
-                    RuntimeError::Failed(format!("Could not write VPCS startup script: {error}"))
-                })?;
-                Some(path)
-            } else {
-                None
-            };
+        let script_path = write_startup_script(&node_dir, startup_script, name)?;
 
         let console_port = available_tcp_port().await?;
-        let local_udp_port = available_udp_port().await?;
+        let local_udp_port = if let Some(port) = self
+            .requested_runtime_ports
+            .read()
+            .await
+            .get(node_id)
+            .copied()
+        {
+            port
+        } else {
+            available_udp_port().await?
+        };
         let log_path = node_dir.join("vpcs.log");
         let log_file = fs::File::create(&log_path).map_err(|error| {
             RuntimeError::Failed(format!("Could not create VPCS log file: {error}"))
@@ -374,9 +314,7 @@ impl VpcsRuntime {
             .stderr(Stdio::from(stderr))
             .stdin(Stdio::null())
             .kill_on_drop(true);
-        if let Some(script_path) = script_path.as_ref() {
-            command.arg(script_path.file_name().unwrap_or_default());
-        }
+        command.arg(script_path.file_name().unwrap_or_default());
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
@@ -425,94 +363,6 @@ impl VpcsRuntime {
             }
             sleep(Duration::from_millis(50)).await;
         }
-    }
-
-    async fn ensure_segment_switch(&self, link_id: &str) -> Result<u16, RuntimeError> {
-        let mut switches = self.segment_switches.lock().await;
-        if let Some(switch) = switches.get(link_id) {
-            return Ok(switch.port);
-        }
-        let socket = Arc::new(
-            UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
-                .await
-                .map_err(|error| {
-                    RuntimeError::Unavailable(format!(
-                        "Could not create Ethernet segment switch: {error}"
-                    ))
-                })?,
-        );
-        let port = socket
-            .local_addr()
-            .map_err(|error| {
-                RuntimeError::Unavailable(format!(
-                    "Could not read Ethernet segment switch port: {error}"
-                ))
-            })?
-            .port();
-        let links = Arc::clone(&self.links);
-        let active_ports = Arc::clone(&self.active_ports);
-        let external_ports = Arc::clone(&self.external_ports);
-        let switch_link_id = link_id.to_owned();
-        let task = tokio::spawn(async move {
-            let mut frame = vec![0_u8; 65_536];
-            loop {
-                let Ok((length, source)) = socket.recv_from(&mut frame).await else {
-                    return;
-                };
-                let members = {
-                    let links = links.read().await;
-                    links.get(&switch_link_id).cloned().unwrap_or_default()
-                };
-                let source_port = source.port();
-                let source_node = {
-                    let ports = active_ports.read().await;
-                    let external = external_ports.read().await;
-                    members
-                        .iter()
-                        .find(|member| {
-                            ports.get(*member) == Some(&source_port)
-                                || external
-                                    .get(*member)
-                                    .is_some_and(|member_ports| member_ports.contains(&source_port))
-                        })
-                        .cloned()
-                };
-                let mut destinations = HashSet::new();
-                {
-                    let ports = active_ports.read().await;
-                    for member in &members {
-                        if source_node.as_ref() == Some(member) {
-                            continue;
-                        }
-                        if let Some(port) = ports.get(member) {
-                            destinations.insert(*port);
-                        }
-                    }
-                }
-                {
-                    let ports = external_ports.read().await;
-                    for member in &members {
-                        if source_node.as_ref() == Some(member) {
-                            continue;
-                        }
-                        if let Some(member_ports) = ports.get(member) {
-                            destinations.extend(member_ports.iter().copied());
-                        }
-                    }
-                }
-                for destination_port in destinations {
-                    if destination_port == source_port {
-                        continue;
-                    }
-                    let destination = SocketAddrV4::new(Ipv4Addr::LOCALHOST, destination_port);
-                    if let Err(error) = socket.send_to(&frame[..length], destination).await {
-                        tracing::debug!(%error, %switch_link_id, destination_port, "could not forward Ethernet frame");
-                    }
-                }
-            }
-        });
-        switches.insert(link_id.to_owned(), ManagedSegmentSwitch { port, task });
-        Ok(port)
     }
 
     async fn version(&self) -> Result<String, RuntimeError> {
@@ -686,9 +536,22 @@ fn mac_offset(node_id: &Uuid) -> u8 {
     node_id.as_bytes()[15]
 }
 
+fn write_startup_script(
+    node_dir: &std::path::Path,
+    startup_script: Option<&str>,
+    name: &str,
+) -> Result<PathBuf, RuntimeError> {
+    let path = node_dir.join("startup.vpc");
+    let script = startup_script.unwrap_or_default().replace("%h", name);
+    fs::write(&path, script).map_err(|error| {
+        RuntimeError::Failed(format!("Could not write VPCS startup script: {error}"))
+    })?;
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{env, path::PathBuf, time::Duration};
+    use std::{env, fs, path::PathBuf, time::Duration};
 
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -696,7 +559,7 @@ mod tests {
     };
     use uuid::Uuid;
 
-    use super::{VpcsRuntime, connect_vpcs_console, mac_offset};
+    use super::{VpcsRuntime, connect_vpcs_console, mac_offset, write_startup_script};
 
     #[test]
     fn derives_mac_offset_from_the_node_identifier() {
@@ -704,13 +567,49 @@ mod tests {
         assert_eq!(mac_offset(&id), 42);
     }
 
+    #[test]
+    fn startup_script_write_clears_old_content_and_expands_hostname() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = write_startup_script(directory.path(), Some("name %h"), "PC 1").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "name PC 1");
+        write_startup_script(directory.path(), None, "PC 1").unwrap();
+        assert_eq!(fs::read_to_string(path).unwrap(), "");
+    }
+
+    #[test]
+    fn separate_instances_keep_independent_base_startup_scripts() {
+        let directory = tempfile::tempdir().unwrap();
+        let first_dir = directory.path().join("project/first");
+        let second_dir = directory.path().join("project/second");
+        fs::create_dir_all(&first_dir).unwrap();
+        fs::create_dir_all(&second_dir).unwrap();
+        let first =
+            write_startup_script(&first_dir, Some("ip 192.0.2.1/24 name %h"), "PC1").unwrap();
+        let second =
+            write_startup_script(&second_dir, Some("ip 192.0.2.2/24 name %h"), "PC2").unwrap();
+        assert_eq!(
+            fs::read_to_string(first).unwrap(),
+            "ip 192.0.2.1/24 name PC1"
+        );
+        assert_eq!(
+            fs::read_to_string(second).unwrap(),
+            "ip 192.0.2.2/24 name PC2"
+        );
+    }
+
     #[tokio::test]
-    #[ignore = "requires the upstream VPCS executable; set NETWORK_SIMULATOR_TEST_VPCS and run with --ignored"]
-    async fn upstream_vpcs_nodes_exchange_ethernet_frames_over_a_shared_segment() {
+    #[ignore = "requires upstream VPCS and uBridge; set NETWORK_SIMULATOR_TEST_VPCS and NETWORK_SIMULATOR_TEST_UBRIDGE"]
+    async fn upstream_vpcs_nodes_exchange_ethernet_frames_over_gns3_udp_nios() {
         let binary = env::var_os("NETWORK_SIMULATOR_TEST_VPCS")
             .expect("NETWORK_SIMULATOR_TEST_VPCS is set for this integration test");
         let directory = tempfile::tempdir().expect("temporary VPCS state directory");
         let runtime = VpcsRuntime::with_paths(PathBuf::from(binary), directory.path());
+        let ubridge_binary = env::var_os("NETWORK_SIMULATOR_TEST_UBRIDGE")
+            .expect("NETWORK_SIMULATOR_TEST_UBRIDGE is set for this integration test");
+        let ubridge = crate::ubridge::UbridgeRuntime::with_paths(
+            PathBuf::from(ubridge_binary),
+            directory.path().join("ubridge.sock"),
+        );
         runtime
             .ensure_available()
             .await
@@ -719,12 +618,34 @@ mod tests {
         let project_id = "00000000-0000-0000-0000-000000000001";
         let node_a = "00000000-0000-0000-0000-00000000000a";
         let node_b = "00000000-0000-0000-0000-00000000000b";
-        runtime
-            .set_link(
-                "00000000-0000-0000-0000-0000000000ff",
-                vec![node_a.into(), node_b.into()],
-            )
-            .await;
+        let endpoint_a = "a0000000-0000-0000-0000-000000000001";
+        let endpoint_b = "b0000000-0000-0000-0000-000000000002";
+        let link_a = ubridge
+            .reserve_udp_port()
+            .await
+            .expect("first link NIO port");
+        let link_b = ubridge
+            .reserve_udp_port()
+            .await
+            .expect("second link NIO port");
+        let adapter_a = ubridge
+            .reserve_udp_port()
+            .await
+            .expect("first adapter NIO port");
+        let adapter_b = ubridge
+            .reserve_udp_port()
+            .await
+            .expect("second adapter NIO port");
+        let runtime_a = ubridge
+            .reserve_udp_port()
+            .await
+            .expect("first VPCS NIO port");
+        let runtime_b = ubridge
+            .reserve_udp_port()
+            .await
+            .expect("second VPCS NIO port");
+        runtime.set_nio_ports(node_a, adapter_a, runtime_a).await;
+        runtime.set_nio_ports(node_b, adapter_b, runtime_b).await;
         runtime
             .lifecycle(
                 project_id,
@@ -745,6 +666,34 @@ mod tests {
             )
             .await
             .expect("second VPCS starts");
+        ubridge
+            .attach_link_endpoint(
+                endpoint_a,
+                link_a,
+                link_b,
+                Some(adapter_a),
+                Some(runtime_a),
+                None,
+                &serde_json::json!({}),
+                false,
+                None,
+            )
+            .await
+            .expect("first VPCS uBridge NIO attaches");
+        ubridge
+            .attach_link_endpoint(
+                endpoint_b,
+                link_b,
+                link_a,
+                Some(adapter_b),
+                Some(runtime_b),
+                None,
+                &serde_json::json!({}),
+                false,
+                None,
+            )
+            .await
+            .expect("second VPCS uBridge NIO attaches");
 
         let address = runtime
             .console_address(node_a)
@@ -803,6 +752,14 @@ mod tests {
         );
 
         drop(console);
+        ubridge
+            .delete_link_endpoint(endpoint_a)
+            .await
+            .expect("first endpoint detaches");
+        ubridge
+            .delete_link_endpoint(endpoint_b)
+            .await
+            .expect("second endpoint detaches");
         runtime.stop(node_a).await.expect("first VPCS stops");
         runtime.stop(node_b).await.expect("second VPCS stops");
         assert!(

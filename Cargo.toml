@@ -20,6 +20,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
+zip = { version = "2.4.2", default-features = false, features = ["deflate", "zstd"] }
 
 [dev-dependencies]
 http-body-util = "0.1"
