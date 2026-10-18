@@ -236,6 +236,52 @@ button, input, textarea, select { font: inherit; }
 .software-row-title h2 { font-size: 13px; font-weight: 650; }
 .software-row-main p, .software-row-main small { display: block; margin-top: 3px; color: var(--muted-foreground); font-size: 10px; }
 .settings-groups { display: grid; gap: 12px; }
+
+.login-page { display: grid; min-height: 100dvh; place-items: center; padding: 24px; background: radial-gradient(ellipse at top, color-mix(in oklch, var(--primary), transparent 92%), transparent 55%), var(--background); }
+.login-card { width: min(100%, 390px); border: 1px solid var(--border); border-radius: 12px; padding: 30px; background: var(--card); box-shadow: 0 16px 60px color-mix(in oklch, var(--foreground), transparent 94%); }
+.login-mark { display: grid; width: 38px; height: 38px; place-items: center; margin-bottom: 22px; border-radius: 10px; color: white; background: var(--primary); font-size: 12px; font-weight: 750; }
+.login-card h1 { margin: 3px 0 0; font-size: 26px; font-weight: 680; letter-spacing: -.035em; }
+.login-card > p { margin: 5px 0 22px; color: var(--muted-foreground); font-size: 13px; }
+.login-form { display: grid; gap: 8px; }
+.login-form label { margin-top: 7px; font-size: 12px; font-weight: 600; }
+.access-tabs { display: flex; gap: 5px; overflow-x: auto; margin: -5px 0 18px; border-bottom: 1px solid var(--border); }
+.access-tabs a { padding: 9px 11px; border-bottom: 2px solid transparent; color: var(--muted-foreground); font-size: 12px; text-decoration: none; white-space: nowrap; }
+.access-tabs a:hover, .access-tabs a.is-active { color: var(--foreground); }
+.access-tabs a.is-active { border-color: var(--primary); font-weight: 650; }
+.access-panel { padding: 17px; }
+.access-panel > h2, .access-panel-heading h2 { font-size: 15px; font-weight: 650; }
+.access-panel > p, .access-panel-heading p { margin-top: 4px; color: var(--muted-foreground); font-size: 12px; }
+.access-panel-heading { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 15px; }
+.access-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 14px; align-items: start; }
+.access-form, .access-form-grid { display: grid; gap: 10px; margin-top: 16px; }
+.access-form label, .access-form-grid label, .access-acl-form label { display: grid; gap: 5px; color: var(--foreground); font-size: 11px; font-weight: 600; }
+.access-form-grid { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); align-items: end; margin-bottom: 18px; }
+.access-inline-form { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 12px 0; }
+.access-inline-form > input, .access-inline-form > select { flex: 1; min-width: 150px; }
+.access-form-grid > button { justify-self: start; }
+.access-list { display: grid; gap: 1px; margin-top: 12px; }
+.access-row { display: flex; align-items: center; gap: 9px; padding: 11px 3px; border-top: 1px solid var(--border); }
+.access-row > div:first-child { min-width: 130px; flex: 1; }
+.access-row strong { display: block; font-size: 12px; font-weight: 620; }
+.access-row small { display: block; margin-top: 3px; color: var(--muted-foreground); font-size: 10px; }
+.access-row input { max-width: 190px; }
+.access-row-actions { display: flex; gap: 5px; }
+.access-group-row, .access-role-row, .access-pool-row { padding: 9px 0; border-top: 1px solid var(--border); }
+.access-group-row .access-row, .access-pool-row .access-row { border: 0; }
+.access-group-row .access-inline-form { margin: 4px 0 8px; }
+.access-member-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border); border-radius: 999px; padding: 3px 8px; color: var(--muted-foreground); font-size: 10px; }
+.access-member-chip button { border: 0; padding: 0; color: inherit; background: none; cursor: pointer; font-size: 14px; }
+.access-privileges { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 5px 12px; padding: 8px 2px 5px; }
+.access-privileges label, .access-check { display: flex !important; align-items: center; gap: 6px !important; color: var(--muted-foreground); font-size: 10px !important; font-weight: 450 !important; }
+.access-privileges input, .access-check input { accent-color: var(--primary); }
+.access-acl-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 10px; align-items: end; padding: 5px 0 15px; }
+.access-acl-form select, .access-inline-form select { min-height: 36px; border: 1px solid var(--border); border-radius: 6px; padding: 0 8px; color: var(--foreground); background: var(--background); font-size: 12px; }
+.access-acl-row { align-items: center; }
+.access-pool-resources { display: grid; gap: 2px; padding-left: 10px; }
+.access-pool-resources > div { display: flex; align-items: center; justify-content: space-between; color: var(--muted-foreground); font-size: 11px; }
+.access-setting-card { margin-bottom: 14px; }
+.access-setting-help { margin-top: 10px; color: var(--muted-foreground); font-size: 11px; }
+@media (max-width: 700px) { .access-row { align-items: flex-start; flex-wrap: wrap; } .access-user-row > div:first-child { flex-basis: 100%; } .access-row input { flex: 1; } .access-acl-form { grid-template-columns: 1fr 1fr; } }
 .settings-group { padding: 16px; }
 .settings-group-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
 .settings-group-heading h2 { font-size: 15px; font-weight: 650; }

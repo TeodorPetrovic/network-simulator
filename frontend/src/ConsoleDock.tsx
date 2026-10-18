@@ -88,15 +88,13 @@ function ConsoleSession({ target, active }: { target: ConsoleTarget; active: boo
     fitRef.current = fit;
     terminal.loadAddon(fit);
     terminal.open(terminalElement.current);
-    const socket = new WebSocket(docker
-      ? auxiliary ? dockerAuxConsoleUrl(target.projectId, target.nodeId) : dockerConsoleUrl(target.projectId, target.nodeId)
-      : vpcs ? vpcsConsoleUrl(target.projectId, target.nodeId) : dynamips ? dynamipsConsoleUrl(target.projectId, target.nodeId) : qemuConsoleUrl(target.projectId, target.nodeId));
-    socket.binaryType = "arraybuffer";
+    let socket: WebSocket | null = null;
+    let cancelled = false;
     let lastResizeFrame: string | null = null;
     const sendResize = () => {
       if (!docker || auxiliary) return;
       const frame = dockerResizeControlFrame(terminal.rows, terminal.cols);
-      if (frame && frame !== lastResizeFrame && sendDockerResizeControl(socket, terminal.rows, terminal.cols)) lastResizeFrame = frame;
+      if (socket && frame && frame !== lastResizeFrame && sendDockerResizeControl(socket, terminal.rows, terminal.cols)) lastResizeFrame = frame;
     };
     const fitVisibleTerminal = () => {
       if (terminalElement.current?.offsetWidth && terminalElement.current.offsetHeight) {
@@ -107,27 +105,38 @@ function ConsoleSession({ target, active }: { target: ConsoleTarget; active: boo
     const resize = terminal.onResize(sendResize);
     requestAnimationFrame(fitVisibleTerminal);
     terminal.writeln(`${docker ? auxiliary ? "Docker auxiliary" : "Docker" : vpcs ? "VPCS" : dynamips ? "Cisco IOS" : "QEMU serial"} console · ${target.nodeName}`);
-    socket.onopen = () => {
-      terminal.writeln(docker ? auxiliary ? "Attached to Docker auxiliary console." : "Attached to Docker container terminal." : vpcs ? "Connected to VPCS console." : dynamips ? "Connected to Cisco IOS console." : "Connected to QEMU serial port.");
-      sendResize();
-    };
-    socket.onmessage = (event) => terminal.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data as ArrayBuffer));
-    socket.onerror = () => terminal.writeln("\r\nConsole connection failed.");
-    socket.onclose = () => terminal.writeln("\r\nConsole disconnected.");
-    const input = terminal.onData((data) => { if (socket.readyState === WebSocket.OPEN) socket.send(data); });
+    const socketUrl = docker
+      ? auxiliary ? dockerAuxConsoleUrl(target.projectId, target.nodeId) : dockerConsoleUrl(target.projectId, target.nodeId)
+      : vpcs ? vpcsConsoleUrl(target.projectId, target.nodeId) : dynamips ? dynamipsConsoleUrl(target.projectId, target.nodeId) : qemuConsoleUrl(target.projectId, target.nodeId);
+    void Promise.resolve(socketUrl).then((url) => {
+      if (cancelled) return;
+      socket = new WebSocket(url);
+      socket.binaryType = "arraybuffer";
+      socket.onopen = () => {
+        terminal.writeln(docker ? auxiliary ? "Attached to Docker auxiliary console." : "Attached to Docker container terminal." : vpcs ? "Connected to VPCS console." : dynamips ? "Connected to Cisco IOS console." : "Connected to QEMU serial port.");
+        sendResize();
+      };
+      socket.onmessage = (event) => terminal.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data as ArrayBuffer));
+      socket.onerror = () => terminal.writeln("\r\nConsole connection failed.");
+      socket.onclose = () => terminal.writeln("\r\nConsole disconnected.");
+    }).catch(() => terminal.writeln("\r\nConsole connection failed."));
+    const input = terminal.onData((data) => { if (socket?.readyState === WebSocket.OPEN) socket.send(data); });
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fitVisibleTerminal);
     observer?.observe(terminalElement.current);
     window.addEventListener("resize", fitVisibleTerminal);
     return () => {
+      cancelled = true;
       window.removeEventListener("resize", fitVisibleTerminal);
       observer?.disconnect();
       input.dispose();
       resize.dispose();
-      socket.onopen = null;
-      socket.onmessage = null;
-      socket.onerror = null;
-      socket.onclose = null;
-      socket.close();
+      if (socket) {
+        socket.onopen = null;
+        socket.onmessage = null;
+        socket.onerror = null;
+        socket.onclose = null;
+        socket.close();
+      }
       terminal.dispose();
       fitRef.current = null;
     };

@@ -4,6 +4,38 @@ import { api, dockerAuxConsoleUrl, dockerConsoleUrl, dockerHttpConsoleUrl, dynam
 describe("GNS3 controller client", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn());
+    sessionStorage.removeItem("network-simulator.access-token");
+    localStorage.removeItem("network-simulator.access-token");
+  });
+
+  it("submits OAuth2 password form data and attaches the stored bearer token", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ access_token: "signed.jwt.token", token_type: "bearer" }) } as Response);
+    await api.login("admin", "correct-horse-battery-staple");
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/v3/access/users/login", expect.objectContaining({
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: expect.any(URLSearchParams),
+    }));
+    expect(sessionStorage.getItem("network-simulator.access-token")).toBe("signed.jwt.token");
+
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) } as Response);
+    await api.runtimes();
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/v3/runtimes", expect.objectContaining({ headers: { Authorization: "Bearer signed.jwt.token" } }));
+  });
+
+  it("requests a short-lived WebSocket ticket with the bearer header", async () => {
+    sessionStorage.setItem("network-simulator.access-token", "signed.jwt.token");
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ticket: "opaque-ticket", expires_in: 60 }) } as Response);
+    const url = new URL(await projectNotificationsUrl("project-1", 12));
+    expect(url.searchParams.get("ticket")).toBe("opaque-ticket");
+    expect(url.searchParams.has("token")).toBe(false);
+    expect(url.searchParams.get("after")).toBe("12");
+    expect(fetch).toHaveBeenCalledWith("/v3/access/ws-ticket", expect.objectContaining({
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer signed.jwt.token" },
+      body: JSON.stringify({ path: "/v3/projects/project-1/notifications/ws" }),
+    }));
   });
 
   it("uses the selected server 3.1 /v3 routes and JSON create-project body", async () => {
@@ -101,10 +133,11 @@ describe("GNS3 controller client", () => {
     }));
   });
 
-  it("includes the consistent snapshot cursor when opening project notifications", () => {
-    expect(projectNotificationsUrl("project-1", 42)).toBe(
-      "ws://localhost:3000/v3/projects/project-1/notifications/ws?after=42",
-    );
+  it("includes the consistent snapshot cursor when opening project notifications", async () => {
+    sessionStorage.setItem("network-simulator.access-token", "session-token");
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ticket: "test-ticket", expires_in: 60 }) } as Response);
+    const url = new URL(await projectNotificationsUrl("project-1", 42));
+    expect(url.toString()).toBe("ws://localhost:3000/v3/projects/project-1/notifications/ws?after=42&ticket=test-ticket");
   });
 
   it("surfaces the controller message on failed requests", async () => {
@@ -145,22 +178,25 @@ describe("GNS3 controller client", () => {
     expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/nodes/n1/stop", expect.any(Object));
   });
 
-  it("uses a same-origin WebSocket endpoint for a QEMU node", () => {
-    const url = new URL(qemuConsoleUrl("project-id", "node-id"));
+  it("uses a same-origin WebSocket endpoint for a QEMU node", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ticket: "test-ticket", expires_in: 60 }) } as Response);
+    const url = new URL(await qemuConsoleUrl("project-id", "node-id"));
 
     expect(url.protocol).toBe("ws:");
     expect(url.pathname).toBe("/v3/compute/projects/project-id/qemu/nodes/node-id/console/ws");
   });
 
-  it("uses the GNS3 Docker console WebSocket endpoint", () => {
-    const url = new URL(dockerConsoleUrl("project-id", "node-id"));
+  it("uses the GNS3 Docker console WebSocket endpoint", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ticket: "test-ticket", expires_in: 60 }) } as Response);
+    const url = new URL(await dockerConsoleUrl("project-id", "node-id"));
 
     expect(url.protocol).toBe("ws:");
     expect(url.pathname).toBe("/v3/compute/projects/project-id/docker/nodes/node-id/console/ws");
   });
 
-  it("uses the registered Docker auxiliary console WebSocket endpoint", () => {
-    const url = new URL(dockerAuxConsoleUrl("project-id", "node-id"));
+  it("uses the registered Docker auxiliary console WebSocket endpoint", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ticket: "test-ticket", expires_in: 60 }) } as Response);
+    const url = new URL(await dockerAuxConsoleUrl("project-id", "node-id"));
 
     expect(url.protocol).toBe("ws:");
     expect(url.pathname).toBe("/v3/compute/projects/project-id/docker/nodes/node-id/aux_console/ws");
@@ -173,8 +209,19 @@ describe("GNS3 controller client", () => {
     expect(symbolRawUrl("custom router.svg")).toBe("/v3/symbols/custom%20router.svg/raw");
   });
 
-  it("uses the VPCS console WebSocket endpoint", () => {
-    const url = new URL(vpcsConsoleUrl("project-id", "node-id"));
+  it("fetches custom symbol data with the session bearer token", async () => {
+    sessionStorage.setItem("network-simulator.access-token", "symbol-access-token");
+    const blob = new Blob(["<svg />"], { type: "image/svg+xml" });
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: true, status: 200, blob: async () => blob } as Response);
+    await expect(api.symbolRaw("custom router.svg")).resolves.toBe(blob);
+    expect(fetch).toHaveBeenCalledWith("/v3/symbols/custom%20router.svg/raw", {
+      headers: { Authorization: "Bearer symbol-access-token" },
+    });
+  });
+
+  it("uses the VPCS console WebSocket endpoint", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ticket: "test-ticket", expires_in: 60 }) } as Response);
+    const url = new URL(await vpcsConsoleUrl("project-id", "node-id"));
 
     expect(url.protocol).toBe("ws:");
     expect(url.pathname).toBe("/v3/compute/projects/project-id/vpcs/nodes/node-id/console/ws");
@@ -197,8 +244,9 @@ describe("GNS3 controller client", () => {
     }));
   });
 
-  it("uses the same-origin Dynamips IOS console endpoint", () => {
-    const url = new URL(dynamipsConsoleUrl("project-id", "node-id"));
+  it("uses the same-origin Dynamips IOS console endpoint", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ticket: "test-ticket", expires_in: 60 }) } as Response);
+    const url = new URL(await dynamipsConsoleUrl("project-id", "node-id"));
 
     expect(url.protocol).toBe("ws:");
     expect(url.pathname).toBe("/v3/compute/projects/project-id/dynamips/nodes/node-id/console/ws");
@@ -216,6 +264,12 @@ describe("GNS3 controller client", () => {
     await api.startLinkCapture("p1", "l1", { capture_file_name: "edge.pcap", data_link_type: "DLT_EN10MB" });
     expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/links/l1/capture/start", expect.objectContaining({ method: "POST", body: JSON.stringify({ capture_file_name: "edge.pcap", data_link_type: "DLT_EN10MB" }) }));
     expect(api.linkCaptureStreamUrl("p1", "l1")).toBe("/v3/projects/p1/links/l1/capture/stream");
+
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ticket: "capture-ticket", expires_in: 60 }) } as Response);
+    await expect(api.accessTicket(api.linkCaptureStreamUrl("p1", "l1"))).resolves.toBe("capture-ticket");
+    expect(fetchMock).toHaveBeenLastCalledWith("/v3/access/ws-ticket", expect.objectContaining({
+      body: JSON.stringify({ path: "/v3/projects/p1/links/l1/capture/stream" }),
+    }));
 
     fetchMock.mockResolvedValueOnce({ ok: true, status: 204 } as Response);
     await api.stopLinkCapture("p1", "l1");

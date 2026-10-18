@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Dispatch, FormEvent, SetStateAction } from "react";
-import { api, projectNotificationsUrl } from "../api";
+import { api, getAuthToken, projectNotificationsUrl } from "../api";
 import type { Link, LinkEndpoint, LinkFilterDescription, NetworkSymbol, Node, ProjectSnapshot } from "../api";
 import type { DrawingTool } from "./helpers";
 import { defaultEndpointLabelPosition, endpointName, interfacesForNode } from "./helpers";
@@ -226,8 +226,23 @@ export function LinkPropertiesDialog({ projectId, link, nodes, open, onOpenChang
     catch (reason) { setError(`Packet capture is not available: ${errorMessage(reason)}`); }
     finally { setBusy(false); }
   }
-  const streamUrl = () => {
-    return new URL(api.linkCaptureStreamUrl(projectId, activeLink.link_id), window.location.href).toString();
+  const streamUrl = async () => {
+    const path = api.linkCaptureStreamUrl(projectId, activeLink.link_id);
+    const url = new URL(path, window.location.href);
+    if (getAuthToken()) url.searchParams.set("ticket", await api.accessTicket(path));
+    return url.toString();
+  };
+  const openCaptureStream = async () => {
+    const popup = window.open("about:blank", "_blank");
+    if (popup) popup.opener = null;
+    try {
+      const url = await streamUrl();
+      if (popup) popup.location.assign(url);
+      else setError("The browser blocked the capture stream window.");
+    } catch (reason) {
+      popup?.close();
+      setError(`Capture stream is not available: ${errorMessage(reason)}`);
+    }
   };
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-w-2xl">
     <DialogHeader><DialogTitle>Link properties</DialogTitle><DialogDescription>Change link appearance, filters, and packet capture.</DialogDescription></DialogHeader>
@@ -255,7 +270,7 @@ export function LinkPropertiesDialog({ projectId, link, nodes, open, onOpenChang
       <Button variant="outline" className="w-fit" onClick={() => void saveEndpointLabels()} disabled={busy || endpointLabels.length !== 2}>Save endpoint labels</Button>
     </section>
     <Separator />
-    <section className="grid gap-2 md:grid-cols-[1fr_auto_auto_auto] md:items-end"><label className="grid gap-1.5"><Label>Capture file</Label><Input value={captureFileName} onChange={(event) => setCaptureFileName(event.target.value)} disabled={captureActive} /></label><div className="flex flex-wrap gap-2 md:col-span-3"><Badge variant={captureActive ? "default" : "secondary"}>{captureActive ? "Capturing" : "Stopped"}</Badge><Button size="sm" onClick={() => void capture(captureActive ? "stop" : "start")} disabled={busy}>{captureActive ? "Stop capture" : "Start capture"}</Button><Button size="sm" variant="outline" disabled={!captureActive} onClick={() => window.open(streamUrl(), "_blank", "noopener,noreferrer")}>Open capture stream</Button><Button size="sm" variant="outline" disabled={!captureActive} onClick={() => { void copyStreamUrl(streamUrl(), setNotice, setError); }}>Copy stream URL</Button></div></section>
+    <section className="grid gap-2 md:grid-cols-[1fr_auto_auto_auto] md:items-end"><label className="grid gap-1.5"><Label>Capture file</Label><Input value={captureFileName} onChange={(event) => setCaptureFileName(event.target.value)} disabled={captureActive} /></label><div className="flex flex-wrap gap-2 md:col-span-3"><Badge variant={captureActive ? "default" : "secondary"}>{captureActive ? "Capturing" : "Stopped"}</Badge><Button size="sm" onClick={() => void capture(captureActive ? "stop" : "start")} disabled={busy}>{captureActive ? "Stop capture" : "Start capture"}</Button><Button size="sm" variant="outline" disabled={!captureActive} onClick={() => void openCaptureStream()}>Open capture stream</Button><Button size="sm" variant="outline" disabled={!captureActive} onClick={() => { void streamUrl().then((url) => copyStreamUrl(url, setNotice, setError)).catch((reason) => setError(`Capture stream is not available: ${errorMessage(reason)}`)); }}>Copy one-use stream URL</Button></div></section>
     {error && <Unavailable message={error} />}{notice && <p role="status" className="text-sm text-muted-foreground">{notice}</p>}
   </DialogContent></Dialog>;
 }
@@ -303,20 +318,25 @@ export function LogConsoleDialog({ projectId, cursor, open, onOpenChange }: { pr
   const [status, setStatus] = useState("Waiting for controller events");
   useEffect(() => {
     if (!open) return;
-    const socket = new WebSocket(projectNotificationsUrl(projectId, cursor));
+    let active = true;
+    let socket: WebSocket | null = null;
     setStatus("Connecting to project event stream…");
-    socket.onopen = () => setStatus("Connected to project event stream");
-    socket.onmessage = (event) => {
-      try {
-        const value = JSON.parse(String(event.data)) as { sequence?: number; action?: string; event?: Record<string, unknown> };
-        const action = String(value.action ?? "controller.event");
-        const details = String(value.event?.name ?? value.event?.node_id ?? value.event?.link_id ?? value.event?.drawing_id ?? "");
-        setMessages((current) => [...current.slice(-199), { sequence: Number(value.sequence ?? 0), action, text: details }]);
-      } catch { /* Ignore non-JSON keepalive frames. */ }
-    };
-    socket.onerror = () => setStatus("The project event stream is not available.");
-    socket.onclose = () => setStatus("Project event stream disconnected");
-    return () => socket.close();
+    void projectNotificationsUrl(projectId, cursor).then((url) => {
+      if (!active) return;
+      socket = new WebSocket(url);
+      socket.onopen = () => setStatus("Connected to project event stream");
+      socket.onmessage = (event) => {
+        try {
+          const value = JSON.parse(String(event.data)) as { sequence?: number; action?: string; event?: Record<string, unknown> };
+          const action = String(value.action ?? "controller.event");
+          const details = String(value.event?.name ?? value.event?.node_id ?? value.event?.link_id ?? value.event?.drawing_id ?? "");
+          setMessages((current) => [...current.slice(-199), { sequence: Number(value.sequence ?? 0), action, text: details }]);
+        } catch { /* Ignore non-JSON keepalive frames. */ }
+      };
+      socket.onerror = () => setStatus("The project event stream is not available.");
+      socket.onclose = () => setStatus("Project event stream disconnected");
+    }).catch(() => setStatus("The project event stream is not available."));
+    return () => { active = false; socket?.close(); };
   }, [open, projectId, cursor]);
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-w-2xl">
     <DialogHeader><DialogTitle>Project log console</DialogTitle><DialogDescription>Recent events from the live project notification stream.</DialogDescription></DialogHeader>

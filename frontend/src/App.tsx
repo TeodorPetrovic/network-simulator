@@ -4,6 +4,7 @@ import { Activity, FolderOpen, Network, Plus, Search, Trash2, X } from "lucide-r
 import { api, dockerHttpConsoleUrl, projectNotificationsUrl } from "./api";
 import type { LinkEndpoint, Node, Project, ProjectEvent, ResourceMonitor, RuntimeInfo, RuntimeTemplate, TopologySnapshot } from "./api";
 import { applyProjectEvent } from "./topology";
+import { nodesForLifecycle } from "./lifecycle";
 import { SimulatorWorkspace } from "./SimulatorWorkspace";
 import type { ConsoleTarget } from "./ConsoleDock";
 import { ApplianceManagerPage } from "./ApplianceManagerPage";
@@ -145,9 +146,21 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
 
     let reconnectTimer = 0;
     let cursor = 0;
-    const connect = () => {
+    const connect = async () => {
       if (!active) return;
-      const socket = new WebSocket(projectNotificationsUrl(projectId, cursor));
+      let url: string;
+      try {
+        url = await projectNotificationsUrl(projectId, cursor);
+      } catch (reason) {
+        if (active) {
+          setConnection("reconnecting");
+          setError(errorMessage(reason));
+          reconnectTimer = window.setTimeout(() => void connect(), 1200);
+        }
+        return;
+      }
+      if (!active) return;
+      const socket = new WebSocket(url);
       socketRef.current = socket;
       socket.onmessage = (message) => {
         try {
@@ -162,7 +175,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
       socket.onclose = () => {
         if (active) {
           setConnection("reconnecting");
-          reconnectTimer = window.setTimeout(connect, 1200);
+          reconnectTimer = window.setTimeout(() => void connect(), 1200);
         }
       };
       socket.onerror = () => socket.close();
@@ -178,7 +191,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
         setTopology(snapshot);
         setTemplates(availableTemplates);
         setConnection("connected");
-        connect();
+        void connect();
       } catch (reason) {
         if (active) {
           setConnection("disconnected");
@@ -350,7 +363,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
 
   async function changeAllNodes(action: "start" | "stop") {
     if (!projectId || !topology || startingAll) return;
-    const targets = topology.nodes.filter((node) => action === "start" ? node.status !== "started" : node.status === "started");
+    const targets = nodesForLifecycle(topology.nodes, action);
     if (!targets.length) return;
     setStartingAll(true);
     const results = await Promise.allSettled(targets.map((node) => api[`${action}Node`](projectId, node.node_id)));
@@ -706,7 +719,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
             </Card>
             {templates.find((item) => item.template_id === templateId)?.template_type === "docker" && <div className="grid gap-2"><Label htmlFor="node-command">Container command (optional)</Label><Input id="node-command" placeholder="e.g. /bin/sh -c 'sleep 3600'" value={nodeCommand} onChange={(event) => setNodeCommand(event.target.value)} /></div>}
             {templates.find((item) => item.template_id === templateId)?.template_type === "vpcs" && <div className="grid gap-2"><Label htmlFor="vpcs-startup-script">Startup script (optional)</Label><Textarea id="vpcs-startup-script" rows={4} placeholder="ip 192.168.1.10/24" value={nodeStartupScript} onChange={(event) => setNodeStartupScript(event.target.value)} /></div>}
-            {selectedNodeTemplate?.template_type === "dynamips" && <><div className="grid gap-2"><Label htmlFor="dynamips-idlepc">Idle-PC address (optional)</Label><Input id="dynamips-idlepc" placeholder="0x606e0538" value={nodeIdlePc} onChange={(event) => setNodeIdlePc(event.target.value)} /></div><div className="grid gap-2"><Label htmlFor="dynamips-startup-config">IOS startup configuration (optional)</Label><Textarea id="dynamips-startup-config" rows={5} placeholder="hostname R1&#10;no ip domain-lookup" value={nodeStartupConfig} onChange={(event) => setNodeStartupConfig(event.target.value)} /></div></>}
+            {selectedNodeTemplate?.template_type === "dynamips" && <><div className="grid gap-2"><Label htmlFor="dynamips-idlepc">Idle-PC address (optional)</Label><Input id="dynamips-idlepc" placeholder="Use the appliance default" value={nodeIdlePc} onChange={(event) => setNodeIdlePc(event.target.value)} /><p className="text-xs text-muted-foreground">The imported appliance value is used when present. Auto-selected values are saved on the router and reused after restart.</p></div><div className="grid gap-2"><Label htmlFor="dynamips-startup-config">IOS startup configuration (optional)</Label><Textarea id="dynamips-startup-config" rows={5} placeholder="hostname R1&#10;no ip domain-lookup" value={nodeStartupConfig} onChange={(event) => setNodeStartupConfig(event.target.value)} /></div></>}
             {selectedNodeTemplate?.template_type === "qemu" && <Card className="p-3 text-xs text-muted-foreground shadow-none"><b className="text-foreground">QEMU virtual machine</b><p className="mt-1">Creates a private copy-on-write disk. {runtimeInfo?.qemu.kvm_accessible ? "KVM acceleration is available." : runtimeInfo?.qemu.acceleration_error ?? "QEMU may use TCG if KVM access is unavailable."}</p></Card>}
             {selectedNodeTemplate?.template_type === "vpcs" && <Card className="p-3 text-xs text-muted-foreground shadow-none"><b className="text-foreground">Virtual PC simulator</b><p className="mt-1">Starts a lightweight VPCS process with one Ethernet adapter and an interactive console.</p></Card>}
             {selectedNodeTemplate?.template_type === "dynamips" && <Card className="p-3 text-xs text-muted-foreground shadow-none"><b className="text-foreground">Cisco IOS router · Dynamips c7200</b><p className="mt-1">Creates a Dynamips hypervisor router from the imported IOS image.</p></Card>}

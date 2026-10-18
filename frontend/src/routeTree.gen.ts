@@ -13,9 +13,16 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppliancesRouteImport } from './routes/appliances'
 import { Route as ComputesRouteImport } from './routes/computes'
 import { Route as InstalledSoftwareRouteImport } from './routes/installed-software'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as PreferencesRouteImport } from './routes/preferences'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SystemStatusRouteImport } from './routes/system-status'
+import { Route as UserSettingsRouteImport } from './routes/user-settings'
+import { Route as AccessAclRouteImport } from './routes/access.acl'
+import { Route as AccessGroupsRouteImport } from './routes/access.groups'
+import { Route as AccessPoolsRouteImport } from './routes/access.pools'
+import { Route as AccessRolesRouteImport } from './routes/access.roles'
+import { Route as AccessUsersRouteImport } from './routes/access.users'
 import { Route as NodeEditorsNodeTypeRouteImport } from './routes/node-editors.$nodeType'
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects.$projectId'
 import { Route as TemplatesNewRouteImport } from './routes/templates.new'
@@ -41,6 +48,11 @@ const InstalledSoftwareRoute = InstalledSoftwareRouteImport.update({
   path: '/installed-software',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PreferencesRoute = PreferencesRouteImport.update({
   id: '/preferences',
   path: '/preferences',
@@ -54,6 +66,36 @@ const SettingsRoute = SettingsRouteImport.update({
 const SystemStatusRoute = SystemStatusRouteImport.update({
   id: '/system-status',
   path: '/system-status',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const UserSettingsRoute = UserSettingsRouteImport.update({
+  id: '/user-settings',
+  path: '/user-settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccessAclRoute = AccessAclRouteImport.update({
+  id: '/access/acl',
+  path: '/access/acl',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccessGroupsRoute = AccessGroupsRouteImport.update({
+  id: '/access/groups',
+  path: '/access/groups',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccessPoolsRoute = AccessPoolsRouteImport.update({
+  id: '/access/pools',
+  path: '/access/pools',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccessRolesRoute = AccessRolesRouteImport.update({
+  id: '/access/roles',
+  path: '/access/roles',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccessUsersRoute = AccessUsersRouteImport.update({
+  id: '/access/users',
+  path: '/access/users',
   getParentRoute: () => rootRouteImport,
 } as any)
 const NodeEditorsNodeTypeRoute = NodeEditorsNodeTypeRouteImport.update({
@@ -83,9 +125,16 @@ export interface FileRoutesByFullPath {
   '/appliances': typeof AppliancesRoute
   '/computes': typeof ComputesRoute
   '/installed-software': typeof InstalledSoftwareRoute
+  '/login': typeof LoginRoute
   '/preferences': typeof PreferencesRoute
   '/settings': typeof SettingsRoute
   '/system-status': typeof SystemStatusRoute
+  '/user-settings': typeof UserSettingsRoute
+  '/access/acl': typeof AccessAclRoute
+  '/access/groups': typeof AccessGroupsRoute
+  '/access/pools': typeof AccessPoolsRoute
+  '/access/roles': typeof AccessRolesRoute
+  '/access/users': typeof AccessUsersRoute
   '/node-editors/$nodeType': typeof NodeEditorsNodeTypeRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/templates/new': typeof TemplatesNewRoute
@@ -96,9 +145,16 @@ export interface FileRoutesByTo {
   '/appliances': typeof AppliancesRoute
   '/computes': typeof ComputesRoute
   '/installed-software': typeof InstalledSoftwareRoute
+  '/login': typeof LoginRoute
   '/preferences': typeof PreferencesRoute
   '/settings': typeof SettingsRoute
   '/system-status': typeof SystemStatusRoute
+  '/user-settings': typeof UserSettingsRoute
+  '/access/acl': typeof AccessAclRoute
+  '/access/groups': typeof AccessGroupsRoute
+  '/access/pools': typeof AccessPoolsRoute
+  '/access/roles': typeof AccessRolesRoute
+  '/access/users': typeof AccessUsersRoute
   '/node-editors/$nodeType': typeof NodeEditorsNodeTypeRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/templates/new': typeof TemplatesNewRoute
@@ -110,9 +166,16 @@ export interface FileRoutesById {
   '/appliances': typeof AppliancesRoute
   '/computes': typeof ComputesRoute
   '/installed-software': typeof InstalledSoftwareRoute
+  '/login': typeof LoginRoute
   '/preferences': typeof PreferencesRoute
   '/settings': typeof SettingsRoute
   '/system-status': typeof SystemStatusRoute
+  '/user-settings': typeof UserSettingsRoute
+  '/access/acl': typeof AccessAclRoute
+  '/access/groups': typeof AccessGroupsRoute
+  '/access/pools': typeof AccessPoolsRoute
+  '/access/roles': typeof AccessRolesRoute
+  '/access/users': typeof AccessUsersRoute
   '/node-editors/$nodeType': typeof NodeEditorsNodeTypeRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/templates/new': typeof TemplatesNewRoute
@@ -125,9 +188,16 @@ export interface FileRouteTypes {
     | '/appliances'
     | '/computes'
     | '/installed-software'
+    | '/login'
     | '/preferences'
     | '/settings'
     | '/system-status'
+    | '/user-settings'
+    | '/access/acl'
+    | '/access/groups'
+    | '/access/pools'
+    | '/access/roles'
+    | '/access/users'
     | '/node-editors/$nodeType'
     | '/projects/$projectId'
     | '/templates/new'
@@ -138,9 +208,16 @@ export interface FileRouteTypes {
     | '/appliances'
     | '/computes'
     | '/installed-software'
+    | '/login'
     | '/preferences'
     | '/settings'
     | '/system-status'
+    | '/user-settings'
+    | '/access/acl'
+    | '/access/groups'
+    | '/access/pools'
+    | '/access/roles'
+    | '/access/users'
     | '/node-editors/$nodeType'
     | '/projects/$projectId'
     | '/templates/new'
@@ -151,9 +228,16 @@ export interface FileRouteTypes {
     | '/appliances'
     | '/computes'
     | '/installed-software'
+    | '/login'
     | '/preferences'
     | '/settings'
     | '/system-status'
+    | '/user-settings'
+    | '/access/acl'
+    | '/access/groups'
+    | '/access/pools'
+    | '/access/roles'
+    | '/access/users'
     | '/node-editors/$nodeType'
     | '/projects/$projectId'
     | '/templates/new'
@@ -165,9 +249,16 @@ export interface RootRouteChildren {
   AppliancesRoute: typeof AppliancesRoute
   ComputesRoute: typeof ComputesRoute
   InstalledSoftwareRoute: typeof InstalledSoftwareRoute
+  LoginRoute: typeof LoginRoute
   PreferencesRoute: typeof PreferencesRoute
   SettingsRoute: typeof SettingsRoute
   SystemStatusRoute: typeof SystemStatusRoute
+  UserSettingsRoute: typeof UserSettingsRoute
+  AccessAclRoute: typeof AccessAclRoute
+  AccessGroupsRoute: typeof AccessGroupsRoute
+  AccessPoolsRoute: typeof AccessPoolsRoute
+  AccessRolesRoute: typeof AccessRolesRoute
+  AccessUsersRoute: typeof AccessUsersRoute
   NodeEditorsNodeTypeRoute: typeof NodeEditorsNodeTypeRoute
   ProjectsProjectIdRoute: typeof ProjectsProjectIdRouteWithChildren
   TemplatesNewRoute: typeof TemplatesNewRoute
@@ -203,6 +294,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof InstalledSoftwareRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/preferences': {
       id: '/preferences'
       path: '/preferences'
@@ -222,6 +320,48 @@ declare module '@tanstack/react-router' {
       path: '/system-status'
       fullPath: '/system-status'
       preLoaderRoute: typeof SystemStatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/user-settings': {
+      id: '/user-settings'
+      path: '/user-settings'
+      fullPath: '/user-settings'
+      preLoaderRoute: typeof UserSettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/access/acl': {
+      id: '/access/acl'
+      path: '/access/acl'
+      fullPath: '/access/acl'
+      preLoaderRoute: typeof AccessAclRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/access/groups': {
+      id: '/access/groups'
+      path: '/access/groups'
+      fullPath: '/access/groups'
+      preLoaderRoute: typeof AccessGroupsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/access/pools': {
+      id: '/access/pools'
+      path: '/access/pools'
+      fullPath: '/access/pools'
+      preLoaderRoute: typeof AccessPoolsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/access/roles': {
+      id: '/access/roles'
+      path: '/access/roles'
+      fullPath: '/access/roles'
+      preLoaderRoute: typeof AccessRolesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/access/users': {
+      id: '/access/users'
+      path: '/access/users'
+      fullPath: '/access/users'
+      preLoaderRoute: typeof AccessUsersRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/node-editors/$nodeType': {
@@ -271,9 +411,16 @@ const rootRouteChildren: RootRouteChildren = {
   AppliancesRoute: AppliancesRoute,
   ComputesRoute: ComputesRoute,
   InstalledSoftwareRoute: InstalledSoftwareRoute,
+  LoginRoute: LoginRoute,
   PreferencesRoute: PreferencesRoute,
   SettingsRoute: SettingsRoute,
   SystemStatusRoute: SystemStatusRoute,
+  UserSettingsRoute: UserSettingsRoute,
+  AccessAclRoute: AccessAclRoute,
+  AccessGroupsRoute: AccessGroupsRoute,
+  AccessPoolsRoute: AccessPoolsRoute,
+  AccessRolesRoute: AccessRolesRoute,
+  AccessUsersRoute: AccessUsersRoute,
   NodeEditorsNodeTypeRoute: NodeEditorsNodeTypeRoute,
   ProjectsProjectIdRoute: ProjectsProjectIdRouteWithChildren,
   TemplatesNewRoute: TemplatesNewRoute,

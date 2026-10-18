@@ -8,7 +8,9 @@ import {
 } from "lucide-react";
 import type { ComponentType } from "react";
 import type { Drawing, Link, LinkEndpoint, Node, Project, ResourceMonitor, RuntimeInfo, RuntimeTemplate, TopologySnapshot } from "./api";
-import { api, dockerHttpConsoleUrl, symbolRawUrl } from "./api";
+import { api, dockerHttpConsoleUrl } from "./api";
+import { canApplyLifecycle, nodesForLifecycle } from "./lifecycle";
+import type { LifecycleAction } from "./lifecycle";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -37,7 +39,6 @@ import type { DrawingTool } from "./map/helpers";
 import { resolveCanvasSymbol } from "./map/symbols";
 
 type Selection = { kind: "node" | "link"; id: string } | null;
-type LifecycleAction = "start" | "stop" | "suspend" | "reload";
 type DrawingValues = { width: number; height: number; stroke: string; fill: string; strokeWidth: number; text: string; imageDataUrl?: string };
 
 export type SimulatorWorkspaceProps = {
@@ -131,6 +132,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const canvasNodes = useMemo(() => spreadOverlappingNodes(topology.nodes), [topology.nodes]);
   const selectedNode = props.selection?.kind === "node" ? topology.nodes.find((node) => node.node_id === props.selection?.id) ?? props.selectedNode : props.selectedNode;
   const selectedLink = props.selection?.kind === "link" ? topology.links.find((link) => link.link_id === props.selection?.id) ?? props.selectedLink : props.selectedLink;
+  const selectedLifecycleNodes = topology.nodes.filter((node) => selectedNodeIds.includes(node.node_id) && !node.locked);
 
   useEffect(() => { setTopology(props.topology); }, [props.topology]);
   useEffect(() => { setSelectedNodeIds(props.selection?.kind === "node" ? [props.selection.id] : []); }, [props.selection?.kind, props.selection?.id]);
@@ -337,7 +339,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   }
 
   function runBulkLifecycle(action: LifecycleAction) {
-    const targets = topology.nodes.filter((node) => selectedNodeIds.includes(node.node_id) && !node.locked);
+    const targets = nodesForLifecycle(selectedLifecycleNodes, action);
     targets.forEach((node) => props.onNodeLifecycle(node.node_id, action));
     if (targets.length) setFeatureMessage(`${action[0]?.toUpperCase()}${action.slice(1)} requested for ${targets.length} selected device${targets.length === 1 ? "" : "s"}.`);
   }
@@ -392,17 +394,17 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
           <Badge variant={props.connection === "connected" ? "secondary" : props.connection === "disconnected" ? "destructive" : "outline"} className="gap-1.5">
             <span className={`sim-connection-dot ${props.connection}`} />{props.connection === "connected" ? "Controller connected" : props.connection === "reconnecting" ? "Reconnecting" : props.connection === "checking" ? "Connecting" : "Controller unavailable"}
           </Badge>
-          <Button variant="outline" onClick={props.onStartAll} disabled={props.batchLifecycleRunning || !topology.nodes.some((node) => node.status !== "started")} title="Start every stopped device"><Play />{props.batchLifecycleRunning ? "Working…" : "Start all"}</Button>
-          <Button variant="outline" onClick={props.onStopAll} disabled={props.batchLifecycleRunning || !topology.nodes.some((node) => node.status === "started")} title="Stop every running device"><Square />Stop all</Button>
+          <Button variant="outline" onClick={props.onStartAll} disabled={props.batchLifecycleRunning || !nodesForLifecycle(topology.nodes, "start").length} title="Start every stopped device"><Play />{props.batchLifecycleRunning ? "Working…" : "Start all"}</Button>
+          <Button variant="outline" onClick={props.onStopAll} disabled={props.batchLifecycleRunning || !nodesForLifecycle(topology.nodes, "stop").length} title="Stop every running device"><Square />Stop all</Button>
           <Separator orientation="vertical" className="h-7" />
           <Button variant={props.connecting ? "default" : "outline"} aria-label={props.connecting ? "Cancel link" : "Connect ports"} aria-pressed={props.connecting} onClick={props.onToggleConnect}><Cable />{props.connecting ? "Cancel link" : "Draw link"}</Button>
           {props.connecting && <Button onClick={props.onCreateLink} disabled={props.linkEndpoints.length < 2}><Link2 />Create link{props.linkEndpoints.length > 0 ? ` · ${props.linkEndpoints.length}` : ""}</Button>}
           {selectedNodeIds.length > 1 && <>
             <Badge variant="secondary">{selectedNodeIds.length} selected</Badge>
-            <Button size="sm" variant="outline" onClick={() => runBulkLifecycle("start")}><Play />Start</Button>
-            <Button size="sm" variant="outline" onClick={() => runBulkLifecycle("stop")}><Square />Stop</Button>
-            <Button size="sm" variant="outline" onClick={() => runBulkLifecycle("suspend")}><Pause />Suspend</Button>
-            <Button size="sm" variant="outline" onClick={() => runBulkLifecycle("reload")}><Activity />Reload</Button>
+            {nodesForLifecycle(selectedLifecycleNodes, "start").length > 0 && <Button size="sm" variant="outline" onClick={() => runBulkLifecycle("start")}><Play />Start</Button>}
+            {nodesForLifecycle(selectedLifecycleNodes, "stop").length > 0 && <Button size="sm" variant="outline" onClick={() => runBulkLifecycle("stop")}><Square />Stop</Button>}
+            {nodesForLifecycle(selectedLifecycleNodes, "suspend").length > 0 && <Button size="sm" variant="outline" onClick={() => runBulkLifecycle("suspend")}><Pause />Suspend</Button>}
+            {nodesForLifecycle(selectedLifecycleNodes, "reload").length > 0 && <Button size="sm" variant="outline" onClick={() => runBulkLifecycle("reload")}><Activity />Reload</Button>}
               <Button size="sm" variant="outline" onClick={() => topology.nodes.filter((node) => selectedNodeIds.includes(node.node_id) && node.status === "started").forEach((node) => props.onOpenConsole(node))}><Terminal />Consoles</Button>
             <Button size="sm" variant="destructive" onClick={deleteSelectedNodes}><Trash2 />Delete</Button>
           </>}
@@ -565,14 +567,10 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
               <ContextMenuLabel>{selectedNode?.name ?? (selectedLink ? "Ethernet link" : selectedDrawing ? "Drawing" : "Topology")}</ContextMenuLabel>
               <ContextMenuSeparator />
               {selectedNode ? <>
-                {selectedNode.status === "started" ? <>
-                  {selectedNode.node_type !== "vpcs" && <ContextMenuItem onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "suspend")}><Pause />Suspend device</ContextMenuItem>}
-                  <ContextMenuItem onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "stop")}><Power />Stop device</ContextMenuItem>
-                  <ContextMenuItem onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "reload")}><Activity />Reload device</ContextMenuItem>
-                </> : <>
-                  <ContextMenuItem disabled={Boolean(selectedNode.runtime_missing)} onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "start")}><Play />{selectedNode.status === "suspended" ? "Resume device" : "Start device"}</ContextMenuItem>
-                  {selectedNode.status === "suspended" && <ContextMenuItem onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "stop")}><Power />Stop device</ContextMenuItem>}
-                </>}
+                {canApplyLifecycle(selectedNode, "start") && <ContextMenuItem disabled={Boolean(selectedNode.runtime_missing)} onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "start")}><Play />{selectedNode.status === "suspended" ? "Resume device" : "Start device"}</ContextMenuItem>}
+                {canApplyLifecycle(selectedNode, "stop") && <ContextMenuItem onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "stop")}><Power />Stop device</ContextMenuItem>}
+                {canApplyLifecycle(selectedNode, "suspend") && <ContextMenuItem onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "suspend")}><Pause />Suspend device</ContextMenuItem>}
+                {canApplyLifecycle(selectedNode, "reload") && <ContextMenuItem onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "reload")}><Activity />Reload device</ContextMenuItem>}
                 {selectedNode.status === "started" && <ContextMenuItem onSelect={() => props.onOpenConsole(selectedNode)}><Terminal />Open console</ContextMenuItem>}
                 {selectedNode.status === "started" && nodeHasAuxConsole(selectedNode) && <ContextMenuItem onSelect={() => props.onOpenConsole(selectedNode, true)}><Terminal />Open auxiliary console</ContextMenuItem>}
                 <ContextMenuItem onSelect={() => { document.querySelector<HTMLButtonElement>("[data-tab=topology]")?.click(); window.setTimeout(() => document.querySelector<HTMLInputElement>("[data-rename-node]")?.focus(), 0); }}><Pencil />Edit device name</ContextMenuItem>
@@ -847,10 +845,11 @@ function NodeInspector({ node, links, nodes, onLifecycle, onOpenConsole, onRenam
     </div>
     <div className="mt-3 flex flex-wrap gap-2">
       {["qemu", "docker", "vpcs", "dynamips"].includes(node.node_type ?? "") && <Button variant="outline" size="sm" onClick={onConfigure}><Settings2 />Configure</Button>}
-      {node.status === "started" ? <Button variant="outline" size="sm" onClick={() => onLifecycle(node.node_id, "stop")}><Power />Stop</Button> : <Button size="sm" disabled={Boolean(node.runtime_missing)} onClick={() => onLifecycle(node.node_id, "start")}><Play />Start</Button>}
+      {canApplyLifecycle(node, "start") && <Button size="sm" disabled={Boolean(node.runtime_missing)} onClick={() => onLifecycle(node.node_id, "start")}><Play />Start</Button>}
+      {canApplyLifecycle(node, "stop") && <Button variant="outline" size="sm" onClick={() => onLifecycle(node.node_id, "stop")}><Power />Stop</Button>}
       {canOpenConsole && <Button variant="outline" size="sm" onClick={() => onOpenConsole(node)}><Terminal />Open console</Button>}
-      <Button variant="outline" size="icon-sm" disabled={node.status !== "started" || node.node_type === "vpcs"} onClick={() => onLifecycle(node.node_id, "suspend")} aria-label="Suspend device" title="Suspend"><Pause /></Button>
-      <Button variant="outline" size="icon-sm" disabled={node.status !== "started"} onClick={() => onLifecycle(node.node_id, "reload")} aria-label="Restart device" title="Restart"><Activity /></Button>
+      {canApplyLifecycle(node, "suspend") && <Button variant="outline" size="icon-sm" onClick={() => onLifecycle(node.node_id, "suspend")} aria-label="Suspend device" title="Suspend"><Pause /></Button>}
+      {canApplyLifecycle(node, "reload") && <Button variant="outline" size="icon-sm" onClick={() => onLifecycle(node.node_id, "reload")} aria-label="Restart device" title="Restart"><Activity /></Button>}
     </div>
     <Separator className="my-3" />
     <div className="space-y-2">
@@ -1188,7 +1187,7 @@ function TopologyCanvas(props: CanvasProps) {
         return <g key={node.node_id} transform={`translate(${x},${y})`} className={`sim-node ${selected ? "is-selected" : ""} ${props.connecting ? "is-connecting" : ""} ${node.locked || props.projectLocked ? "is-locked" : ""}`} onPointerDown={(event) => startMove(event, node)} onClick={(event) => { event.stopPropagation(); if (event.metaKey || event.ctrlKey) props.onMultiSelectNode(node.node_id); else if (!movedRef.current) props.onNodeClick(node.node_id); movedRef.current = false; }} onContextMenu={() => props.onNodeContext(node.node_id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onNodeClick(node.node_id); } }} role="button" aria-label={`Node ${node.name}`} tabIndex={0}>
           <rect className="sim-node-card" x="-56" y="-36" width="112" height="66" rx="9" />
           <Icon className="sim-node-icon" x={-13} y={-29} width={26} height={26} strokeWidth={1.7} />
-          {symbol.kind === "custom" && <image className="sim-node-symbol" href={symbolRawUrl(symbol.symbolId)} x="-23" y="-32" width="46" height="38" preserveAspectRatio="xMidYMid meet" onError={(event) => { event.currentTarget.style.display = "none"; }} />}
+          {symbol.kind === "custom" && <AuthenticatedSymbolImage symbolId={symbol.symbolId} />}
           <text className="sim-node-type" y="8">{kindLabel(node.node_type ?? "device")}</text>
           <circle className={`sim-node-status ${node.status === "started" ? "running" : "stopped"}`} cx="46" cy="-26" r="4" />
           <text className="sim-node-name" data-node-label="true" x={labelPosition.x} y={labelPosition.y} onPointerDown={(event) => startLabelMove(event, node)} onClick={(event) => event.stopPropagation()}>{node.name}</text>
@@ -1207,6 +1206,27 @@ function TopologyCanvas(props: CanvasProps) {
       {props.nodes.length === 0 && <g className="sim-canvas-empty"><Network x={-16} y={-30} width={32} height={32} /><text y="54">Your canvas is ready</text><text className="sim-empty-subtitle" y="77">Drop a device here or add one from the library on the left.</text></g>}
     </svg>
   </div>;
+}
+
+function AuthenticatedSymbolImage({ symbolId }: { symbolId: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    setUrl(null);
+    void api.symbolRaw(symbolId).then((blob) => {
+      objectUrl = URL.createObjectURL(blob);
+      if (cancelled) URL.revokeObjectURL(objectUrl);
+      else setUrl(objectUrl);
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [symbolId]);
+  return url
+    ? <image className="sim-node-symbol" href={url} x="-23" y="-32" width="46" height="38" preserveAspectRatio="xMidYMid meet" />
+    : null;
 }
 
 function sameEndpoint(left: LinkEndpoint, right: LinkEndpoint) {

@@ -348,7 +348,9 @@ describe("project workspace migration", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /Add node/ }));
     fireEvent.change(await screen.findByRole("textbox", { name: "Node name" }), { target: { value: "R1" } });
-    fireEvent.change(screen.getByRole("textbox", { name: "Idle-PC address (optional)" }), { target: { value: "0x606e0538" } });
+    const idlePcInput = screen.getByRole("textbox", { name: "Idle-PC address (optional)" });
+    expect(idlePcInput).toHaveAttribute("placeholder", "Use the appliance default");
+    fireEvent.change(idlePcInput, { target: { value: "0x606e0538" } });
     fireEvent.change(screen.getByRole("textbox", { name: "IOS startup configuration (optional)" }), { target: { value: "hostname R1\nno ip domain-lookup" } });
     fireEvent.click(screen.getByRole("button", { name: "Create node" }));
 

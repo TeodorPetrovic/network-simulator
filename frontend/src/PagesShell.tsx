@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
-import { Activity, Boxes, Cpu, FolderOpen, HardDrive, Network, Settings2, Waypoints } from "lucide-react";
+import { Activity, Boxes, Cpu, FolderOpen, HardDrive, Network, Settings2, ShieldCheck, UserRound, Waypoints } from "lucide-react";
 
 const sections = [
   { to: "/", label: "Projects", icon: FolderOpen },
@@ -8,6 +8,8 @@ const sections = [
   { to: "/appliances", label: "Appliances", icon: HardDrive },
   { to: "/computes", label: "Servers", icon: Network },
   { to: "/settings", label: "Settings", icon: Settings2 },
+  { to: "/access/users", label: "Access", icon: ShieldCheck },
+  { to: "/user-settings", label: "My account", icon: UserRound },
   { to: "/system-status", label: "System status", icon: Activity },
   { to: "/installed-software", label: "Installed software", icon: Cpu },
 ] as const;
