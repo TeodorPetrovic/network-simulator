@@ -1,6 +1,6 @@
 # GNS3 3.1 controller API parity matrix
 
-Compared against `/tmp/gns3-server-3.1/gns3server/api/routes/controller/` route decorators and `controller/__init__.py` router prefixes. Paths below include the server `/v3` prefix. The matrix records router coverage after this API workstream pass.
+Compared against `/tmp/gns3-server-3.1/gns3server/api/routes/controller/` route decorators and `controller/__init__.py` router prefixes. Paths below include the server `/v3` prefix. The matrix records route coverage after the auth implementation; auth behavior is summarized below the table.
 
 Statuses mean:
 
@@ -11,17 +11,17 @@ Statuses mean:
 
 | Upstream module | Method | Path | Status |
 | --- | --- | --- | --- |
-| `acl.py` | GET | `/v3/access/acl` | Intentionally skipped — auth, later, or optional phase |
-| `acl.py` | POST | `/v3/access/acl` | Intentionally skipped — auth, later, or optional phase |
-| `acl.py` | GET | `/v3/access/acl/endpoints` | Intentionally skipped — auth, later, or optional phase |
-| `acl.py` | DELETE | `/v3/access/acl/{ace_id}` | Intentionally skipped — auth, later, or optional phase |
-| `acl.py` | GET | `/v3/access/acl/{ace_id}` | Intentionally skipped — auth, later, or optional phase |
-| `acl.py` | PUT | `/v3/access/acl/{ace_id}` | Intentionally skipped — auth, later, or optional phase |
-| `api_keys.py` | GET | `/v3` | Intentionally skipped — auth, later, or optional phase |
-| `api_keys.py` | POST | `/v3` | Intentionally skipped — auth, later, or optional phase |
-| `api_keys.py` | DELETE | `/v3/{api_key_id}` | Intentionally skipped — auth, later, or optional phase |
-| `api_keys.py` | POST | `/v3/{api_key_id}/restore` | Intentionally skipped — auth, later, or optional phase |
-| `api_keys.py` | POST | `/v3/{api_key_id}/revoke` | Intentionally skipped — auth, later, or optional phase |
+| `acl.py` | GET | `/v3/access/acl` | Implemented |
+| `acl.py` | POST | `/v3/access/acl` | Implemented |
+| `acl.py` | GET | `/v3/access/acl/endpoints` | Partial — current endpoint catalog covers projects and access principals |
+| `acl.py` | DELETE | `/v3/access/acl/{ace_id}` | Implemented |
+| `acl.py` | GET | `/v3/access/acl/{ace_id}` | Implemented |
+| `acl.py` | PUT | `/v3/access/acl/{ace_id}` | Partial — path, allow/deny, and propagation fields update |
+| `api_keys.py` | GET | `/v3/access/api-keys` | Implemented — current user's keys |
+| `api_keys.py` | POST | `/v3/access/api-keys` | Implemented — key secret shown once |
+| `api_keys.py` | DELETE | `/v3/access/api-keys/{api_key_id}` | Implemented — current user's keys |
+| `api_keys.py` | POST | `/v3/access/api-keys/{api_key_id}/restore` | Implemented — current user's keys |
+| `api_keys.py` | POST | `/v3/access/api-keys/{api_key_id}/revoke` | Implemented — current user's keys |
 | `appliances.py` | GET | `/v3/appliances` | Missing — appliance list/install routes remain |
 | `appliances.py` | GET | `/v3/appliances/{appliance_id}` | Missing — appliance list/install routes remain |
 | `appliances.py` | POST | `/v3/appliances/{appliance_id}/install` | Missing — appliance list/install routes remain |
@@ -69,14 +69,14 @@ Statuses mean:
 | `gns3vm.py` | PUT | `/v3/gns3vm` | Intentionally skipped — auth, later, or optional phase |
 | `gns3vm.py` | GET | `/v3/gns3vm/engines` | Intentionally skipped — auth, later, or optional phase |
 | `gns3vm.py` | GET | `/v3/gns3vm/engines/{engine}/vms` | Intentionally skipped — auth, later, or optional phase |
-| `groups.py` | GET | `/v3/access/groups` | Intentionally skipped — auth, later, or optional phase |
-| `groups.py` | POST | `/v3/access/groups` | Intentionally skipped — auth, later, or optional phase |
-| `groups.py` | DELETE | `/v3/access/groups/{user_group_id}` | Intentionally skipped — auth, later, or optional phase |
-| `groups.py` | GET | `/v3/access/groups/{user_group_id}` | Intentionally skipped — auth, later, or optional phase |
-| `groups.py` | PUT | `/v3/access/groups/{user_group_id}` | Intentionally skipped — auth, later, or optional phase |
-| `groups.py` | GET | `/v3/access/groups/{user_group_id}/members` | Intentionally skipped — auth, later, or optional phase |
-| `groups.py` | DELETE | `/v3/access/groups/{user_group_id}/members/{user_id}` | Intentionally skipped — auth, later, or optional phase |
-| `groups.py` | PUT | `/v3/access/groups/{user_group_id}/members/{user_id}` | Intentionally skipped — auth, later, or optional phase |
+| `groups.py` | GET | `/v3/access/groups` | Implemented |
+| `groups.py` | POST | `/v3/access/groups` | Implemented |
+| `groups.py` | DELETE | `/v3/access/groups/{user_group_id}` | Partial — built-in groups are protected |
+| `groups.py` | GET | `/v3/access/groups/{user_group_id}` | Implemented |
+| `groups.py` | PUT | `/v3/access/groups/{user_group_id}` | Partial — built-in groups are protected |
+| `groups.py` | GET | `/v3/access/groups/{user_group_id}/members` | Implemented |
+| `groups.py` | DELETE | `/v3/access/groups/{user_group_id}/members/{user_id}` | Implemented |
+| `groups.py` | PUT | `/v3/access/groups/{user_group_id}/members/{user_id}` | Implemented |
 | `images.py` | GET | `/v3/images` | Partial — local QEMU/IOS files; IOU and catalog/sync workflows are absent |
 | `images.py` | POST | `/v3/images/compatibility` | Missing — image catalog, sync, prune, IOU, or alternate upload route |
 | `images.py` | GET | `/v3/images/compatibility/catalog` | Missing — image catalog, sync, prune, IOU, or alternate upload route |
@@ -152,15 +152,15 @@ Statuses mean:
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/{node_id}/stop` | Implemented |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/{node_id}/suspend` | Implemented |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/{node_id}/unisolate` | Partial |
-| `pools.py` | GET | `/v3/pools` | Intentionally skipped — auth, later, or optional phase |
-| `pools.py` | POST | `/v3/pools` | Intentionally skipped — auth, later, or optional phase |
-| `pools.py` | DELETE | `/v3/pools/{resource_pool_id}` | Intentionally skipped — auth, later, or optional phase |
-| `pools.py` | GET | `/v3/pools/{resource_pool_id}` | Intentionally skipped — auth, later, or optional phase |
-| `pools.py` | PUT | `/v3/pools/{resource_pool_id}` | Intentionally skipped — auth, later, or optional phase |
-| `pools.py` | GET | `/v3/pools/{resource_pool_id}/resources` | Intentionally skipped — auth, later, or optional phase |
-| `pools.py` | DELETE | `/v3/pools/{resource_pool_id}/resources/{resource_id}` | Intentionally skipped — auth, later, or optional phase |
-| `pools.py` | PUT | `/v3/pools/{resource_pool_id}/resources/{resource_id}` | Intentionally skipped — auth, later, or optional phase |
-| `privileges.py` | GET | `/v3/access/privileges` | Intentionally skipped — auth, later, or optional phase |
+| `pools.py` | GET | `/v3/pools` | Implemented |
+| `pools.py` | POST | `/v3/pools` | Implemented |
+| `pools.py` | DELETE | `/v3/pools/{resource_pool_id}` | Partial — deletion is blocked while ACLs reference the pool |
+| `pools.py` | GET | `/v3/pools/{resource_pool_id}` | Implemented |
+| `pools.py` | PUT | `/v3/pools/{resource_pool_id}` | Implemented |
+| `pools.py` | GET | `/v3/pools/{resource_pool_id}/resources` | Implemented |
+| `pools.py` | DELETE | `/v3/pools/{resource_pool_id}/resources/{resource_id}` | Implemented |
+| `pools.py` | PUT | `/v3/pools/{resource_pool_id}/resources/{resource_id}` | Implemented — project resources only |
+| `privileges.py` | GET | `/v3/access/privileges` | Implemented |
 | `projects.py` | GET | `/v3/projects` | Implemented |
 | `projects.py` | POST | `/v3/projects` | Implemented |
 | `projects.py` | POST | `/v3/projects/load` | Partial — DB-backed implementation; archive, filesystem, or event behavior is narrower than GNS3 |
@@ -193,14 +193,14 @@ Statuses mean:
 | `projects.py` | GET | `/v3/projects/{project_id}/stats` | Partial |
 | `projects.py` | POST | `/v3/projects/{project_id}/templates/{template_id}` | Implemented |
 | `projects.py` | POST | `/v3/projects/{project_id}/unlock` | Partial — records locked state; does not enforce every GNS3 lock interaction |
-| `roles.py` | GET | `/v3/access/roles` | Intentionally skipped — auth, later, or optional phase |
-| `roles.py` | POST | `/v3/access/roles` | Intentionally skipped — auth, later, or optional phase |
-| `roles.py` | DELETE | `/v3/access/roles/{role_id}` | Intentionally skipped — auth, later, or optional phase |
-| `roles.py` | GET | `/v3/access/roles/{role_id}` | Intentionally skipped — auth, later, or optional phase |
-| `roles.py` | PUT | `/v3/access/roles/{role_id}` | Intentionally skipped — auth, later, or optional phase |
-| `roles.py` | GET | `/v3/access/roles/{role_id}/privileges` | Intentionally skipped — auth, later, or optional phase |
-| `roles.py` | DELETE | `/v3/access/roles/{role_id}/privileges/{privilege_id}` | Intentionally skipped — auth, later, or optional phase |
-| `roles.py` | PUT | `/v3/access/roles/{role_id}/privileges/{privilege_id}` | Intentionally skipped — auth, later, or optional phase |
+| `roles.py` | GET | `/v3/access/roles` | Implemented |
+| `roles.py` | POST | `/v3/access/roles` | Implemented |
+| `roles.py` | DELETE | `/v3/access/roles/{role_id}` | Partial — built-in roles are protected |
+| `roles.py` | GET | `/v3/access/roles/{role_id}` | Implemented |
+| `roles.py` | PUT | `/v3/access/roles/{role_id}` | Partial — built-in roles are protected |
+| `roles.py` | GET | `/v3/access/roles/{role_id}/privileges` | Implemented |
+| `roles.py` | DELETE | `/v3/access/roles/{role_id}/privileges/{privilege_id}` | Implemented |
+| `roles.py` | PUT | `/v3/access/roles/{role_id}/privileges/{privilege_id}` | Implemented |
 | `settings.py` | GET | `/v3/settings` | Partial — generic persisted settings; lacks GNS3 config validation and secret masking |
 | `settings.py` | PUT | `/v3/settings` | Partial — generic persisted settings; lacks GNS3 config validation and secret masking |
 | `snapshots.py` | GET | `/v3/projects/{project_id}/snapshots` | Partial — topology snapshots; restore does not rehydrate runtime processes |
@@ -222,18 +222,26 @@ Statuses mean:
 | `templates.py` | PUT | `/v3/templates/{template_id}/base-config/{filename}` | Missing — template base-config file endpoints remain |
 | `templates.py` | GET | `/v3/templates/{template_id}/base-configs` | Missing — template base-config file endpoints remain |
 | `templates.py` | POST | `/v3/templates/{template_id}/duplicate` | Implemented |
-| `users.py` | GET | `/v3/access/users` | Intentionally skipped — auth, later, or optional phase |
-| `users.py` | POST | `/v3/access/users` | Intentionally skipped — auth, later, or optional phase |
-| `users.py` | POST | `/v3/access/users/authenticate` | Intentionally skipped — auth, later, or optional phase |
-| `users.py` | POST | `/v3/access/users/login` | Intentionally skipped — auth, later, or optional phase |
-| `users.py` | POST | `/v3/access/users/logout` | Intentionally skipped — auth, later, or optional phase |
-| `users.py` | GET | `/v3/access/users/me` | Intentionally skipped — auth, later, or optional phase |
-| `users.py` | PUT | `/v3/access/users/me` | Intentionally skipped — auth, later, or optional phase |
-| `users.py` | POST | `/v3/access/users/refresh` | Intentionally skipped — auth, later, or optional phase |
-| `users.py` | DELETE | `/v3/access/users/{user_id}` | Intentionally skipped — auth, later, or optional phase |
-| `users.py` | GET | `/v3/access/users/{user_id}` | Intentionally skipped — auth, later, or optional phase |
-| `users.py` | PUT | `/v3/access/users/{user_id}` | Intentionally skipped — auth, later, or optional phase |
-| `users.py` | GET | `/v3/access/users/{user_id}/groups` | Intentionally skipped — auth, later, or optional phase |
+| `users.py` | GET | `/v3/access/users` | Implemented |
+| `users.py` | POST | `/v3/access/users` | Implemented |
+| `users.py` | POST | `/v3/access/users/authenticate` | Implemented — JSON credentials endpoint |
+| `users.py` | POST | `/v3/access/users/login` | Implemented — OAuth2 password form |
+| `users.py` | POST | `/v3/access/users/logout` | Partial — revokes all JWTs by token version |
+| `users.py` | GET | `/v3/access/users/me` | Implemented |
+| `users.py` | PUT | `/v3/access/users/me` | Implemented — profile and password update |
+| `users.py` | POST | `/v3/access/users/refresh` | Implemented — signed refresh JWT |
+| `users.py` | DELETE | `/v3/access/users/{user_id}` | Partial — superadmin account is protected |
+| `users.py` | GET | `/v3/access/users/{user_id}` | Implemented |
+| `users.py` | PUT | `/v3/access/users/{user_id}` | Implemented |
+| `users.py` | GET | `/v3/access/users/{user_id}/groups` | Implemented |
+
+## Authentication behavior
+
+- Auth routes and database models live in `src/auth/`; migration `0006_auth.sql` adds users, groups, roles, privileges, ACL entries, project resource pools, API keys, and auth configuration. OAuth2 password form login is at `/v3/access/users/login`; JSON login, refresh, logout, `/me`, profile updates, and user CRUD are also available.
+- Passwords use Argon2id. Access and refresh tokens are HS256 JWTs; the signing secret is randomly generated once and persisted in `auth_config`. API key secrets are returned once, stored as Argon2 hashes, and can be revoked, restored, or deleted by their owner.
+- A new database creates an `admin` superadmin with a random initial password. That password is printed once at bootstrap; it is not `admin/admin`, which is a public default credential. Change it after the first login. `NETWORK_SIMULATOR_AUTH_ENABLED` explicitly overrides the persisted setting. Without an override, the first startup defaults auth OFF for loopback binds and ON for non-loopback binds; the setting can be changed in Settings by a superadmin and persists in SQLite. Startup logs the effective auth state.
+- When enabled, API routes require a bearer token; WebSocket routes accept the same token in the `token` query parameter. Privileges are resolved per method and endpoint family, then checked against user and group ACEs. ACL paths omit `/v3`; nearer paths replace inherited rules, `propagate` controls allow inheritance, direct user ACEs are checked before group ACEs, and project access can be granted through resource-pool membership.
+- The ACL endpoint catalog currently includes projects and access principals; node/link/template/image endpoint enumeration and broader route-specific policy detail remain partial. Resource pools currently contain project resources only. The OAuth2 refresh response and API-key shape follow GNS3 but token algorithms and persistence details differ.
 
 **Upstream controller routes enumerated:** 223 method/path pairs.
 
