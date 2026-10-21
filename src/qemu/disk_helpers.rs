@@ -72,4 +72,3 @@ pub(super) fn image_format_matches(path: &Path, format: &str) -> bool {
         _ => false,
     }
 }
-

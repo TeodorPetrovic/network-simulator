@@ -47,4 +47,3 @@ pub(super) fn kvm_access_error() -> Option<String> {
         )),
     }
 }
-

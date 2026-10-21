@@ -182,4 +182,3 @@ pub(super) fn valid_qemu_disk_size(size: &str) -> bool {
             | "tib"
     )
 }
-

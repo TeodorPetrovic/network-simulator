@@ -1087,16 +1087,13 @@ impl QemuRuntime {
         }
         runtime_fields
     }
-
 }
 
 mod disks;
 
-
 mod images;
 
-impl QemuRuntime {
-}
+impl QemuRuntime {}
 
 mod lifecycle;
 

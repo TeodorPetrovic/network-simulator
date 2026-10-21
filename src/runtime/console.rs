@@ -31,7 +31,10 @@ impl DockerRuntime {
         Ok(None)
     }
 
-    pub(super) async fn start_vnc_console(&self, resolution: &str) -> Result<DockerConsoleHost, RuntimeError> {
+    pub(super) async fn start_vnc_console(
+        &self,
+        resolution: &str,
+    ) -> Result<DockerConsoleHost, RuntimeError> {
         let xvfb = runtime_program("NETWORK_SIMULATOR_XVFB", "Xvfb");
         let x11vnc = runtime_program("NETWORK_SIMULATOR_X11VNC", "x11vnc");
         if let Some(error) = docker_vnc_tools_error(xvfb.is_some(), x11vnc.is_some()) {

@@ -305,5 +305,4 @@ impl QemuRuntime {
         remove_disk_and_checksum(&canonical)?;
         Ok(canonical)
     }
-
 }

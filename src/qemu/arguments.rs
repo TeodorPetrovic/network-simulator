@@ -309,7 +309,10 @@ pub(super) fn locate_ovmf_file(name: &str, image: &Path) -> Result<PathBuf, Runt
         })
 }
 
-pub(super) fn set_child_process_priority(command: &mut Command, priority: &str) -> Result<(), RuntimeError> {
+pub(super) fn set_child_process_priority(
+    command: &mut Command,
+    priority: &str,
+) -> Result<(), RuntimeError> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -350,4 +353,3 @@ pub(super) fn cpu_limiter_arguments(pid: u32, percentage: u32) -> [String; 3] {
         format!("--limit={percentage}"),
     ]
 }
-

@@ -147,8 +147,8 @@ impl Default for DockerRuntime {
 }
 
 mod helpers;
-use self::helpers::*;
 pub use self::helpers::validate_docker_extra_configs;
+use self::helpers::*;
 
 #[derive(Serialize)]
 pub struct RuntimeInfo {

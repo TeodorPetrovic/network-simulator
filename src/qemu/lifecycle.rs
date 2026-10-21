@@ -1,7 +1,11 @@
 use super::*;
 
 impl QemuRuntime {
-    pub(super) async fn start(&self, vm: &QemuVm, links: &[QemuLink]) -> Result<String, RuntimeError> {
+    pub(super) async fn start(
+        &self,
+        vm: &QemuVm,
+        links: &[QemuLink],
+    ) -> Result<String, RuntimeError> {
         if !vm.overlay.is_file() {
             return Err(RuntimeError::NotFound(format!(
                 "QEMU node disk overlay '{}' is missing",
@@ -390,5 +394,4 @@ impl QemuRuntime {
         }
         let _ = fs::remove_file(tpm_socket_path(vm));
     }
-
 }

@@ -364,7 +364,10 @@ impl DockerRuntime {
         result
     }
 
-    pub(super) async fn remove_container_unchecked(&self, container_id: &str) -> Result<(), RuntimeError> {
+    pub(super) async fn remove_container_unchecked(
+        &self,
+        container_id: &str,
+    ) -> Result<(), RuntimeError> {
         let result = match self
             .command(["rm", "--force", container_id], DOCKER_TIMEOUT)
             .await

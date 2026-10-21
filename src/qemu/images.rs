@@ -63,7 +63,11 @@ impl QemuRuntime {
         Ok(path)
     }
 
-    pub(super) fn resolve_node_image(&self, image: &str, vm_dir: &Path) -> Result<PathBuf, RuntimeError> {
+    pub(super) fn resolve_node_image(
+        &self,
+        image: &str,
+        vm_dir: &Path,
+    ) -> Result<PathBuf, RuntimeError> {
         let candidate = Path::new(image);
         let candidate = if candidate.is_absolute() {
             candidate.to_path_buf()
@@ -211,5 +215,4 @@ impl QemuRuntime {
         .await?;
         Ok(())
     }
-
 }

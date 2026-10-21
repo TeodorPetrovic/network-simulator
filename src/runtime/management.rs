@@ -44,7 +44,10 @@ impl DockerRuntime {
         }
     }
 
-    pub(super) fn managed_container_marker(&self, container_id: &str) -> Result<PathBuf, RuntimeError> {
+    pub(super) fn managed_container_marker(
+        &self,
+        container_id: &str,
+    ) -> Result<PathBuf, RuntimeError> {
         if !valid_container_id(container_id) {
             return Err(RuntimeError::Failed(
                 "Docker returned an invalid container ID".to_owned(),
@@ -126,7 +129,11 @@ impl DockerRuntime {
         let _ = container_id;
     }
 
-    pub(super) async fn command<I, S>(&self, args: I, duration: Duration) -> Result<String, RuntimeError>
+    pub(super) async fn command<I, S>(
+        &self,
+        args: I,
+        duration: Duration,
+    ) -> Result<String, RuntimeError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<std::ffi::OsStr>,

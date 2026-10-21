@@ -130,7 +130,10 @@ pub(super) fn runtime_program(variable: &str, name: &str) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-pub(super) fn docker_aux_exec_command(binary: &Path, container_id: &str) -> Result<String, RuntimeError> {
+pub(super) fn docker_aux_exec_command(
+    binary: &Path,
+    container_id: &str,
+) -> Result<String, RuntimeError> {
     let binary = binary.to_string_lossy();
     let docker = shlex::try_quote(&binary)
         .map_err(|_| RuntimeError::Failed("Docker CLI path cannot be quoted safely".to_owned()))?;
@@ -238,7 +241,9 @@ pub(super) fn docker_vnc_tools_error(has_xvfb: bool, has_x11vnc: bool) -> Option
     })
 }
 
-pub(super) fn validate_docker_runtime_options(options: &DockerTemplateOptions) -> Result<(), RuntimeError> {
+pub(super) fn validate_docker_runtime_options(
+    options: &DockerTemplateOptions,
+) -> Result<(), RuntimeError> {
     if !matches!(
         options.console_type.as_str(),
         "none" | "telnet" | "vnc" | "http" | "https"
@@ -438,4 +443,3 @@ pub(super) fn validate_docker_image_reference(image: &str) -> Result<(), Runtime
     }
     Ok(())
 }
-

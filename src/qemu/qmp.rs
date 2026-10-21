@@ -72,4 +72,3 @@ pub(super) async fn send_qmp_command(
         return Ok(response.get("return").cloned().unwrap_or(Value::Null));
     }
 }
-

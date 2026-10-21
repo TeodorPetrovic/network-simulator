@@ -38,4 +38,3 @@ pub(super) fn qmp_reports_missing_id(error: &RuntimeError) -> bool {
         || message.contains("does not exist")
         || message.contains("not a valid")
 }
-
