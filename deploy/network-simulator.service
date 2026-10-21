@@ -1,0 +1,57 @@
+[Unit]
+Description=Network Simulator classroom controller
+Documentation=file:/opt/network-simulator/docs/deploy.md
+After=network-online.target docker.service libvirtd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=network-simulator
+Group=network-simulator
+SupplementaryGroups=docker kvm
+WorkingDirectory=/opt/network-simulator
+EnvironmentFile=-/etc/network-simulator/network-simulator.env
+Environment=NETWORK_SIMULATOR_BIND=127.0.0.1:3080
+Environment=NETWORK_SIMULATOR_DB=/var/lib/network-simulator/network-simulator.sqlite
+Environment=NETWORK_SIMULATOR_DATA_HOME=/var/lib/network-simulator
+Environment=NETWORK_SIMULATOR_IMAGE_HOME=/var/lib/network-simulator/images
+Environment=NETWORK_SIMULATOR_QEMU_STATE=/var/lib/network-simulator/run/qemu
+Environment=NETWORK_SIMULATOR_DYNAMIPS_STATE=/var/lib/network-simulator/run/dynamips
+Environment=NETWORK_SIMULATOR_DOCKER_STATE=/var/lib/network-simulator/run/docker
+Environment=NETWORK_SIMULATOR_VPCS_STATE=/var/lib/network-simulator/run/vpcs
+Environment=NETWORK_SIMULATOR_UBRIDGE_STATE=/var/lib/network-simulator/run/ubridge
+Environment=NETWORK_SIMULATOR_CAPTURE_HOME=/var/lib/network-simulator/captures
+ExecStart=/opt/network-simulator/bin/network-simulator
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=60s
+KillSignal=SIGINT
+KillMode=mixed
+SendSIGKILL=yes
+UMask=0077
+
+StateDirectory=network-simulator
+StateDirectoryMode=0750
+RuntimeDirectory=network-simulator
+RuntimeDirectoryMode=0750
+LogsDirectory=network-simulator
+LogsDirectoryMode=0750
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
+DevicePolicy=closed
+DeviceAllow=/dev/kvm rw
+DeviceAllow=/dev/net/tun rw
+ReadWritePaths=/var/lib/network-simulator /run/network-simulator /var/log/network-simulator
+
+[Install]
+WantedBy=multi-user.target

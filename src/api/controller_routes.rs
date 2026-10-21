@@ -1,7 +1,7 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{self, Cursor, Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use axum::{
@@ -579,17 +579,269 @@ async fn project_gns3file(
     AxumPath(project_id): AxumPath<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     let pid = project_id.to_string();
-    let mut project = fetch_project(state.store.pool(), &pid).await?;
-    for kind in ["node", "link", "drawing"] {
-        let array = list_objects(state.store.pool(), &pid, kind).await?.0;
-        let key = match kind {
-            "node" => "nodes",
-            "link" => "links",
-            _ => "drawings",
-        };
-        project[key] = json!(array);
+    let project = fetch_project(state.store.pool(), &pid).await?;
+    let nodes = list_objects(state.store.pool(), &pid, "node").await?.0;
+    let links = list_objects(state.store.pool(), &pid, "link").await?.0;
+    let drawings = list_objects(state.store.pool(), &pid, "drawing").await?.0;
+    Ok(Json(project_api_to_gns3(project, nodes, links, drawings)))
+}
+
+fn project_api_to_gns3(
+    mut project: Value,
+    nodes: Vec<Value>,
+    links: Vec<Value>,
+    drawings: Vec<Value>,
+) -> Value {
+    if let Some(object) = project.as_object_mut() {
+        for key in [
+            "project_id",
+            "nodes",
+            "links",
+            "drawings",
+            "path",
+            "status",
+            "filename",
+        ] {
+            object.remove(key);
+        }
     }
-    Ok(Json(project))
+    let version = project
+        .get("version")
+        .cloned()
+        .unwrap_or_else(|| json!("3.1.0"));
+    project["version"] = version;
+    project["topology"] = json!({
+        "computes": [],
+        "nodes": nodes.into_iter().map(api_node_to_gns3).collect::<Vec<_>>(),
+        "links": links.into_iter().map(|mut link| {
+            strip_link_runtime_fields(&mut link);
+            if let Some(object) = link.as_object_mut() {
+                object.remove("project_id");
+            }
+            link
+        }).collect::<Vec<_>>(),
+        "drawings": drawings.into_iter().map(|mut drawing| {
+            if let Some(object) = drawing.as_object_mut() {
+                object.remove("project_id");
+            }
+            drawing
+        }).collect::<Vec<_>>()
+    });
+    strip_project_runtime_fields(&mut project);
+    project
+}
+
+fn api_node_to_gns3(mut node: Value) -> Value {
+    strip_node_runtime_fields(&mut node);
+    node["status"] = json!("stopped");
+    node["compute_id"] = json!("local");
+    let mut properties = node
+        .get("properties")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(object) = node.as_object_mut() {
+        object.remove("properties");
+        object.remove("project_id");
+        object.remove("node_directory");
+        object.remove("runtime_node_directory");
+        let common = [
+            "node_id",
+            "node_type",
+            "name",
+            "compute_id",
+            "x",
+            "y",
+            "z",
+            "status",
+            "console",
+            "console_type",
+            "console_auto_start",
+            "console_resolution",
+            "console_http_port",
+            "console_http_path",
+            "aux",
+            "aux_type",
+            "locked",
+            "template_id",
+            "usage",
+        ];
+        object.retain(|key, value| {
+            if common.contains(&key.as_str()) {
+                true
+            } else {
+                properties.insert(key.clone(), value.clone());
+                false
+            }
+        });
+        object.insert("properties".into(), Value::Object(properties));
+    }
+    node
+}
+
+fn normalize_imported_project(mut project: Value) -> Value {
+    if let Some(topology) = project.get("topology").cloned() {
+        project["nodes"] = topology.get("nodes").cloned().unwrap_or_else(|| json!([]));
+        project["links"] = topology.get("links").cloned().unwrap_or_else(|| json!([]));
+        project["drawings"] = topology
+            .get("drawings")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        project
+            .as_object_mut()
+            .map(|object| object.remove("topology"));
+    }
+    if let Some(nodes) = project.get_mut("nodes").and_then(Value::as_array_mut) {
+        for node in nodes {
+            node["status"] = json!("stopped");
+            let properties = node.get("properties").and_then(Value::as_object).cloned();
+            if let Some(properties) = properties
+                && let Some(node) = node.as_object_mut()
+            {
+                for (key, value) in properties {
+                    node.entry(key).or_insert(value);
+                }
+                node.insert("properties".into(), json!({}));
+            }
+        }
+    }
+    project
+}
+
+fn package_project_images(project: &mut Value) -> Result<Vec<(String, Vec<u8>)>, ApiError> {
+    let Some(nodes) = project
+        .get_mut("topology")
+        .and_then(|topology| topology.get_mut("nodes"))
+        .and_then(Value::as_array_mut)
+    else {
+        return Ok(Vec::new());
+    };
+    let mut files = Vec::new();
+    let mut seen = HashMap::<(String, PathBuf), String>::new();
+    let mut archive_names = HashSet::<(String, String)>::new();
+    let mut expanded_size = 0_u64;
+    for node in nodes {
+        let node_type = node
+            .get("node_type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let Some(properties) = node.get_mut("properties").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        let (image_type, archive_directory, image_fields, image_root) = match node_type.as_str() {
+            "qemu" => (
+                "qemu",
+                "QEMU",
+                &[
+                    "hda_disk_image",
+                    "hdb_disk_image",
+                    "hdc_disk_image",
+                    "hdd_disk_image",
+                    "cdrom_image",
+                ][..],
+                crate::image_paths::qemu_images(),
+            ),
+            "dynamips" => (
+                "dynamips",
+                "IOS",
+                &["image"][..],
+                crate::image_paths::dynamips_images(),
+            ),
+            _ => continue,
+        };
+        let root = image_root.canonicalize().map_err(|error| {
+            ApiError::not_found(format!(
+                "Cannot include {image_type} images because image directory '{}' is unavailable: {error}",
+                image_root.display()
+            ))
+        })?;
+        for field in image_fields {
+            let Some(reference) = properties.get(*field).and_then(Value::as_str) else {
+                continue;
+            };
+            if reference.trim().is_empty() {
+                continue;
+            }
+            let candidate = if Path::new(reference).is_absolute() {
+                PathBuf::from(reference)
+            } else {
+                root.join(reference)
+            };
+            let source = candidate.canonicalize().map_err(|error| {
+                ApiError::not_found(format!(
+                    "Cannot include {image_type} image '{reference}': {error}"
+                ))
+            })?;
+            if !source.starts_with(&root) || !source.is_file() {
+                return Err(ApiError::bad_request(format!(
+                    "Cannot include image '{reference}' outside the configured {image_type} image directory"
+                )));
+            }
+            let file_name = source
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| ApiError::bad_request("Image file name is not valid UTF-8"))?
+                .to_owned();
+            let key = (image_type.to_owned(), source.clone());
+            let archive_name = if let Some(existing) = seen.get(&key) {
+                existing.clone()
+            } else {
+                let archive_name =
+                    unique_project_image_name(&file_name, &image_type, &mut archive_names);
+                let contents = std::fs::read(&source).map_err(|error| {
+                    ApiError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Could not read image '{}': {error}", source.display()),
+                    )
+                })?;
+                expanded_size = expanded_size.saturating_add(contents.len() as u64);
+                if expanded_size > MAX_PROJECT_ARCHIVE_FILES_BYTES {
+                    return Err(ApiError::new(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "Project images exceed the 128 MiB export size limit",
+                    ));
+                }
+                files.push((
+                    format!("images/{archive_directory}/{archive_name}"),
+                    contents,
+                ));
+                seen.insert(key, archive_name.clone());
+                archive_name
+            };
+            properties.insert((*field).to_owned(), json!(archive_name));
+        }
+    }
+    Ok(files)
+}
+
+fn unique_project_image_name(
+    file_name: &str,
+    image_type: &str,
+    used: &mut HashSet<(String, String)>,
+) -> String {
+    let key = (image_type.to_owned(), file_name.to_owned());
+    if used.insert(key) {
+        return file_name.to_owned();
+    }
+    let path = Path::new(file_name);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("image");
+    let extension = path.extension().and_then(|value| value.to_str());
+    for index in 2..=1000 {
+        let candidate = match extension {
+            Some(extension) => format!("{stem}-{index}.{extension}"),
+            None => format!("{stem}-{index}"),
+        };
+        if used.insert((image_type.to_owned(), candidate.clone())) {
+            return candidate;
+        }
+    }
+    // A topology cannot practically reach this many same-name collisions, but
+    // the suffix remains deterministic if it does.
+    format!("{}-{}", stem, Uuid::new_v4())
 }
 
 async fn get_project_file(
@@ -629,13 +881,27 @@ async fn write_project_file(
 async fn export_project(
     State(state): State<AppState>,
     AxumPath(project_id): AxumPath<Uuid>,
+    Query(query): Query<ProjectExportQuery>,
 ) -> Result<Response, ApiError> {
     let pid = project_id.to_string();
     let mut project = project_gns3file(State(state.clone()), AxumPath(project_id))
         .await?
         .0;
     strip_project_runtime_fields(&mut project);
-    if project["status"].as_str()==Some("opened") && sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM topology_objects WHERE project_id=? AND kind='node' AND json_extract(object_json,'$.status')='started'").bind(&pid).fetch_one(state.store.pool()).await? > 0 { return Err(ApiError::conflict("Project must be stopped in order to export it")); }
+    if sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM topology_objects
+         WHERE project_id = ? AND kind = 'node'
+           AND json_extract(object_json, '$.status') IN ('started', 'suspended')",
+    )
+    .bind(&pid)
+    .fetch_one(state.store.pool())
+    .await?
+        > 0
+    {
+        return Err(ApiError::conflict(
+            "Project must be stopped in order to export it",
+        ));
+    }
     let project_file_bytes: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(length(contents)), 0) FROM project_files WHERE project_id=?",
     )
@@ -662,6 +928,20 @@ async fn export_project(
             row.get::<Vec<u8>, _>("contents"),
         ));
     }
+    if query.include_images {
+        let image_files = package_project_images(&mut project)?;
+        files.extend(image_files);
+    }
+    let archive_files_size = files
+        .iter()
+        .map(|(_, contents)| contents.len() as u64)
+        .sum::<u64>();
+    if archive_files_size > MAX_PROJECT_ARCHIVE_FILES_BYTES {
+        return Err(ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "Project files and images exceed the 128 MiB export size limit",
+        ));
+    }
     let topology = serde_json::to_vec(&project).map_err(internal_json_error)?;
     if topology.len() as u64 > MAX_PROJECT_FILE_BYTES {
         return Err(ApiError::new(
@@ -682,6 +962,12 @@ async fn export_project(
     Ok(response)
 }
 
+#[derive(Default, serde::Deserialize)]
+struct ProjectExportQuery {
+    #[serde(default)]
+    include_images: bool,
+}
+
 async fn import_project(
     State(state): State<AppState>,
     AxumPath(project_id): AxumPath<Uuid>,
@@ -692,8 +978,9 @@ async fn import_project(
         .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     let ImportedProjectArchive {
-        project: project_data,
+        project: mut project_data,
         project_files,
+        images,
     } = read_project_archive(&bytes)?;
     let name = query
         .get("name")
@@ -706,7 +993,11 @@ async fn import_project(
     project["path"] = Value::Null;
     project["status"] = json!("opened");
     project["locked"] = json!(false);
+    let image_map = install_imported_project_images(&images)?;
+    remap_imported_project_images(&mut project, &image_map);
+    regenerate_imported_project_ids(&mut project, &project_id.to_string());
     strip_project_runtime_fields(&mut project);
+    project_data = project.clone();
     save_imported_project(state, project_id, &project_data, &project, &project_files).await?;
     Ok((StatusCode::CREATED, Json(project)).into_response())
 }
@@ -758,15 +1049,21 @@ async fn load_project(
         ));
     }
     let ImportedProjectArchive {
-        project,
+        project: mut project,
         project_files,
+        images,
     } = read_project_archive(&data)?;
     let project_id = Uuid::new_v4();
     let mut saved = project.clone();
     saved["project_id"] = json!(project_id);
     saved["path"] = Value::Null;
     saved["status"] = json!("opened");
+    saved["locked"] = json!(false);
+    let image_map = install_imported_project_images(&images)?;
+    remap_imported_project_images(&mut saved, &image_map);
+    regenerate_imported_project_ids(&mut saved, &project_id.to_string());
     strip_project_runtime_fields(&mut saved);
+    project = saved.clone();
     save_imported_project(state, project_id, &project, &saved, &project_files).await?;
     Ok((StatusCode::CREATED, Json(saved)).into_response())
 }
@@ -795,47 +1092,125 @@ async fn save_imported_project(
         .bind(serde_json::to_string(&clean_project).map_err(internal_json_error)?)
         .execute(&mut *tx)
         .await?;
-    for (key, kind, id_field) in [
-        ("nodes", "node", "node_id"),
-        ("links", "link", "link_id"),
-        ("drawings", "drawing", "drawing_id"),
-    ] {
-        if let Some(items) = source.get(key).and_then(Value::as_array) {
-            for item in items {
-                let mut value = item.clone();
-                let id = value[id_field]
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| Uuid::new_v4().to_string());
-                value[id_field] = json!(id);
-                value["project_id"] = json!(pid);
-                if kind == "node" {
-                    strip_node_runtime_fields(&mut value);
+    tx.commit().await?;
+
+    // Use the same node constructors as the HTTP create route. They allocate
+    // QEMU overlays, Docker containers, and Dynamips runtime manifests that a
+    // raw database insert would leave missing when a student opens the lab.
+    let mut created_node_ids = Vec::new();
+    let import_result: Result<(), ApiError> = async {
+        if let Some(nodes) = source.get("nodes").and_then(Value::as_array) {
+            for item in nodes {
+                let node_type = item
+                    .get("node_type")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| ApiError::bad_request("Imported node has no node_type"))?;
+                let node_id = item
+                    .get("node_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| ApiError::bad_request("Imported node has no node_id"))?
+                    .to_owned();
+                if matches!(node_type, "docker" | "qemu" | "vpcs" | "dynamips")
+                    || crate::builtin::BuiltinRuntime::is_type(node_type)
+                {
+                    super::create_node(
+                        State(state.clone()),
+                        AxumPath(project_id),
+                        Json(item.clone()),
+                    )
+                    .await?;
+                } else {
+                    // Retain unfamiliar GNS3 appliance records so the rest of
+                    // a project remains portable even when this build has no
+                    // runtime adapter for that node type.
+                    let mut value = item.clone();
+                    value["project_id"] = json!(pid);
                     value["status"] = json!("stopped");
-                } else if kind == "link" {
-                    strip_link_runtime_fields(&mut value);
+                    strip_node_runtime_fields(&mut value);
+                    let node_name = value.get("name").and_then(Value::as_str).map(str::to_owned);
+                    sqlx::query("INSERT INTO topology_objects(project_id,kind,object_id,name,object_json) VALUES(?,?,?,?,?)")
+                        .bind(&pid)
+                        .bind("node")
+                        .bind(&node_id)
+                        .bind(node_name)
+                        .bind(serde_json::to_string(&value).map_err(internal_json_error)?)
+                        .execute(state.store.pool())
+                        .await?;
                 }
-                let name = value.get("name").and_then(Value::as_str).map(str::to_owned);
-                sqlx::query("INSERT INTO topology_objects(project_id,kind,object_id,name,object_json) VALUES(?,?,?,?,?)").bind(&pid).bind(kind).bind(&id).bind(name).bind(serde_json::to_string(&value).map_err(internal_json_error)?).execute(&mut *tx).await?;
-                if kind == "link" {
-                    store_link_endpoints_in_tx(&mut tx, &pid, &id, &value).await?;
+                created_node_ids.push(node_id);
+            }
+        }
+
+        let mut tx = state.store.pool().begin().await?;
+        for (key, kind, id_field) in [("links", "link", "link_id"), ("drawings", "drawing", "drawing_id")] {
+            if let Some(items) = source.get(key).and_then(Value::as_array) {
+                for item in items {
+                    let mut value = item.clone();
+                    let id = value[id_field]
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| Uuid::new_v4().to_string());
+                    value[id_field] = json!(id);
+                    value["project_id"] = json!(pid);
+                    if kind == "link" {
+                        strip_link_runtime_fields(&mut value);
+                    }
+                    let object_name = value.get("name").and_then(Value::as_str).map(str::to_owned);
+                    sqlx::query("INSERT INTO topology_objects(project_id,kind,object_id,name,object_json) VALUES(?,?,?,?,?)")
+                        .bind(&pid)
+                        .bind(kind)
+                        .bind(&id)
+                        .bind(object_name)
+                        .bind(serde_json::to_string(&value).map_err(internal_json_error)?)
+                        .execute(&mut *tx)
+                        .await?;
+                    if kind == "link" {
+                        store_link_endpoints_in_tx(&mut tx, &pid, &id, &value).await?;
+                    }
                 }
             }
         }
+        for (file_path, contents) in project_files {
+            let file_path = clean_relative_path(file_path)?;
+            sqlx::query("INSERT INTO project_files(project_id,file_path,contents) VALUES(?,?,?)")
+                .bind(&pid)
+                .bind(file_path)
+                .bind(contents)
+                .execute(&mut *tx)
+                .await?;
+        }
+        let event = Store::append_event(&mut tx, &pid, "project.created", &clean_project).await?;
+        tx.commit().await?;
+        state.store.publish(event);
+        Ok(())
     }
-    for (file_path, contents) in project_files {
-        let file_path = clean_relative_path(file_path)?;
-        sqlx::query("INSERT INTO project_files(project_id,file_path,contents) VALUES(?,?,?)")
-            .bind(&pid)
-            .bind(file_path)
-            .bind(contents)
-            .execute(&mut *tx)
-            .await?;
+    .await;
+    if let Err(error) = import_result {
+        rollback_imported_project(&state, &pid, &created_node_ids).await;
+        return Err(error);
     }
-    let event = Store::append_event(&mut tx, &pid, "project.created", &clean_project).await?;
-    tx.commit().await?;
-    state.store.publish(event);
     Ok(())
+}
+
+async fn rollback_imported_project(state: &AppState, project_id: &str, node_ids: &[String]) {
+    for node_id in node_ids {
+        if let Err(error) = super::delete_node_and_connected_links(
+            state.clone(),
+            project_id.to_owned(),
+            node_id.clone(),
+        )
+        .await
+        {
+            tracing::error!(%project_id, %node_id, error = %error.message, "could not clean up a partially imported node");
+        }
+    }
+    if let Err(error) = sqlx::query("DELETE FROM projects WHERE project_id = ?")
+        .bind(project_id)
+        .execute(state.store.pool())
+        .await
+    {
+        tracing::error!(%project_id, %error, "could not remove a partially imported project");
+    }
 }
 
 async fn duplicate_project(
@@ -1887,6 +2262,14 @@ fn image_dimensions(data: &[u8]) -> Option<(u32, u32)> {
 struct ImportedProjectArchive {
     project: Value,
     project_files: Vec<(String, Vec<u8>)>,
+    images: Vec<ImportedProjectImage>,
+}
+
+#[derive(Debug)]
+struct ImportedProjectImage {
+    image_type: String,
+    file_name: String,
+    contents: Vec<u8>,
 }
 
 fn write_project_archive(
@@ -1894,7 +2277,7 @@ fn write_project_archive(
     project_files: Vec<(String, Vec<u8>)>,
 ) -> Result<Vec<u8>, ApiError> {
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
-    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
     writer
         .start_file("project.gns3", options)
         .map_err(|error| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
@@ -1920,8 +2303,9 @@ fn read_project_archive(bytes: &[u8]) -> Result<ImportedProjectArchive, ApiError
     if !bytes.starts_with(b"PK") {
         return serde_json::from_slice(bytes)
             .map(|project| ImportedProjectArchive {
-                project,
+                project: normalize_imported_project(project),
                 project_files: Vec::new(),
+                images: Vec::new(),
             })
             .map_err(|error| {
                 archive_bad_request(format!("Invalid .gns3project archive or JSON: {error}"))
@@ -1932,6 +2316,7 @@ fn read_project_archive(bytes: &[u8]) -> Result<ImportedProjectArchive, ApiError
         .map_err(|error| archive_bad_request(format!("Invalid .gns3project ZIP: {error}")))?;
     let mut topology = None;
     let mut project_files = Vec::new();
+    let mut images = Vec::new();
     let mut expanded_size = 0_u64;
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(|error| {
@@ -1942,8 +2327,9 @@ fn read_project_archive(bytes: &[u8]) -> Result<ImportedProjectArchive, ApiError
         }
         let name = entry.name().to_owned();
         let project_file_path = archive_project_file_path(&name)?;
+        let image_path = archive_project_image_path(&name)?;
         let is_topology = name == "project.gns3" || (topology.is_none() && name.ends_with(".gns3"));
-        if !is_topology && project_file_path.is_none() {
+        if !is_topology && project_file_path.is_none() && image_path.is_none() {
             continue;
         }
         let advertised_size = entry.size();
@@ -1964,6 +2350,12 @@ fn read_project_archive(bytes: &[u8]) -> Result<ImportedProjectArchive, ApiError
             topology = Some(contents);
         } else if let Some(path) = project_file_path {
             project_files.push((path, contents));
+        } else if let Some((image_type, file_name)) = image_path {
+            images.push(ImportedProjectImage {
+                image_type,
+                file_name,
+                contents,
+            });
         }
     }
     let topology = topology
@@ -1972,8 +2364,9 @@ fn read_project_archive(bytes: &[u8]) -> Result<ImportedProjectArchive, ApiError
         archive_bad_request(format!("Project archive topology is invalid: {error}"))
     })?;
     Ok(ImportedProjectArchive {
-        project,
+        project: normalize_imported_project(project),
         project_files,
+        images,
     })
 }
 
@@ -2016,6 +2409,210 @@ fn archive_project_file_path(name: &str) -> Result<Option<String>, ApiError> {
     clean_relative_path(path)
         .map(Some)
         .map_err(|error| archive_bad_request(error.message))
+}
+
+fn archive_project_image_path(name: &str) -> Result<Option<(String, String)>, ApiError> {
+    let Some(path) = name.strip_prefix("images/") else {
+        return Ok(None);
+    };
+    let Some((directory, file_name)) = path.split_once('/') else {
+        return Ok(None);
+    };
+    let image_type = match directory.to_ascii_lowercase().as_str() {
+        "qemu" => "qemu",
+        "ios" | "dynamips" => "dynamips",
+        _ => return Ok(None),
+    };
+    if file_name.contains('/') || file_name.is_empty() {
+        return Err(archive_bad_request(
+            "Project archive image entries must use a simple file name",
+        ));
+    }
+    let safe_name =
+        clean_relative_path(file_name).map_err(|error| archive_bad_request(error.message))?;
+    if safe_name.contains('/') {
+        return Err(archive_bad_request(
+            "Project archive image entries must use a simple file name",
+        ));
+    }
+    Ok(Some((image_type.to_owned(), safe_name)))
+}
+
+fn install_imported_project_images(
+    images: &[ImportedProjectImage],
+) -> Result<HashMap<(String, String), String>, ApiError> {
+    let mut installed = HashMap::new();
+    for image in images {
+        let directory = match image.image_type.as_str() {
+            "qemu" => crate::image_paths::qemu_images(),
+            "dynamips" => crate::image_paths::dynamips_images(),
+            _ => continue,
+        };
+        std::fs::create_dir_all(&directory).map_err(|error| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Could not create imported image directory: {error}"),
+            )
+        })?;
+        let destination_name =
+            imported_image_destination_name(&directory, &image.file_name, &image.contents)?;
+        let destination = directory.join(&destination_name);
+        if !destination.exists() {
+            let temporary = directory.join(format!(".import-{}.tmp", Uuid::new_v4()));
+            let result = (|| -> std::io::Result<()> {
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&temporary)?;
+                file.write_all(&image.contents)?;
+                file.sync_all()?;
+                std::fs::rename(&temporary, &destination)
+            })();
+            if let Err(error) = result {
+                let _ = std::fs::remove_file(&temporary);
+                if !destination.is_file() {
+                    return Err(ApiError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!(
+                            "Could not install imported image '{}': {error}",
+                            image.file_name
+                        ),
+                    ));
+                }
+            }
+        }
+        installed.insert(
+            (image.image_type.clone(), image.file_name.clone()),
+            destination_name,
+        );
+    }
+    Ok(installed)
+}
+
+fn imported_image_destination_name(
+    directory: &Path,
+    file_name: &str,
+    contents: &[u8],
+) -> Result<String, ApiError> {
+    let safe_name = clean_relative_path(file_name)?;
+    if safe_name.contains('/') {
+        return Err(archive_bad_request(
+            "Imported image file names must be simple file names",
+        ));
+    }
+    let requested = directory.join(&safe_name);
+    if !requested.exists() || std::fs::read(&requested).ok().as_deref() == Some(contents) {
+        return Ok(safe_name);
+    }
+    let path = Path::new(&safe_name);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("image");
+    let extension = path.extension().and_then(|value| value.to_str());
+    let digest = format!("{:x}", md5::Md5::digest(contents));
+    for index in 0..1000 {
+        let suffix = if index == 0 {
+            format!("-import-{}", &digest[..8])
+        } else {
+            format!("-import-{}-{index}", &digest[..8])
+        };
+        let candidate = match extension {
+            Some(extension) => format!("{stem}{suffix}.{extension}"),
+            None => format!("{stem}{suffix}"),
+        };
+        let path = directory.join(&candidate);
+        if !path.exists() || std::fs::read(&path).ok().as_deref() == Some(contents) {
+            return Ok(candidate);
+        }
+    }
+    Err(ApiError::conflict(
+        "Could not allocate a unique name for an imported image",
+    ))
+}
+
+fn remap_imported_project_images(
+    project: &mut Value,
+    image_map: &HashMap<(String, String), String>,
+) {
+    let Some(nodes) = project.get_mut("nodes").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for node in nodes {
+        let image_type = match node.get("node_type").and_then(Value::as_str) {
+            Some("qemu") => "qemu",
+            Some("dynamips") => "dynamips",
+            _ => continue,
+        };
+        let fields: &[&str] = if image_type == "qemu" {
+            &[
+                "hda_disk_image",
+                "hdb_disk_image",
+                "hdc_disk_image",
+                "hdd_disk_image",
+                "cdrom_image",
+            ]
+        } else {
+            &["image"]
+        };
+        for field in fields {
+            let Some(reference) = node.get(*field).and_then(Value::as_str) else {
+                continue;
+            };
+            let file_name = Path::new(reference)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(reference)
+                .to_owned();
+            if let Some(imported_name) = image_map.get(&(image_type.to_owned(), file_name)) {
+                node[*field] = json!(imported_name);
+            }
+        }
+    }
+}
+
+fn regenerate_imported_project_ids(project: &mut Value, project_id: &str) {
+    project["project_id"] = json!(project_id);
+    let mut node_ids = HashMap::new();
+    if let Some(nodes) = project.get_mut("nodes").and_then(Value::as_array_mut) {
+        for node in nodes {
+            let old_id = node
+                .get("node_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let new_id = Uuid::new_v4().to_string();
+            if let Some(old_id) = old_id {
+                node_ids.insert(old_id, new_id.clone());
+            }
+            node["node_id"] = json!(new_id);
+            node["project_id"] = json!(project_id);
+            node["compute_id"] = json!("local");
+            node["status"] = json!("stopped");
+            strip_node_runtime_fields(node);
+        }
+    }
+    if let Some(links) = project.get_mut("links").and_then(Value::as_array_mut) {
+        for link in links {
+            link["link_id"] = json!(Uuid::new_v4());
+            link["project_id"] = json!(project_id);
+            if let Some(endpoints) = link.get_mut("nodes").and_then(Value::as_array_mut) {
+                for endpoint in endpoints {
+                    if let Some(old_id) = endpoint.get("node_id").and_then(Value::as_str)
+                        && let Some(new_id) = node_ids.get(old_id)
+                    {
+                        endpoint["node_id"] = json!(new_id);
+                    }
+                }
+            }
+            strip_link_runtime_fields(link);
+        }
+    }
+    if let Some(drawings) = project.get_mut("drawings").and_then(Value::as_array_mut) {
+        for drawing in drawings {
+            drawing["drawing_id"] = json!(Uuid::new_v4());
+            drawing["project_id"] = json!(project_id);
+        }
+    }
 }
 
 fn archive_bad_request(message: impl Into<String>) -> ApiError {
@@ -2096,7 +2693,14 @@ fn strip_link_runtime_fields(link: &mut Value) {
 }
 
 fn strip_project_runtime_fields(project: &mut Value) {
-    if let Some(nodes) = project.get_mut("nodes").and_then(Value::as_array_mut) {
+    let nodes = if project.get("topology").is_some() {
+        project
+            .get_mut("topology")
+            .and_then(|topology| topology.get_mut("nodes"))
+    } else {
+        project.get_mut("nodes")
+    };
+    if let Some(nodes) = nodes.and_then(Value::as_array_mut) {
         for node in nodes {
             strip_node_runtime_fields(node);
             if node.get("status").is_some() {
@@ -2104,7 +2708,14 @@ fn strip_project_runtime_fields(project: &mut Value) {
             }
         }
     }
-    if let Some(links) = project.get_mut("links").and_then(Value::as_array_mut) {
+    let links = if project.get("topology").is_some() {
+        project
+            .get_mut("topology")
+            .and_then(|topology| topology.get_mut("links"))
+    } else {
+        project.get_mut("links")
+    };
+    if let Some(links) = links.and_then(Value::as_array_mut) {
         for link in links {
             strip_link_runtime_fields(link);
         }
@@ -2116,11 +2727,14 @@ mod archive_tests {
     use std::io::{Cursor, Write};
 
     use super::{
-        archive_project_file_path, image_dimensions, is_qemu_image_upload, read_project_archive,
-        strip_node_runtime_fields, write_image_upload, write_project_archive,
+        archive_project_file_path, image_dimensions, is_qemu_image_upload,
+        normalize_imported_project, project_api_to_gns3, read_project_archive,
+        strip_node_runtime_fields, unique_project_image_name, write_image_upload,
+        write_project_archive,
     };
     use axum::{body::Body, http::StatusCode};
     use serde_json::json;
+    use std::collections::HashSet;
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
     fn compressed_project_archive(method: CompressionMethod) -> Vec<u8> {
@@ -2174,6 +2788,77 @@ mod archive_tests {
         );
         assert!(archive_project_file_path("project-files/../../outside").is_err());
         assert!(archive_project_file_path("project-files/../outside").is_err());
+    }
+
+    #[test]
+    fn gns3_topology_and_properties_round_trip() {
+        let document = project_api_to_gns3(
+            json!({"project_id":"old-project","name":"Router lab","status":"opened"}),
+            vec![json!({
+                "node_id":"node-1",
+                "project_id":"old-project",
+                "node_type":"qemu",
+                "name":"Router",
+                "status":"started",
+                "x":12,
+                "y":-4,
+                "hda_disk_image":"router.qcow2",
+                "properties":{"adapter_type":"virtio-net-pci"},
+                "runtime_overlay":"/old/overlay.qcow2"
+            })],
+            vec![json!({"link_id":"link-1","project_id":"old-project","nodes":[]})],
+            vec![json!({"drawing_id":"drawing-1","project_id":"old-project"})],
+        );
+        assert!(document.get("project_id").is_none());
+        assert_eq!(document["topology"]["nodes"][0]["status"], "stopped");
+        assert_eq!(
+            document["topology"]["nodes"][0]["properties"]["hda_disk_image"],
+            "router.qcow2"
+        );
+        assert_eq!(
+            document["topology"]["nodes"][0]["properties"]["adapter_type"],
+            "virtio-net-pci"
+        );
+        assert!(document["topology"]["nodes"][0]["properties"]["runtime_overlay"].is_null());
+        assert!(document["topology"]["links"][0].get("project_id").is_none());
+
+        let normalized = normalize_imported_project(document);
+        assert_eq!(normalized["nodes"][0]["hda_disk_image"], "router.qcow2");
+        assert_eq!(normalized["nodes"][0]["adapter_type"], "virtio-net-pci");
+        assert_eq!(normalized["nodes"][0]["properties"], json!({}));
+        assert!(normalized.get("topology").is_none());
+    }
+
+    #[test]
+    fn project_archive_reads_upstream_image_directories() {
+        let archive = write_project_archive(
+            br#"{"name":"Image lab","topology":{"nodes":[],"links":[],"drawings":[]}}"#.to_vec(),
+            vec![("images/QEMU/router.qcow2".into(), b"qemu bytes".to_vec())],
+        )
+        .unwrap();
+        let imported = read_project_archive(&archive).unwrap();
+        assert_eq!(imported.project["name"], "Image lab");
+        assert_eq!(imported.images.len(), 1);
+        assert_eq!(imported.images[0].image_type, "qemu");
+        assert_eq!(imported.images[0].file_name, "router.qcow2");
+        assert_eq!(imported.images[0].contents, b"qemu bytes");
+    }
+
+    #[test]
+    fn image_exports_choose_unique_archive_names_for_colliding_basenames() {
+        let mut names = HashSet::<(String, String)>::new();
+        assert_eq!(
+            unique_project_image_name("router.qcow2", "qemu", &mut names),
+            "router.qcow2"
+        );
+        assert_eq!(
+            unique_project_image_name("router.qcow2", "qemu", &mut names),
+            "router-2.qcow2"
+        );
+        assert_eq!(
+            unique_project_image_name("router.qcow2", "dynamips", &mut names),
+            "router.qcow2"
+        );
     }
 
     #[test]
@@ -2742,7 +3427,9 @@ mod route_tests {
             "name":"Imported unsafe topology",
             "nodes":[{
                 "node_id":import_node_id,
-                "node_type":"qemu",
+                // Keep this fixture independent of a QEMU disk image: this
+                // test exercises imported runtime fields, not provisioning.
+                "node_type":"unavailable_qemu_fixture",
                 "name":"Imported router",
                 "status":"started",
                 "hda_disk_image":"/images/router.qcow2",
@@ -2777,7 +3464,10 @@ mod route_tests {
             .await,
         )
         .await;
-        assert_eq!(loaded["nodes"][0]["status"], "stopped");
+        assert_eq!(
+            loaded["nodes"][0]["status"], "stopped",
+            "loaded project: {loaded}"
+        );
         assert_node_has_no_runtime_state(&loaded["nodes"][0]);
         let loaded_project_id = loaded["project_id"].as_str().unwrap();
         let loaded_node: Value = sqlx::query_scalar::<_, String>(

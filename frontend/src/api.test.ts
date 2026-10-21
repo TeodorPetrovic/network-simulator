@@ -325,6 +325,8 @@ describe("GNS3 controller client", () => {
     fetchMock.mockResolvedValueOnce({ ok: true, status: 200, text: async () => "Project notes" } as Response);
     await api.projectReadme("p1");
     expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/files/readme.md");
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({ message: "Project file does not exist" }) } as Response);
+    await expect(api.projectReadme("p1")).resolves.toEqual({ content: "" });
     fetchMock.mockResolvedValueOnce({ ok: true, status: 204 } as Response);
     await api.updateProjectReadme("p1", "Updated notes");
     expect(fetchMock).toHaveBeenLastCalledWith("/v3/projects/p1/files/readme.md", expect.objectContaining({

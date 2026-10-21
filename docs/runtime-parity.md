@@ -69,8 +69,8 @@ References read: `/tmp/gns3-server-3.1/gns3server/schemas/compute/{qemu_nodes,do
 | `environment` | present | Validated `KEY=VALUE` values become Docker `--env` options. |
 | `extra_hosts` | present | Validated host mappings become `--add-host` options. |
 | `extra_volumes` | present with narrower forms | Per-node persistent host paths are mounted into the container. Upstream’s broader volume configuration forms are not represented. |
-| `extra_configs` | missing | Read-only injected configuration files are not materialized or bind-mounted. |
-| `startup_config_content` | missing | Not written into a container startup config or node directory. |
+| `extra_configs` | present with port limits | The frontend/API contract is an array of `{ "target": "/absolute/file/path", "content": "file text" }`; each target is a file path inside the container, and its content is materialized under per-node runtime state then bind-mounted read-only. Up to 64 files and 4 MiB combined content are accepted. |
+| `startup_config_content` | present with port limits | Send a string on a Docker node/template. It is written to `/startup-config` and mounted read-only; do not also supply `/startup-config` in `extra_configs`. Empty string is the default. The frontend should preserve this as content, not a host path. |
 | `memory`, `cpus` | present | Nonzero memory and CPU limits are passed to Docker create. |
 
 ### Docker template-only fields and console behavior

@@ -1669,10 +1669,7 @@ mod tests {
             runtime::{DockerRuntime, NodeAction},
             ubridge::UbridgeRuntime,
         };
-        use tokio::{
-            process::Command,
-            time::{sleep, timeout},
-        };
+        use tokio::{process::Command, time::timeout};
 
         let ubridge_binary = env::var_os("NETWORK_SIMULATOR_TEST_UBRIDGE")
             .expect("NETWORK_SIMULATOR_TEST_UBRIDGE names a capable upstream uBridge");
@@ -1818,10 +1815,12 @@ mod tests {
 
             let nat_nio = BuiltinRuntime::adapter_nio(&nat, &nat_endpoint)
                 .map_err(|error| error.message().to_owned())?;
+            let attach_started = Instant::now();
             engine
                 .attach_endpoint(&nat_endpoint, nat_nio, &json!({}), false, None)
                 .await
                 .map_err(|error| error.message().to_owned())?;
+            eprintln!("NAT TAP attachment reached forwarding after {:?}", attach_started.elapsed());
             let bridge_ports = Command::new("bridge")
                 .args(["link", "show", "master", "virbr0"])
                 .output()
@@ -1833,29 +1832,13 @@ mod tests {
                     String::from_utf8_lossy(&bridge_ports.stdout)
                 ));
             }
-            // The active libvirt bridge has STP enabled with a 2 s forward
-            // delay. A newly attached port passes through listening and
-            // learning first; the guest's default ARP retries can all expire
-            // before that transition completes. Wait for the observed bridge
-            // state (measured at 4.6 s from TAP attach here), with one bounded
-            // STP convergence window, before sending test traffic.
+            // Attachment must return only after the libvirt bridge can
+            // forward the guest's first ARP packet.
             let bridge_state_path = format!("/sys/class/net/{nat_tap}/brport/state");
-            let forward_deadline = Instant::now() + Duration::from_secs(8);
-            loop {
-                let bridge_state = std::fs::read_to_string(&bridge_state_path)
-                    .map_err(|error| {
-                        format!("Could not read bridge state for {nat_tap}: {error}")
-                    })?;
-                if bridge_state.trim() == "3" {
-                    break;
-                }
-                if Instant::now() >= forward_deadline {
-                    return Err(format!(
-                        "libvirt bridge port {nat_tap} did not reach forwarding state within 8 seconds (state {})",
-                        bridge_state.trim()
-                    ));
-                }
-                sleep(Duration::from_millis(100)).await;
+            let bridge_state = std::fs::read_to_string(&bridge_state_path)
+                .map_err(|error| format!("Could not read bridge state for {nat_tap}: {error}"))?;
+            if bridge_state.trim() != "3" {
+                return Err(format!("NAT TAP {nat_tap} was reported ready in bridge state {}", bridge_state.trim()));
             }
             let docker_nio = docker
                 .adapter_nio(&docker_endpoint)

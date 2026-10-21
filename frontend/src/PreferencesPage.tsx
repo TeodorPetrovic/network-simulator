@@ -58,7 +58,20 @@ const fieldsByRuntime: Record<RuntimeKey, FieldSpec[]> = {
 
 const supported = new Set<RuntimeKey>(["docker", "qemu", "vpcs", "dynamips", "cloud", "nat", "ethernet_hub", "ethernet_switch"]);
 const toText = (value: unknown) => Array.isArray(value) ? value.join("\n") : value === undefined || value === null ? "" : typeof value === "object" ? JSON.stringify(value) : String(value);
-const initialValues = (template?: Partial<TemplateRecord>, runtime?: RuntimeKey) => Object.fromEntries((fieldsByRuntime[runtime ?? (template?.template_type as RuntimeKey) ?? "docker"] ?? []).map((spec) => [spec.key, toText(template?.[spec.key])])) as Record<string, string>;
+const templateDefaults: Partial<Record<RuntimeKey, Record<string, unknown>>> = {
+  docker: { adapters: 1, memory: 0, cpus: 0, console_type: "telnet" },
+  qemu: { adapters: 1, memory: 256, cpus: 1, boot_priority: "c", hda_disk_interface: "ide", adapter_type: "e1000" },
+  vpcs: { console_type: "telnet" },
+  dynamips: { platform: "c7200", chassis: "", slot0: "C7200-IO-FE", memory: 512, nvram: 512, mmap: true, sparsemem: true, auto_delete_disks: false, console_auto_start: false, startup_config: "", private_config: "", clock_divisor: 8, idlemax: 500, idlesleep: 30, exec_area: 64, disk0: 0, disk1: 0, mac_addr: "", system_id: "FTX0945W0MY", npe: "npe-400", midplane: "vxr", iomem: 5, ghost_ios: false, console_type: "telnet", aux_type: "none" },
+};
+const initialValues = (template?: Partial<TemplateRecord>, runtime?: RuntimeKey) => {
+  const kind = runtime ?? (template?.template_type as RuntimeKey) ?? "docker";
+  return Object.fromEntries((fieldsByRuntime[kind] ?? []).map((spec) => {
+    const stored = template?.[spec.key];
+    const fallback = templateDefaults[kind]?.[spec.key] ?? (spec.kind === "select" ? spec.options?.[0] : undefined);
+    return [spec.key, toText(stored === undefined || stored === null || (spec.kind === "select" && stored === "") ? fallback : stored)];
+  })) as Record<string, string>;
+};
 
 function SettingField({ spec, value, onChange, showPending = true }: { spec: FieldSpec; value: string; onChange: (value: string) => void; showPending?: boolean }) {
   const disabled = showPending && !spec.active;
@@ -88,6 +101,11 @@ export function TemplateEditor({ template, runtime, open, onOpenChange, onSave, 
       if (spec.key === "extra_volumes") value = String(value).split("\n").map((line) => line.trim()).filter(Boolean);
       payload[spec.key] = value;
     }
+    // The controller copies these template fields directly into a new node.
+    // Include valid values even when the field is not editable in this form.
+    if (runtime === "docker" && !Array.isArray(template?.custom_adapters)) payload.custom_adapters = [];
+    if (runtime === "vpcs" && !template?.console_type) payload.console_type = "telnet";
+    if (runtime === "dynamips") { Object.assign(payload, { mmap: template?.mmap ?? true, sparsemem: template?.sparsemem ?? true, auto_delete_disks: template?.auto_delete_disks ?? false, ghost_ios: template?.ghost_ios ?? false, console_auto_start: template?.console_auto_start ?? false, startup_config: template?.startup_config ?? "", private_config: template?.private_config ?? "", clock_divisor: template?.clock_divisor ?? 8, idlemax: template?.idlemax ?? 500, idlesleep: template?.idlesleep ?? 30, exec_area: template?.exec_area ?? 64, disk0: template?.disk0 ?? 0, disk1: template?.disk1 ?? 0, mac_addr: template?.mac_addr ?? "", system_id: template?.system_id ?? "FTX0945W0MY", npe: template?.npe ?? "npe-400", midplane: template?.midplane ?? "vxr", iomem: template?.iomem ?? 5, console_type: template?.console_type ?? "telnet", aux_type: template?.aux_type ?? "none" }); if (!String(payload.chassis ?? "").trim()) payload.chassis = null; if (!String(payload.slot0 ?? "").trim()) payload.slot0 = payload.platform === "c7200" ? "C7200-IO-FE" : "NM-1FE-TX"; }
     try { await onSave(payload); onOpenChange(false); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Template could not be saved"); }
     finally { setSaving(false); }

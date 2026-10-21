@@ -130,7 +130,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
     }));
   }, [deviceQuery, props.templates]);
   const canvasNodes = useMemo(() => spreadOverlappingNodes(topology.nodes), [topology.nodes]);
-  const selectedNode = props.selection?.kind === "node" ? topology.nodes.find((node) => node.node_id === props.selection?.id) ?? props.selectedNode : props.selectedNode;
+  const selectedNode = topology.nodes.find((node) => node.node_id === (props.selection?.kind === "node" ? props.selection.id : selectedNodeIds[0])) ?? props.selectedNode;
   const selectedLink = props.selection?.kind === "link" ? topology.links.find((link) => link.link_id === props.selection?.id) ?? props.selectedLink : props.selectedLink;
   const selectedLifecycleNodes = topology.nodes.filter((node) => selectedNodeIds.includes(node.node_id) && !node.locked);
 
@@ -938,6 +938,10 @@ function TopologyCanvas(props: CanvasProps) {
   };
 
   function startMove(event: PointerEvent<SVGGElement>, node: Node) {
+    if (event.button === 2) {
+      props.onNodeContext(node.node_id);
+      return;
+    }
     if (props.connecting || props.projectLocked || node.locked || event.button !== 0 || (event.target as Element).closest("[data-interface-port], [data-node-label]")) return;
     if (event.metaKey || event.ctrlKey || !svgRef.current) return;
     event.stopPropagation();
@@ -945,6 +949,7 @@ function TopologyCanvas(props: CanvasProps) {
     const origins = new Map(nodeIds.map((id) => { const item = nodeMap.get(id); return [id, { x: Number(item?.x ?? 0), y: Number(item?.y ?? 0) }] as const; }));
     dragRef.current = { nodeIds, pointerId: event.pointerId, start: scenePoint(event.clientX, event.clientY, svgRef.current.getBoundingClientRect()), origins };
     if (!props.selectedNodeIds.includes(node.node_id)) props.onMultiSelect(nodeIds);
+    if (nodeIds.length === 1 && (props.selection?.kind !== "node" || props.selection.id !== node.node_id)) props.onNodeClick(node.node_id);
     movedRef.current = false;
     event.currentTarget.setPointerCapture(event.pointerId);
   }
@@ -1141,7 +1146,7 @@ function TopologyCanvas(props: CanvasProps) {
         const point = scenePoint(event.clientX, event.clientY, svgRef.current!.getBoundingClientRect());
         props.onCanvasClick(point);
       }
-    }} onContextMenu={(event) => { if ((event.target as Element).tagName === "rect") props.onClearSelection(); }}>
+    }} onContextMenu={(event) => { if ((event.target as Element).tagName === "rect" && !(event.target as Element).closest(".sim-node, .sim-link, .sim-drawing")) props.onClearSelection(); }}>
       <defs><pattern id="sim-grid" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="currentColor" /></pattern></defs>
       <rect className={`sim-grid-fill ${props.gridVisible ? "" : "is-hidden"}`} x={view.x} y={view.y} width={view.width} height={view.height} fill="url(#sim-grid)" />
       {orderedDrawings.map(({ drawing, markup }) => {

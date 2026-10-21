@@ -57,6 +57,468 @@ async fn token(pool: &SqlitePool, username: &str, version: i64) -> String {
     encode_token(&new_claims(username, version, "access", ACCESS_TTL), &key).unwrap()
 }
 
+async fn json_route(
+    app: &Router,
+    method: &str,
+    path: &str,
+    token: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let response = response(
+        app,
+        Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap(),
+    )
+    .await;
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, body)
+}
+
+async fn admin_create(app: &Router, admin: &str, path: &str, body: Value) -> Value {
+    let (status, value) = json_route(app, "POST", path, admin, body).await;
+    assert_eq!(status, StatusCode::CREATED, "POST {path}: {value}");
+    value
+}
+
+async fn admin_no_content(app: &Router, admin: &str, method: &str, path: &str) {
+    let (status, value) = json_route(app, method, path, admin, Value::Null).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{method} {path}: {value}");
+}
+
+async fn student_login(app: &Router, username: &str, peer: [u8; 4]) -> String {
+    let login = response(
+        app,
+        from_peer(
+            Request::builder()
+                .method("POST")
+                .uri("/v3/access/users/login")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "username={username}&password=classroom-password"
+                )))
+                .unwrap(),
+            peer,
+        ),
+    )
+    .await;
+    assert_eq!(login.status(), StatusCode::OK, "{username} login");
+    let login: Value =
+        serde_json::from_slice(&to_bytes(login.into_body(), usize::MAX).await.unwrap()).unwrap();
+    login["access_token"].as_str().unwrap().to_owned()
+}
+
+struct ClassroomProject {
+    project_id: String,
+    node_id: String,
+    link_id: String,
+    snapshot_id: String,
+}
+
+/// Seeds a project the way an instructor would: through the API for the
+/// project, snapshot and file, plus stored topology rows for one node and
+/// link (node creation needs real runtimes, which this test does not use).
+async fn classroom_project(
+    app: &Router,
+    pool: &SqlitePool,
+    admin: &str,
+    name: &str,
+) -> ClassroomProject {
+    let project = admin_create(app, admin, "/v3/projects", json!({"name":name})).await;
+    let project_id = project["project_id"].as_str().unwrap().to_owned();
+    let node_id = Uuid::new_v4().to_string();
+    let peer_id = Uuid::new_v4().to_string();
+    for (id, node_name) in [(&node_id, "PC1"), (&peer_id, "PC2")] {
+        let node = json!({"node_id":id,"project_id":project_id,"node_type":"vpcs","name":node_name,"status":"stopped","ports":[]});
+        sqlx::query("INSERT INTO topology_objects (project_id, kind, object_id, name, object_json) VALUES (?, 'node', ?, ?, ?)")
+            .bind(&project_id).bind(id).bind(node_name).bind(node.to_string()).execute(pool).await.unwrap();
+    }
+    let link_id = Uuid::new_v4().to_string();
+    let link = json!({"link_id":link_id,"project_id":project_id,"nodes":[
+        {"node_id":node_id,"adapter_number":0,"port_number":0},
+        {"node_id":peer_id,"adapter_number":0,"port_number":0}]});
+    sqlx::query("INSERT INTO topology_objects (project_id, kind, object_id, name, object_json) VALUES (?, 'link', ?, NULL, ?)")
+        .bind(&project_id).bind(&link_id).bind(link.to_string()).execute(pool).await.unwrap();
+    let snapshot = admin_create(
+        app,
+        admin,
+        &format!("/v3/projects/{project_id}/snapshots"),
+        json!({"name":format!("{name} baseline")}),
+    )
+    .await;
+    let snapshot_id = snapshot["snapshot_id"].as_str().unwrap().to_owned();
+    let file = response(
+        app,
+        Request::builder()
+            .method("POST")
+            .uri(format!("/v3/projects/{project_id}/files/answers.txt"))
+            .header(header::AUTHORIZATION, format!("Bearer {admin}"))
+            .body(Body::from(format!("{name} private answers")))
+            .unwrap(),
+    )
+    .await;
+    assert!(
+        file.status().is_success(),
+        "project file write: {}",
+        file.status()
+    );
+    ClassroomProject {
+        project_id,
+        node_id,
+        link_id,
+        snapshot_id,
+    }
+}
+
+fn classroom_route_path(pattern: &str, target: &ClassroomProject) -> String {
+    let mut segments = Vec::new();
+    for segment in pattern.trim_matches('/').split('/') {
+        let value = match segment {
+            "{project_id}" => target.project_id.clone(),
+            "{node_id}" => target.node_id.clone(),
+            "{link_id}" => target.link_id.clone(),
+            "{snapshot_id}" => target.snapshot_id.clone(),
+            "{*file_path}" => "answers.txt".to_owned(),
+            "{*image_path}" => "qemu/disk.qcow2".to_owned(),
+            "{*path}" => continue,
+            other if other.starts_with('{') => Uuid::new_v4().to_string(),
+            other => other.to_owned(),
+        };
+        if !value.is_empty() {
+            segments.push(value);
+        }
+    }
+    format!("/v3/{}", segments.join("/"))
+}
+
+async fn assert_student_isolated(
+    app: &Router,
+    student: &str,
+    who: &str,
+    own: &ClassroomProject,
+    other: &ClassroomProject,
+) {
+    let (status, projects) = json_route(app, "GET", "/v3/projects", student, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{who} lists projects");
+    let listed = projects
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|project| project["project_id"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        listed,
+        vec![own.project_id.clone()],
+        "{who} sees only own project"
+    );
+
+    for path in [
+        format!("/v3/projects/{}", own.project_id),
+        format!("/v3/projects/{}/nodes", own.project_id),
+        format!("/v3/projects/{}/nodes/{}", own.project_id, own.node_id),
+        format!("/v3/projects/{}/links", own.project_id),
+        format!("/v3/projects/{}/links/{}", own.project_id, own.link_id),
+        format!("/v3/projects/{}/snapshots", own.project_id),
+        format!("/v3/projects/{}/files/answers.txt", own.project_id),
+        format!("/v3/projects/{}/export", own.project_id),
+        format!("/v3/projects/{}/topology", own.project_id),
+    ] {
+        assert_eq!(
+            response(app, bearer(&path, student)).await.status(),
+            StatusCode::OK,
+            "{who} GET own {path}"
+        );
+    }
+
+    // Every privileged route that names the other student's project must be
+    // rejected by the gate, for every method, before any handler runs.
+    let mut checked = 0;
+    for rule in ROUTE_RULES {
+        let RouteClass::Privilege(_) = rule.class else {
+            continue;
+        };
+        let path = classroom_route_path(rule.path, other);
+        let foreign_project = rule.path.contains("{project_id}");
+        let collection = rule.method == "GET" && rule.path == "/projects";
+        if collection {
+            continue;
+        }
+        let (status, body) = json_route(app, rule.method, &path, student, json!({})).await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "{who} {} {path} ({}) must be forbidden: {body}",
+            rule.method,
+            if foreign_project {
+                "other student's project"
+            } else {
+                "administrative route"
+            },
+        );
+        checked += 1;
+    }
+    assert!(checked > 150, "route sweep covered only {checked} routes");
+
+    for runtime in ["qemu", "docker", "vpcs", "dynamips"] {
+        let path = format!(
+            "/v3/compute/projects/{}/{runtime}/nodes/{}/console/ws",
+            other.project_id, other.node_id
+        );
+        let (status, _) = json_route(
+            app,
+            "POST",
+            "/v3/access/ws-ticket",
+            student,
+            json!({"path":path}),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "{who} console ticket for {path}"
+        );
+    }
+    let foreign_notifications = format!("/v3/projects/{}/notifications/ws", other.project_id);
+    let (status, _) = json_route(
+        app,
+        "POST",
+        "/v3/access/ws-ticket",
+        student,
+        json!({"path":foreign_notifications}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{who} notification ticket");
+    let foreign_capture = format!(
+        "/v3/projects/{}/links/{}/capture/stream",
+        other.project_id, other.link_id
+    );
+    let (status, _) = json_route(
+        app,
+        "POST",
+        "/v3/access/ws-ticket",
+        student,
+        json!({"path":foreign_capture}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{who} capture ticket");
+}
+
+#[tokio::test]
+async fn classroom_flow_isolates_students_by_project_and_pool_acl() {
+    let (_directory, app, pool) = fixture().await;
+    let admin = token(&pool, "admin", 0).await;
+
+    // The instructor builds a student role with full control inside a lab.
+    let role = admin_create(
+        &app,
+        &admin,
+        "/v3/access/roles",
+        json!({"name":"Classroom student"}),
+    )
+    .await;
+    let role_id = role["role_id"].as_str().unwrap().to_owned();
+    let (status, privileges) =
+        json_route(&app, "GET", "/v3/access/privileges", &admin, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    let lab_privileges = privileges
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| {
+            let name = entry["name"].as_str().unwrap();
+            ["Project.", "Node.", "Link.", "Snapshot.", "Drawing."]
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+        })
+        .map(|entry| entry["privilege_id"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert!(
+        lab_privileges.len() >= 15,
+        "seeded lab privileges: {lab_privileges:?}"
+    );
+    for privilege_id in &lab_privileges {
+        admin_no_content(
+            &app,
+            &admin,
+            "PUT",
+            &format!("/v3/access/roles/{role_id}/privileges/{privilege_id}"),
+        )
+        .await;
+    }
+
+    let mut user_ids = Vec::new();
+    for username in ["student-one", "student-two"] {
+        let user = admin_create(
+            &app,
+            &admin,
+            "/v3/access/users",
+            json!({"username":username,"password":"classroom-password","full_name":username}),
+        )
+        .await;
+        user_ids.push(user["user_id"].as_str().unwrap().to_owned());
+    }
+    let first = classroom_project(&app, &pool, &admin, "Student one lab").await;
+    let second = classroom_project(&app, &pool, &admin, "Student two lab").await;
+
+    // Student one: group membership plus a group ACE on the lab project.
+    let group = admin_create(
+        &app,
+        &admin,
+        "/v3/access/groups",
+        json!({"name":"Classroom A"}),
+    )
+    .await;
+    let group_id = group["user_group_id"].as_str().unwrap().to_owned();
+    admin_no_content(
+        &app,
+        &admin,
+        "PUT",
+        &format!("/v3/access/groups/{group_id}/members/{}", user_ids[0]),
+    )
+    .await;
+    admin_create(
+        &app,
+        &admin,
+        "/v3/access/acl",
+        json!({"ace_type":"group","group_id":group_id,"role_id":role_id,
+        "path":format!("/projects/{}", first.project_id),"propagate":true,"allowed":true}),
+    )
+    .await;
+
+    // Student two: a user ACE on a resource pool containing the lab project.
+    let resource_pool = admin_create(
+        &app,
+        &admin,
+        "/v3/pools",
+        json!({"name":"Student two pool"}),
+    )
+    .await;
+    let pool_id = resource_pool["resource_pool_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    admin_no_content(
+        &app,
+        &admin,
+        "PUT",
+        &format!("/v3/pools/{pool_id}/resources/{}", second.project_id),
+    )
+    .await;
+    admin_create(
+        &app,
+        &admin,
+        "/v3/access/acl",
+        json!({"ace_type":"user","user_id":user_ids[1],"role_id":role_id,
+        "path":format!("/pools/{pool_id}"),"propagate":true,"allowed":true}),
+    )
+    .await;
+
+    let student_one = student_login(&app, "student-one", [192, 0, 2, 41]).await;
+    let student_two = student_login(&app, "student-two", [192, 0, 2, 42]).await;
+    assert_student_isolated(&app, &student_one, "student-one", &first, &second).await;
+    assert_student_isolated(&app, &student_two, "student-two", &second, &first).await;
+
+    // Real WebSocket upgrades: own notifications open, the other lab does not.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server_app = app.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, server_app).await.unwrap();
+    });
+    let own_path = format!("/v3/projects/{}/notifications/ws", first.project_id);
+    let (status, ticket) = json_route(
+        &app,
+        "POST",
+        "/v3/access/ws-ticket",
+        &student_one,
+        json!({"path":own_path}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (mut socket, _) = connect_async(format!(
+        "ws://{address}{own_path}?ticket={}",
+        ticket["ticket"].as_str().unwrap()
+    ))
+    .await
+    .unwrap();
+    socket.close(None).await.unwrap();
+    let foreign_path = format!("/v3/projects/{}/notifications/ws", second.project_id);
+    let rejected = connect_async(format!("ws://{address}{foreign_path}?token={student_one}"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(rejected, WsError::Http(response) if response.status() == StatusCode::FORBIDDEN)
+    );
+    let console_path = format!(
+        "/v3/compute/projects/{}/vpcs/nodes/{}/console/ws",
+        second.project_id, second.node_id
+    );
+    let rejected = connect_async(format!("ws://{address}{console_path}?token={student_one}"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(rejected, WsError::Http(response) if response.status() == StatusCode::FORBIDDEN)
+    );
+    server.abort();
+
+    // Deleting a lab removes its ACEs and pool membership, so a later project
+    // with the same ID does not inherit the old grants. The seeded link rows
+    // have no runtime endpoint metadata for the delete path to tear down.
+    sqlx::query("DELETE FROM topology_objects WHERE kind = 'link'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    admin_no_content(
+        &app,
+        &admin,
+        "DELETE",
+        &format!("/v3/projects/{}", second.project_id),
+    )
+    .await;
+    let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM resources WHERE resource_id = ?")
+        .bind(&second.project_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(remaining, 0);
+    admin_no_content(
+        &app,
+        &admin,
+        "DELETE",
+        &format!("/v3/projects/{}", first.project_id),
+    )
+    .await;
+    let stale: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_acl WHERE path = ?")
+        .bind(format!("/projects/{}", first.project_id))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stale, 0);
+    let pool_ace: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_acl WHERE path = ?")
+        .bind(format!("/pools/{pool_id}"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(pool_ace, 1, "the pool root ACE is not project-owned");
+    admin_create(
+        &app,
+        &admin,
+        "/v3/projects",
+        json!({"name":"Reused lab","project_id":first.project_id}),
+    )
+    .await;
+    let (status, projects) =
+        json_route(&app, "GET", "/v3/projects", &student_one, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(projects, json!([]));
+}
+
 #[tokio::test]
 async fn login_rejects_wrong_password_and_http_rejects_expired_tokens() {
     let (_directory, app, pool) = fixture().await;
@@ -415,7 +877,7 @@ fn required_privileges_match_the_security_review_fixes() {
 
 #[tokio::test]
 async fn pool_access_obeys_propagation_and_direct_user_denies() {
-    let (_directory, _app, pool) = fixture().await;
+    let (_directory, app, pool) = fixture().await;
     let project_id = Uuid::new_v4().to_string();
     let pool_id = Uuid::new_v4().to_string();
     let alice_id: String =
@@ -423,8 +885,13 @@ async fn pool_access_obeys_propagation_and_direct_user_denies() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    sqlx::query("INSERT INTO projects (project_id, name, status, project_json) VALUES (?, 'Pool ACL project', 'closed', '{}')")
-        .bind(&project_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO projects (project_id, name, status, project_json) VALUES (?, 'Pool ACL project', 'closed', ?)")
+        .bind(&project_id).bind(json!({"project_id":project_id,"name":"Pool ACL project","status":"closed"}).to_string())
+        .execute(&pool).await.unwrap();
+    let other_project = Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO projects (project_id, name, status, project_json) VALUES (?, 'Other pool project', 'closed', ?)")
+        .bind(&other_project).bind(json!({"project_id":other_project,"name":"Other pool project","status":"closed"}).to_string())
+        .execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO resource_pools (resource_pool_id, name) VALUES (?, 'ACL test pool')")
         .bind(&pool_id)
         .execute(&pool)
@@ -474,6 +941,12 @@ async fn pool_access_obeys_propagation_and_direct_user_denies() {
         .await
         .unwrap();
     assert!(has_privilege(&pool, &principal, &project_path, "Project.Audit").await);
+    let alice_token = token(&pool, "alice", 0).await;
+    let (status, projects) =
+        json_route(&app, "GET", "/v3/projects", &alice_token, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(projects.as_array().unwrap().len(), 1);
+    assert_eq!(projects[0]["project_id"], project_id);
     sqlx::query("UPDATE auth_acl SET propagate = 0 WHERE group_id = ?")
         .bind(&group_id)
         .execute(&pool)
@@ -488,6 +961,162 @@ async fn pool_access_obeys_propagation_and_direct_user_denies() {
         .await
         .unwrap();
     assert!(has_privilege(&pool, &principal, &project_path, "Project.Audit").await);
+}
+
+#[test]
+fn equal_depth_acl_denies_are_order_independent() {
+    let allow = ("/projects/classroom".to_owned(), true, true);
+    let deny = ("/projects/classroom".to_owned(), false, false);
+    assert_eq!(
+        evaluate_acl("/projects/classroom", &[allow.clone(), deny.clone()]),
+        Some(false)
+    );
+    assert_eq!(
+        evaluate_acl("/projects/classroom", &[deny, allow]),
+        Some(false)
+    );
+}
+
+async fn insert_ace(
+    pool: &SqlitePool,
+    principal: (&str, &str),
+    path: &str,
+    propagate: bool,
+    allowed: bool,
+    role_id: &str,
+) {
+    let (ace_type, principal_id) = principal;
+    let (user_id, group_id) = if ace_type == "user" {
+        (Some(principal_id), None)
+    } else {
+        (None, Some(principal_id))
+    };
+    sqlx::query("INSERT INTO auth_acl (ace_id, ace_type, path, propagate, allowed, user_id, group_id, role_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(Uuid::new_v4().to_string()).bind(ace_type).bind(path).bind(propagate).bind(allowed)
+        .bind(user_id).bind(group_id).bind(role_id)
+        .execute(pool).await.unwrap();
+}
+
+#[tokio::test]
+async fn user_aces_replace_group_aces_and_pool_aces_join_depth_ordering() {
+    let (_directory, _app, pool) = fixture().await;
+    let alice_id: String =
+        sqlx::query_scalar("SELECT user_id FROM auth_users WHERE username = 'alice'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let role_id: String = sqlx::query_scalar("SELECT role_id FROM auth_roles WHERE name = 'User'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let group_id = Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO auth_groups (user_group_id, name) VALUES (?, 'Precedence group')")
+        .bind(&group_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO auth_user_groups (user_id, user_group_id) VALUES (?, ?)")
+        .bind(&alice_id)
+        .bind(&group_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let project_id = Uuid::new_v4().to_string();
+    let pool_id = Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO projects (project_id, name, status, project_json) VALUES (?, 'Precedence', 'closed', '{}')")
+        .bind(&project_id).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO resource_pools (resource_pool_id, name) VALUES (?, 'Precedence pool')",
+    )
+    .bind(&pool_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO resources (resource_id, resource_type, name) VALUES (?, 'project', 'Precedence')")
+        .bind(&project_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO resource_pool_map (resource_id, resource_pool_id) VALUES (?, ?)")
+        .bind(&project_id)
+        .bind(&pool_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let principal = Principal {
+        user_id: alice_id.clone(),
+        is_superadmin: false,
+        must_change_password: false,
+    };
+    let user = ("user", alice_id.as_str());
+    let group = ("group", group_id.as_str());
+    let project = format!("/projects/{project_id}");
+    let nodes = format!("{project}/nodes");
+    let pool_root = format!("/pools/{pool_id}");
+    let clear = || async {
+        sqlx::query("DELETE FROM auth_acl")
+            .execute(&pool)
+            .await
+            .unwrap();
+    };
+
+    // A user allow replaces a group deny on the same path.
+    insert_ace(&pool, group, &project, true, false, &role_id).await;
+    insert_ace(&pool, user, &project, true, true, &role_id).await;
+    assert!(has_privilege(&pool, &principal, &project, "Project.Audit").await);
+    clear().await;
+
+    // A user deny on an ancestor replaces a deeper group allow.
+    insert_ace(&pool, user, "/projects", true, false, &role_id).await;
+    insert_ace(&pool, group, &project, true, true, &role_id).await;
+    assert!(!has_privilege(&pool, &principal, &project, "Project.Audit").await);
+    clear().await;
+
+    // A pool deny acts at project depth, so it beats an inherited allow.
+    insert_ace(&pool, group, "/", true, true, &role_id).await;
+    insert_ace(&pool, group, &pool_root, false, false, &role_id).await;
+    assert!(!has_privilege(&pool, &principal, &project, "Project.Audit").await);
+    assert!(has_privilege(&pool, &principal, "/projects/unpooled", "Project.Audit").await);
+    clear().await;
+
+    // A pool grant still yields to a deeper direct deny.
+    insert_ace(&pool, group, &pool_root, true, true, &role_id).await;
+    insert_ace(&pool, group, &nodes, true, false, &role_id).await;
+    assert!(has_privilege(&pool, &principal, &project, "Project.Audit").await);
+    assert!(!has_privilege(&pool, &principal, &nodes, "Node.Audit").await);
+    clear().await;
+
+    // Pool descendants other than the project's resource entry grant nothing,
+    // and a non-propagating resource entry covers only the project itself.
+    insert_ace(
+        &pool,
+        group,
+        &format!("{pool_root}/resources"),
+        true,
+        true,
+        &role_id,
+    )
+    .await;
+    assert!(!has_privilege(&pool, &principal, &project, "Project.Audit").await);
+    clear().await;
+    insert_ace(
+        &pool,
+        group,
+        &format!("{pool_root}/resources/{project_id}"),
+        false,
+        true,
+        &role_id,
+    )
+    .await;
+    assert!(has_privilege(&pool, &principal, &project, "Project.Audit").await);
+    assert!(!has_privilege(&pool, &principal, &nodes, "Node.Audit").await);
+    clear().await;
+
+    // ACE rows are evaluated identically regardless of insertion order.
+    for order in [[true, false], [false, true]] {
+        for allowed in order {
+            insert_ace(&pool, group, &project, true, allowed, &role_id).await;
+        }
+        assert!(!has_privilege(&pool, &principal, &project, "Project.Audit").await);
+        clear().await;
+    }
 }
 
 #[tokio::test]

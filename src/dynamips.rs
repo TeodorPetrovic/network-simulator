@@ -22,9 +22,29 @@ use uuid::Uuid;
 
 use crate::runtime::{NodeAction, RuntimeError};
 
+#[path = "dynamips/process.rs"]
+mod process;
+#[path = "dynamips/version.rs"]
+mod version;
+
+use process::{kill_dynamips_process_tree, reap_orphaned_dynamips_processes};
+#[cfg(test)]
+use version::supported_dynamips_version;
+use version::{
+    CONSOLE_BINDING_MIN_VERSION, dynamips_version_error, dynamips_version_tuple,
+    dynamips_version_warning,
+};
+
+const GNS3_DEFAULT_IDLE_MAX: u32 = 500;
+const GNS3_DEFAULT_IDLE_SLEEP: u32 = 30;
+
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
 const IDLE_PC_PROPOSAL_TIMEOUT: Duration = Duration::from_secs(30);
-const IDLE_PC_CPU_THRESHOLD_PERCENT: f64 = 50.0;
+/// Stop probing once a candidate keeps the router below this share of a core.
+const IDLE_PC_CPU_TARGET_PERCENT: f64 = 10.0;
+/// GNS3's `auto_idlepc` acceptance limit.
+const GNS3_IDLE_PC_CPU_LIMIT_PERCENT: f64 = 70.0;
+const IDLE_PC_CPU_SAMPLE_TIME: Duration = Duration::from_secs(5);
 const PROCESS_READY_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_HYPERVISOR_RESPONSE: usize = 256 * 1024;
 const MAX_HYPERVISOR_LINES: usize = 4096;
@@ -43,8 +63,25 @@ pub struct DynamipsRuntime {
 
 struct ManagedRouter {
     child: Child,
+    process_group_id: u32,
+    group_killed: bool,
     hypervisor_port: u16,
     log_file: PathBuf,
+}
+
+impl ManagedRouter {
+    fn kill_group(&mut self) {
+        if !self.group_killed {
+            kill_dynamips_process_tree(self.process_group_id);
+            self.group_killed = true;
+        }
+    }
+}
+
+impl Drop for ManagedRouter {
+    fn drop(&mut self) {
+        self.kill_group();
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -115,7 +152,7 @@ impl Default for DynamipsOptions {
             wics: vec![None; 3],
             npe: Some("npe-400".to_owned()),
             midplane: Some("vxr".to_owned()),
-            iomem: Some(5),
+            iomem: None,
             ghost_ios: false,
             console_type: "telnet".to_owned(),
             aux_type: "none".to_owned(),
@@ -131,6 +168,8 @@ pub struct DynamipsRuntimeInfo {
     pub image_directory: String,
     pub image_count: usize,
     pub error: Option<String>,
+    /// Non-blocking compatibility note for a usable binary.
+    pub warning: Option<String>,
 }
 
 impl DynamipsRuntime {
@@ -164,7 +203,18 @@ impl DynamipsRuntime {
     }
 
     pub async fn info(&self) -> DynamipsRuntimeInfo {
-        let version = self.version().await;
+        let detected_version = self.detected_version().await;
+        let (version, error) = match detected_version {
+            Ok(version) => {
+                let error = dynamips_version_error(&version);
+                (Some(version), error)
+            }
+            Err(error) => (None, Some(error.message().to_owned())),
+        };
+        let warning = version
+            .as_deref()
+            .filter(|_| error.is_none())
+            .and_then(dynamips_version_warning);
         let images = self.image_files().unwrap_or_default();
         let image_directory = self
             .image_dir
@@ -173,13 +223,31 @@ impl DynamipsRuntime {
             .display()
             .to_string();
         DynamipsRuntimeInfo {
-            available: version.is_ok(),
-            version: version.as_ref().ok().cloned(),
+            available: error.is_none(),
+            version,
             binary: self.binary.display().to_string(),
             image_directory,
             image_count: images.len(),
-            error: version.err().map(|error| error.message().to_owned()),
+            error,
+            warning,
         }
+    }
+
+    /// Kill Dynamips processes left behind by an earlier controller run.
+    /// Dynamips is scoped by its working directory under `state_dir`.
+    pub fn reap_orphans(&self) -> usize {
+        reap_orphaned_dynamips_processes(&self.binary, &self.state_dir)
+    }
+
+    /// Kill every hypervisor process owned by this runtime before shutdown.
+    pub async fn kill_all(&self) {
+        let mut routers = self.routers.lock().await;
+        for (_, mut router) in routers.drain() {
+            router.kill_group();
+            let _ = timeout(Duration::from_secs(2), router.child.wait()).await;
+            let _ = fs::remove_file(&router.log_file);
+        }
+        self.bindings.lock().await.clear();
     }
 
     pub async fn templates(&self) -> Result<Vec<Value>, RuntimeError> {
@@ -704,7 +772,7 @@ impl DynamipsRuntime {
             "wic2": vm.options.wics.get(2).cloned().flatten(),
             "npe": vm.options.npe,
             "midplane": vm.options.midplane,
-            "iomem": vm.options.iomem,
+            "iomem": vm.options.iomem.or_else(|| default_iomem(&vm.platform)),
             "ghost_ios": vm.options.ghost_ios,
             "console_type": vm.options.console_type,
             "aux_type": vm.options.aux_type,
@@ -859,6 +927,8 @@ impl DynamipsRuntime {
                 .get(&vm.node_id)
                 .and_then(|router| router.child.id());
             let ticks_per_second = process_ticks_per_second();
+            let mut best: Option<(String, f64)> = None;
+            let mut applied = None;
             for proposal in proposals {
                 let Some(candidate) = idlepc_candidate(&proposal) else {
                     continue;
@@ -868,6 +938,7 @@ impl DynamipsRuntime {
                     &format!("vm set_idle_pc_online {} 0 {candidate}", quote(&vm.name)),
                 )
                 .await?;
+                applied = Some(candidate.to_owned());
                 let process_sample =
                     process_id
                         .zip(ticks_per_second)
@@ -876,7 +947,7 @@ impl DynamipsRuntime {
                         });
                 let cpu_seconds_before = self.cpu_usage(vm.hypervisor_port, &vm.name).await?;
                 let started = tokio::time::Instant::now();
-                sleep(Duration::from_secs(3)).await;
+                sleep(IDLE_PC_CPU_SAMPLE_TIME).await;
                 let process_cpu_percent =
                     process_sample.and_then(|(pid, ticks_per_second, before)| {
                         read_process_cpu_ticks(pid).map(|after| {
@@ -895,18 +966,58 @@ impl DynamipsRuntime {
                     cpu_percent,
                     "Validated Dynamips Idle-PC candidate"
                 );
-                if cpu_percent < IDLE_PC_CPU_THRESHOLD_PERCENT {
+                if cpu_percent < IDLE_PC_CPU_TARGET_PERCENT {
                     return Ok(candidate.to_owned());
                 }
+                if best
+                    .as_ref()
+                    .is_none_or(|(_, best_percent)| cpu_percent < *best_percent)
+                {
+                    best = Some((candidate.to_owned(), cpu_percent));
+                }
             }
-            Err(RuntimeError::Failed(
-                "Sorry, no idle-pc value was suitable".to_owned(),
-            ))
+            // GNS3 accepts the first candidate below 70%. Prefer one that
+            // reaches the idle target, otherwise keep GNS3's acceptance rule
+            // but return the lowest measured candidate instead of the first.
+            match best {
+                Some((candidate, cpu_percent)) if cpu_percent < GNS3_IDLE_PC_CPU_LIMIT_PERCENT => {
+                    tracing::warn!(
+                        node_id = %vm.node_id,
+                        idle_pc = %candidate,
+                        cpu_percent,
+                        "No Dynamips Idle-PC candidate reached the idle CPU target; using the lowest"
+                    );
+                    if applied.as_deref() != Some(candidate.as_str()) {
+                        self.send(
+                            vm.hypervisor_port,
+                            &format!("vm set_idle_pc_online {} 0 {candidate}", quote(&vm.name)),
+                        )
+                        .await?;
+                    }
+                    Ok(candidate)
+                }
+                _ => Err(RuntimeError::Failed(
+                    "Sorry, no idle-pc value was suitable".to_owned(),
+                )),
+            }
         }
         .await;
         let stopped = if was_auto_started {
             self.stop_locked(vm).await.map(|_| ())
         } else {
+            if probe.is_err() {
+                // Leave a running router on the Idle-PC it had before probing.
+                let _ = self
+                    .send(
+                        vm.hypervisor_port,
+                        &format!(
+                            "vm set_idle_pc_online {} 0 {}",
+                            quote(&vm.name),
+                            vm.idle_pc.as_deref().unwrap_or("0x0")
+                        ),
+                    )
+                    .await;
+            }
             Ok(())
         };
         match (probe, stopped) {
@@ -955,12 +1066,13 @@ impl DynamipsRuntime {
         }
         if let Some(mut router) = self.routers.lock().await.remove(&vm.node_id) {
             if router.child.try_wait().ok().flatten().is_none() {
-                let _ = router.child.start_kill();
+                router.kill_group();
                 let _ = timeout(Duration::from_secs(3), router.child.wait()).await;
             }
-            let _ = fs::remove_file(router.log_file);
+            let _ = fs::remove_file(&router.log_file);
         }
         remove_transient_runtime_files(&vm.working_dir)?;
+        remove_runtime_manifest(&vm.working_dir)?;
         remove_generated_runtime_configs(&vm.working_dir)?;
         self.bindings.lock().await.remove(&vm.node_id);
         if vm.options.auto_delete_disks {
@@ -1202,23 +1314,28 @@ impl DynamipsRuntime {
         Ok(path)
     }
 
-    async fn version(&self) -> Result<String, RuntimeError> {
-        let output = timeout(
-            COMMAND_TIMEOUT,
-            Command::new(&self.binary)
-                .arg("-P")
-                .arg("none")
-                .stdin(Stdio::null())
-                .output(),
-        )
-        .await
-        .map_err(|_| RuntimeError::Unavailable("Dynamips version check timed out".to_owned()))?
-        .map_err(|error| {
-            RuntimeError::Unavailable(format!(
-                "Could not run Dynamips executable '{}': {error}",
-                self.binary.display()
-            ))
-        })?;
+    async fn detected_version(&self) -> Result<String, RuntimeError> {
+        let mut command = Command::new(&self.binary);
+        command
+            .arg("-P")
+            .arg("none")
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        // Dynamips names its log/VM files relative to the process cwd. Keep
+        // this probe out of the controller's directory (the repository root in
+        // development) even if a build writes a default log for it.
+        if fs::create_dir_all(&self.state_dir).is_ok() {
+            command.current_dir(&self.state_dir);
+        }
+        let output = timeout(COMMAND_TIMEOUT, command.output())
+            .await
+            .map_err(|_| RuntimeError::Unavailable("Dynamips version check timed out".to_owned()))?
+            .map_err(|error| {
+                RuntimeError::Unavailable(format!(
+                    "Could not run Dynamips executable '{}': {error}",
+                    self.binary.display()
+                ))
+            })?;
         // Some distro builds print their version after rejecting the `none`
         // platform used by GNS3's probe, and exit nonzero. Accept only a
         // version banner in that case; the real hypervisor is probed at launch.
@@ -1242,15 +1359,14 @@ impl DynamipsRuntime {
                     output.trim()
                 ))
             })
-            .and_then(|version| {
-                if supported_dynamips_version(&version) {
-                    Ok(version)
-                } else {
-                    Err(RuntimeError::Unavailable(format!(
-                        "Dynamips version 0.2.11 or newer is required, detected {version}"
-                    )))
-                }
-            })
+    }
+
+    async fn version(&self) -> Result<String, RuntimeError> {
+        let version = self.detected_version().await?;
+        dynamips_version_error(&version).map_or_else(
+            || Ok(version.clone()),
+            |message| Err(RuntimeError::Unavailable(message)),
+        )
     }
 
     async fn initialize_router(&self, vm: &DynamipsVm) -> Result<(), RuntimeError> {
@@ -1281,6 +1397,7 @@ impl DynamipsRuntime {
     }
 
     async fn start_locked(&self, vm: &DynamipsVm) -> Result<String, RuntimeError> {
+        self.version().await?;
         self.ensure_hypervisor(vm).await?;
         match self.hypervisor_status(vm.hypervisor_port, &vm.name).await? {
             status if status == "started" => return Ok(status),
@@ -1373,9 +1490,10 @@ impl DynamipsRuntime {
                 for command in ghost_router_initialization_commands(vm, ghost_file) {
                     self.send(vm.hypervisor_port, &command).await?;
                 }
+                // Dynamips writes the ghost RAM image while `vm start` loads
+                // the IOS ELF, so GNS3 stops the ghost instance immediately.
                 self.send(vm.hypervisor_port, &format!("vm start {}", quote(name)))
                     .await?;
-                sleep(Duration::from_secs(20)).await;
                 self.send(vm.hypervisor_port, &format!("vm stop {}", quote(name)))
                     .await?;
                 Ok::<(), RuntimeError>(())
@@ -1448,10 +1566,10 @@ impl DynamipsRuntime {
         }
         if let Some(mut stale) = self.routers.lock().await.remove(&vm.node_id) {
             if stale.child.try_wait().ok().flatten().is_none() {
-                let _ = stale.child.start_kill();
+                stale.kill_group();
                 let _ = timeout(Duration::from_secs(2), stale.child.wait()).await;
             }
-            let _ = fs::remove_file(stale.log_file);
+            let _ = fs::remove_file(&stale.log_file);
         }
         remove_transient_runtime_files(&vm.working_dir)?;
         self.bindings.lock().await.remove(&vm.node_id);
@@ -1459,6 +1577,7 @@ impl DynamipsRuntime {
     }
 
     async fn spawn_hypervisor(&self, vm: &DynamipsVm) -> Result<ManagedRouter, RuntimeError> {
+        let version = self.version().await?;
         fs::create_dir_all(&vm.working_dir).map_err(|error| {
             RuntimeError::Failed(format!(
                 "Could not create Dynamips working directory: {error}"
@@ -1472,16 +1591,27 @@ impl DynamipsRuntime {
             RuntimeError::Failed(format!("Could not open Dynamips log file: {error}"))
         })?;
         let port = vm.hypervisor_port;
-        let mut child = Command::new(&self.binary)
+        let mut command = Command::new(&self.binary);
+        command
             .arg("-N1")
             .arg("-l")
             .arg("dynamips_engine.log")
             .arg("-H")
-            .arg(format!("127.0.0.1:{port}"))
+            .arg(format!("127.0.0.1:{port}"));
+        // GNS3 uses this flag with Dynamips 0.2.23 and newer. Without it,
+        // console and AUX listeners may bind to every host interface even
+        // though the hypervisor protocol itself listens only on loopback.
+        if dynamips_version_tuple(&version)
+            .is_some_and(|version| version >= CONSOLE_BINDING_MIN_VERSION)
+        {
+            command.args(["--console-binding-addr", "127.0.0.1"]);
+        }
+        let child = command
             .current_dir(&vm.working_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr))
+            .process_group(0)
             .kill_on_drop(true)
             .spawn()
             .map_err(|error| {
@@ -1490,35 +1620,50 @@ impl DynamipsRuntime {
                     self.binary.display()
                 ))
             })?;
+        // Keep the group-owning guard alive during the readiness probe too:
+        // canceling a start future must not leave a hypervisor descendant.
+        let mut router = ManagedRouter {
+            process_group_id: child.id().expect("spawned Dynamips has a PID"),
+            child,
+            group_killed: false,
+            hypervisor_port: port,
+            log_file,
+        };
         let deadline = tokio::time::Instant::now() + PROCESS_READY_TIMEOUT;
         loop {
             if TcpStream::connect(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))
                 .await
                 .is_ok()
             {
-                return Ok(ManagedRouter {
-                    child,
-                    hypervisor_port: port,
-                    log_file,
-                });
+                return Ok(router);
             }
-            if let Some(status) = child.try_wait().map_err(|error| {
-                RuntimeError::Unavailable(format!("Could not inspect Dynamips startup: {error}"))
-            })? {
-                let log = fs::read_to_string(&log_file).unwrap_or_default();
-                return Err(RuntimeError::Failed(format!(
-                    "Dynamips exited during startup ({status}){}",
-                    if log.trim().is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {}", log.trim())
-                    }
-                )));
+            match router.child.try_wait() {
+                Ok(Some(status)) => {
+                    router.kill_group();
+                    let _ = router.child.wait().await;
+                    let log = fs::read_to_string(&router.log_file).unwrap_or_default();
+                    return Err(RuntimeError::Failed(format!(
+                        "Dynamips exited during startup ({status}){}",
+                        if log.trim().is_empty() {
+                            String::new()
+                        } else {
+                            format!(": {}", log.trim())
+                        }
+                    )));
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    router.kill_group();
+                    let _ = timeout(Duration::from_secs(2), router.child.wait()).await;
+                    return Err(RuntimeError::Unavailable(format!(
+                        "Could not inspect Dynamips startup: {error}"
+                    )));
+                }
             }
             if tokio::time::Instant::now() >= deadline {
-                let _ = child.start_kill();
-                let _ = child.wait().await;
-                let log = fs::read_to_string(&log_file).unwrap_or_default();
+                router.kill_group();
+                let _ = router.child.wait().await;
+                let log = fs::read_to_string(&router.log_file).unwrap_or_default();
                 return Err(RuntimeError::Unavailable(format!(
                     "Dynamips hypervisor did not listen on 127.0.0.1:{port}{}",
                     if log.trim().is_empty() {
@@ -1539,9 +1684,10 @@ impl DynamipsRuntime {
                 .await
                 .is_err()
             {
-                let _ = router.child.start_kill();
+                router.kill_group();
                 let _ = timeout(Duration::from_secs(2), router.child.wait()).await;
             }
+            let _ = fs::remove_file(&router.log_file);
         }
         Ok(())
     }
@@ -1579,6 +1725,7 @@ impl DynamipsRuntime {
         let Some(mut router) = dead_router else {
             return false;
         };
+        router.kill_group();
         let _ = router.child.wait().await;
         let _ = fs::remove_file(&router.log_file);
         if let Some(working_dir) = router.log_file.parent() {
@@ -1831,6 +1978,14 @@ fn default_slot0(platform: &str, chassis: Option<&str>) -> Option<&'static str> 
     }
 }
 
+fn default_iomem(platform: &str) -> Option<u8> {
+    match platform {
+        "c1700" | "c2600" => Some(15),
+        "c2691" | "c3600" | "c3725" | "c3745" => Some(5),
+        _ => None,
+    }
+}
+
 /// Return the adapter Dynamips installs as part of creating this platform.
 /// GNS3's Dynamips node wrappers model these adapters in their slot state, but
 /// the hypervisor creates them when the chassis/platform is initialized. Sending
@@ -1846,6 +2001,20 @@ fn integrated_slot0(platform: &str, chassis: Option<&str>) -> Option<&'static st
         }),
         "c3600" if chassis == Some("3660") => Some("Leopard-2FE"),
         "c2691" | "c3725" | "c3745" => Some("GT96100-FE"),
+        _ => None,
+    }
+}
+
+fn integrated_slot_module(
+    platform: &str,
+    chassis: Option<&str>,
+    slot: usize,
+) -> Option<&'static str> {
+    if slot == 0 {
+        return integrated_slot0(platform, chassis);
+    }
+    match (platform, chassis, slot) {
+        ("c1700", Some("1751" | "1760"), 1) => Some("C1700-MB-WIC1"),
         _ => None,
     }
 }
@@ -1973,6 +2142,18 @@ fn validate_dynamips_options(
         return Err(RuntimeError::Failed(
             "Dynamips WIC must be WIC-1ENET, WIC-1T, or WIC-2T".to_owned(),
         ));
+    }
+    let wic_capacity = match platform {
+        "c1700" => 2,
+        "c2600" | "c2691" | "c3725" | "c3745" => 3,
+        _ => 0,
+    };
+    if options.wics.iter().enumerate().any(|(slot, wic)| {
+        slot >= wic_capacity && wic.as_deref().is_some_and(|wic| !wic.is_empty())
+    }) {
+        return Err(RuntimeError::Failed(format!(
+            "Dynamips platform {platform} provides {wic_capacity} WIC slot(s)"
+        )));
     }
     if options.npe.as_deref().is_some_and(|npe| {
         !matches!(
@@ -2125,7 +2306,7 @@ fn router_initialization_commands(vm: &DynamipsVm) -> Vec<String> {
         if let Some(midplane) = &vm.options.midplane {
             commands.push(format!("c7200 set_midplane {} {midplane}", quote(&vm.name)));
         }
-    } else if let Some(iomem) = vm.options.iomem {
+    } else if let Some(iomem) = vm.options.iomem.or_else(|| default_iomem(&vm.platform)) {
         commands.push(format!(
             "{} set_iomem {} {iomem}",
             vm.platform,
@@ -2167,7 +2348,7 @@ fn router_initialization_commands(vm: &DynamipsVm) -> Vec<String> {
             .filter(|module| !module.is_empty())
             .or_else(|| (slot == 0).then_some(vm.slot0.as_str()));
         if let Some(module) = module {
-            if slot == 0 && integrated_slot0(&vm.platform, vm.chassis.as_deref()) == Some(module) {
+            if integrated_slot_module(&vm.platform, vm.chassis.as_deref(), slot) == Some(module) {
                 continue;
             }
             commands.push(format!(
@@ -2222,19 +2403,32 @@ fn ghost_router_initialization_commands(vm: &DynamipsVm, ghost_file: &Path) -> V
     ]
 }
 
+/// Idle tuning sent after `vm start`, when Dynamips has created the CPU.
+///
+/// GNS3 never sends its default `idlemax` 500 / `idlesleep` 30: its router
+/// object starts with those values and only issues `vm set_idle_*` when an
+/// edit changes them. Dynamips then keeps its own CPU defaults, `idle_max`
+/// 500 and `idle_sleep_time` 30000. The sleep time is in microseconds
+/// (`cpu_idle_loop`), so sending GNS3's `30` would shorten each idle sleep
+/// from 30 ms to 30 µs and keep the host core busy even with a good Idle-PC.
+/// Non-default values are passed through unchanged, as GNS3 does.
 fn router_start_settings_commands(vm: &DynamipsVm) -> Vec<String> {
-    vec![
-        format!(
+    let mut commands = Vec::new();
+    if vm.options.idlemax != GNS3_DEFAULT_IDLE_MAX {
+        commands.push(format!(
             "vm set_idle_max {} 0 {}",
             quote(&vm.name),
             vm.options.idlemax
-        ),
-        format!(
+        ));
+    }
+    if vm.options.idlesleep != GNS3_DEFAULT_IDLE_SLEEP {
+        commands.push(format!(
             "vm set_idle_sleep_time {} 0 {}",
             quote(&vm.name),
             vm.options.idlesleep
-        ),
-    ]
+        ));
+    }
+    commands
 }
 
 fn router_start_idlepc_command(vm: &DynamipsVm) -> Option<String> {
@@ -2311,10 +2505,10 @@ fn remove_transient_runtime_files(working_dir: &Path) -> Result<(), RuntimeError
         let Some(name) = name.to_str() else {
             continue;
         };
-        if name == RUNTIME_MANIFEST_FILE
-            || name == "dynamips_stdout.log"
+        if name == "dynamips_stdout.log"
             || name == "dynamips_engine.log"
             || name.starts_with("ilt_")
+            || is_vm_transient_file(name)
         {
             fs::remove_file(entry.path()).map_err(|error| {
                 RuntimeError::Failed(format!("Could not remove Dynamips runtime file: {error}"))
@@ -2322,6 +2516,36 @@ fn remove_transient_runtime_files(working_dir: &Path) -> Result<(), RuntimeError
         }
     }
     Ok(())
+}
+
+/// Per-instance files Dynamips recreates on every `vm create`/`vm start`
+/// (`<platform>_i<id>_lock`, `_log.txt`, `_rommon_vars`). GNS3 deletes the same
+/// set when a project closes; NVRAM, disks, and flash stay with the node.
+fn is_vm_transient_file(name: &str) -> bool {
+    let Some((instance, suffix)) = name
+        .strip_prefix('c')
+        .and_then(|rest| rest.split_once("_i"))
+        .and_then(|(model, rest)| {
+            (model.len() == 4 && model.bytes().all(|byte| byte.is_ascii_digit()))
+                .then(|| rest.split_once('_'))
+                .flatten()
+        })
+    else {
+        return false;
+    };
+    !instance.is_empty()
+        && instance.bytes().all(|byte| byte.is_ascii_digit())
+        && matches!(suffix, "lock" | "log.txt" | "rommon_vars")
+}
+
+fn remove_runtime_manifest(working_dir: &Path) -> Result<(), RuntimeError> {
+    match fs::remove_file(working_dir.join(RUNTIME_MANIFEST_FILE)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(RuntimeError::Failed(format!(
+            "Could not remove Dynamips runtime ownership marker: {error}"
+        ))),
+    }
 }
 
 fn remove_empty_runtime_directories(working_dir: &Path) -> Result<(), RuntimeError> {
@@ -2370,25 +2594,6 @@ fn remove_generated_runtime_configs(working_dir: &Path) -> Result<(), RuntimeErr
             configs.display()
         ))),
     }
-}
-
-fn supported_dynamips_version(version: &str) -> bool {
-    let mut parts = version.split('.');
-    let Some(major) = parts.next().and_then(|part| part.parse::<u32>().ok()) else {
-        return false;
-    };
-    let Some(minor) = parts.next().and_then(|part| part.parse::<u32>().ok()) else {
-        return false;
-    };
-    let patch = parts
-        .next()
-        .unwrap_or_default()
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect::<String>()
-        .parse::<u32>()
-        .unwrap_or(0);
-    (major, minor, patch) >= (0, 2, 11)
 }
 
 fn quote(value: &str) -> String {
@@ -2465,624 +2670,5 @@ async fn available_udp_port() -> Result<u16, RuntimeError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        DynamipsOptions, DynamipsRuntime, DynamipsVm, ManagedRouter, RUNTIME_MANIFEST_FILE,
-        default_slot0, ghost_router_initialization_commands, idlepc_candidate, idlepc_cpu_rate,
-        integrated_slot0, process_cpu_rate, process_thread_cpu_ticks, quote,
-        remove_auto_delete_disk_files, remove_empty_runtime_directories,
-        remove_generated_runtime_configs, router_initialization_commands,
-        router_start_idlepc_command, router_start_settings_commands, runtime_manifest_contents,
-        safe_file_name, supported_dynamips_version, validate_dynamips_options, validate_ios_image,
-        validate_platform_settings, validate_router_name,
-    };
-    use serde_json::json;
-    use std::{
-        env, fs,
-        net::{Ipv4Addr, SocketAddrV4},
-        path::PathBuf,
-    };
-    use uuid::Uuid;
-
-    #[test]
-    fn validates_dynamips_compatible_ios_elf_header() {
-        let directory = tempfile::tempdir().unwrap();
-        let image = directory.path().join("router.image");
-        fs::write(&image, [0x7f, b'E', b'L', b'F', 1, 2, 1, 0]).unwrap();
-        assert!(validate_ios_image(&image).is_ok());
-        fs::write(&image, b"not an IOS image").unwrap();
-        assert!(validate_ios_image(&image).is_err());
-    }
-
-    #[test]
-    fn parses_idlepc_candidates_and_scores_cpu_delta() {
-        assert_eq!(idlepc_candidate("0x1234abcd 90%"), Some("0x1234abcd"));
-        assert_eq!(idlepc_candidate("not-a-pointer 90%"), None);
-        assert_eq!(idlepc_candidate("0x1234 90%"), None);
-        assert!(idlepc_cpu_rate(100, 102, std::time::Duration::from_secs(3)) < 70.0);
-        assert_eq!(
-            idlepc_cpu_rate(0, 1000, std::time::Duration::from_secs(1)),
-            100.0
-        );
-    }
-
-    #[test]
-    fn measures_managed_process_cpu_from_proc_ticks() {
-        assert_eq!(
-            process_cpu_rate(100, 110, std::time::Duration::from_secs(2), 100),
-            5.0
-        );
-        assert_eq!(
-            process_cpu_rate(110, 100, std::time::Duration::from_secs(2), 100),
-            0.0
-        );
-        assert!(process_cpu_rate(0, 10, std::time::Duration::from_secs(1), 0).is_infinite());
-        assert_eq!(
-            process_thread_cpu_ticks("42 (dynamips (worker)) S 1 2 3 4 5 6 7 8 9 10 11 12 13"),
-            Some(23)
-        );
-    }
-
-    #[test]
-    fn ghost_ios_requires_mmap_support() {
-        let options = DynamipsOptions {
-            ghost_ios: true,
-            mmap: false,
-            ..DynamipsOptions::default()
-        };
-        assert!(validate_dynamips_options("c7200", None, None, &options).is_err());
-        let supported = DynamipsOptions {
-            ghost_ios: true,
-            mmap: true,
-            ..DynamipsOptions::default()
-        };
-        assert!(validate_dynamips_options("c7200", None, Some("C7200-IO-FE"), &supported).is_ok());
-    }
-
-    #[test]
-    fn dynamips_quoted_strings_and_names_cannot_emit_protocol_newlines() {
-        let injected = "R1\nvm clean_delete \"R2\"\r";
-        let quoted = quote(injected);
-        assert!(!quoted.chars().any(char::is_control));
-        assert!(quoted.contains("\\x0a"));
-        assert!(quoted.contains("\\x0d"));
-        assert!(validate_router_name(injected).is_err());
-        assert!(validate_router_name("Router-1").is_ok());
-    }
-
-    #[test]
-    fn imported_dynamips_runtime_fields_must_match_controller_state() {
-        let directory = tempfile::tempdir().unwrap();
-        let image_dir = directory.path().join("ios");
-        let state_dir = directory.path().join("state");
-        let project_id = Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap();
-        let node_id = Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap();
-        let working_dir = state_dir
-            .join(project_id.to_string())
-            .join(node_id.to_string());
-        fs::create_dir_all(&image_dir).unwrap();
-        fs::create_dir_all(&working_dir).unwrap();
-        let image = image_dir.join("router.image");
-        fs::write(&image, [0x7f, b'E', b'L', b'F', 1, 2, 1, 0]).unwrap();
-        let runtime = DynamipsRuntime::with_paths("dynamips", &image_dir, &state_dir);
-        let manifest = runtime_manifest_contents(&project_id, &node_id, 7200, 7201, None);
-        fs::write(working_dir.join(RUNTIME_MANIFEST_FILE), manifest).unwrap();
-        let node = json!({
-            "project_id": project_id,
-            "node_id": node_id,
-            "name": "R1",
-            "platform": "c7200",
-            "slot0": "C7200-IO-FE",
-            "image": image,
-            "ram": 256,
-            "nvram": 128,
-            "console": 7201,
-            "aux": null,
-            "runtime_hypervisor_port": 7200,
-            "runtime_working_dir": working_dir,
-            "runtime_log_file": working_dir.join("dynamips_stdout.log"),
-            "runtime_ghost_file": null
-        });
-        assert!(runtime.vm_from_node(&node).is_ok());
-        for (field, value) in [
-            ("runtime_working_dir", json!("/tmp/controller-victim")),
-            ("runtime_log_file", json!("/tmp/victim.log")),
-            ("runtime_hypervisor_port", json!(22)),
-            ("name", json!("R1\nvm clean_delete R2")),
-            ("image", json!("/etc/passwd.image")),
-        ] {
-            let mut imported = node.clone();
-            imported[field] = value;
-            assert!(
-                runtime.vm_from_node(&imported).is_err(),
-                "imported Dynamips field {field} was accepted"
-            );
-        }
-    }
-
-    #[test]
-    fn upload_names_cannot_escape_or_overwrite_the_image_directory() {
-        assert_eq!(safe_file_name("router.image").unwrap(), "router.image");
-        assert!(safe_file_name("../router.image").is_err());
-        assert!(safe_file_name("router image.image").is_err());
-    }
-
-    #[test]
-    fn requires_the_minimum_hypervisor_version_supported_by_gns3() {
-        assert!(!supported_dynamips_version("0.2.10"));
-        assert!(supported_dynamips_version("0.2.11"));
-        assert!(supported_dynamips_version("0.2.14-amd64/Linux stable"));
-        assert!(supported_dynamips_version("0.3.0"));
-        assert!(!supported_dynamips_version("unknown"));
-    }
-
-    #[test]
-    fn configures_a_real_gns3_cisco_3620_platform_with_ethernet_module() {
-        validate_platform_settings("c3600", Some("3620"), None).unwrap();
-        let vm = DynamipsVm {
-            node_id: "00000000-0000-0000-0000-00000000000a".to_owned(),
-            name: "R1".to_owned(),
-            platform: "c3600".to_owned(),
-            chassis: Some("3620".to_owned()),
-            slot0: "NM-1FE-TX".to_owned(),
-            image: PathBuf::from("/images/c3620.image"),
-            ram_mb: 192,
-            nvram: 256,
-            idle_pc: Some("0x603a8bac".to_owned()),
-            startup_config: String::new(),
-            working_dir: PathBuf::from("/tmp/router"),
-            hypervisor_port: 7200,
-            console_port: 7201,
-            aux_port: None,
-            log_file: PathBuf::from("/tmp/router/dynamips.log"),
-            options: super::DynamipsOptions::default(),
-            ghost_file: None,
-        };
-        let commands = router_initialization_commands(&vm);
-        assert_eq!(commands[0], "vm create \"R1\" 1 c3600");
-        assert!(commands.contains(&"vm set_nvram \"R1\" 256".to_owned()));
-        assert!(commands.contains(&"c3600 set_chassis \"R1\" 3620".to_owned()));
-        assert!(commands.contains(&"vm slot_add_binding \"R1\" 0 0 NM-1FE-TX".to_owned()));
-        assert!(commands.contains(&"vm set_idle_pc \"R1\" 0x603a8bac".to_owned()));
-        assert!(validate_platform_settings("c3600", Some("3600"), None).is_err());
-        assert!(validate_platform_settings("c3600", Some("3620"), Some("C7200-IO-FE")).is_err());
-    }
-
-    #[test]
-    fn platform_integrated_slot_zero_adapters_are_not_added_twice() {
-        let cases = [
-            ("c1700", Some("1720"), "C1700-MB-1FE", false),
-            ("c2600", Some("2651XM"), "C2600-MB-2FE", false),
-            ("c2691", None, "GT96100-FE", false),
-            ("c3600", Some("3660"), "Leopard-2FE", false),
-            ("c3725", None, "GT96100-FE", false),
-            ("c3745", None, "GT96100-FE", false),
-            // The c7200 IO controller and replaceable modules are attached
-            // explicitly after `vm create` by GNS3 and Dynamips.
-            ("c7200", None, "C7200-IO-FE", true),
-            ("c3600", Some("3620"), "NM-1FE-TX", true),
-        ];
-        for (platform, chassis, module, expect_binding) in cases {
-            let vm = DynamipsVm {
-                node_id: "00000000-0000-0000-0000-00000000000a".to_owned(),
-                name: "R1".to_owned(),
-                platform: platform.to_owned(),
-                chassis: chassis.map(str::to_owned),
-                slot0: module.to_owned(),
-                image: PathBuf::from("/images/router.image"),
-                ram_mb: 256,
-                nvram: 128,
-                idle_pc: None,
-                startup_config: String::new(),
-                working_dir: PathBuf::from("/tmp/router"),
-                hypervisor_port: 7200,
-                console_port: 7201,
-                aux_port: None,
-                log_file: PathBuf::from("/tmp/router/dynamips.log"),
-                options: DynamipsOptions::default(),
-                ghost_file: None,
-            };
-            let binding = format!("vm slot_add_binding \"R1\" 0 0 {module}");
-            assert_eq!(
-                router_initialization_commands(&vm)
-                    .iter()
-                    .any(|command| command == &binding),
-                expect_binding,
-                "unexpected slot zero binding for {platform} {chassis:?} {module}"
-            );
-            assert_eq!(
-                integrated_slot0(platform, chassis),
-                (!expect_binding).then_some(module)
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn exited_hypervisor_is_reported_stopped_and_reaped_during_cleanup() {
-        use tokio::process::Command;
-
-        let directory = tempfile::tempdir().unwrap();
-        let log_file = directory.path().join("dynamips_stdout.log");
-        let engine_log = directory.path().join("dynamips_engine.log");
-        fs::write(&log_file, b"closed hypervisor log").unwrap();
-        fs::write(&engine_log, b"closed hypervisor engine log").unwrap();
-        let mut child = Command::new("sh").args(["-c", "exit 0"]).spawn().unwrap();
-        child.wait().await.unwrap();
-
-        let runtime = DynamipsRuntime::with_paths(
-            "dynamips",
-            directory.path().join("images"),
-            directory.path().join("state"),
-        );
-        runtime.routers.lock().await.insert(
-            "dead-node".to_owned(),
-            ManagedRouter {
-                child,
-                hypervisor_port: 7200,
-                log_file: log_file.clone(),
-            },
-        );
-        runtime
-            .bindings
-            .lock()
-            .await
-            .insert("dead-node".to_owned(), 7202);
-        let vm = DynamipsVm {
-            node_id: "dead-node".to_owned(),
-            name: "R1".to_owned(),
-            platform: "c3725".to_owned(),
-            chassis: None,
-            slot0: "GT96100-FE".to_owned(),
-            image: directory.path().join("router.image"),
-            ram_mb: 128,
-            nvram: 256,
-            idle_pc: None,
-            startup_config: String::new(),
-            working_dir: directory.path().join("state/router"),
-            hypervisor_port: 7200,
-            console_port: 7201,
-            aux_port: None,
-            log_file: log_file.clone(),
-            options: DynamipsOptions::default(),
-            ghost_file: None,
-        };
-
-        assert_eq!(runtime.status(&vm).await.unwrap(), "stopped");
-        assert_eq!(
-            runtime
-                .lifecycle(&vm, crate::runtime::NodeAction::Stop)
-                .await
-                .unwrap(),
-            "stopped"
-        );
-        assert!(!runtime.routers.lock().await.contains_key("dead-node"));
-        assert!(!runtime.bindings.lock().await.contains_key("dead-node"));
-        assert!(!log_file.exists());
-        assert!(!engine_log.exists());
-    }
-
-    #[test]
-    fn dynamips_launch_commands_apply_platform_hardware_and_runtime_settings() {
-        let directory = tempfile::tempdir().unwrap();
-        let ghost = directory.path().join("router.image-512.ghost");
-        fs::write(&ghost, b"ghost cache").unwrap();
-        let options = DynamipsOptions {
-            dynamips_id: 42,
-            clock_divisor: 16,
-            mmap: true,
-            sparsemem: false,
-            idlemax: 900,
-            idlesleep: 80,
-            exec_area: 128,
-            disk0: 256,
-            disk1: 512,
-            auto_delete_disks: true,
-            mac_addr: Some("aabb.ccdd.eeff".to_owned()),
-            system_id: Some("FTX0945W0MY".to_owned()),
-            slots: vec![
-                Some("C7200-IO-FE".to_owned()),
-                Some("PA-4E".to_owned()),
-                None,
-                None,
-                None,
-                None,
-                None,
-            ],
-            wics: vec![Some("WIC-1T".to_owned()), None, None],
-            npe: Some("npe-200".to_owned()),
-            midplane: Some("std".to_owned()),
-            iomem: None,
-            ghost_ios: true,
-            ..DynamipsOptions::default()
-        };
-        validate_dynamips_options("c7200", None, Some("C7200-IO-FE"), &options).unwrap();
-        let vm = DynamipsVm {
-            node_id: "00000000-0000-0000-0000-00000000000a".to_owned(),
-            name: "R42".to_owned(),
-            platform: "c7200".to_owned(),
-            chassis: None,
-            slot0: "C7200-IO-FE".to_owned(),
-            image: PathBuf::from("/images/router.image"),
-            ram_mb: 512,
-            nvram: 512,
-            idle_pc: Some("0x603a8bac".to_owned()),
-            startup_config: String::new(),
-            working_dir: directory.path().join("router"),
-            hypervisor_port: 7200,
-            console_port: 7201,
-            aux_port: None,
-            log_file: directory.path().join("router/dynamips.log"),
-            options,
-            ghost_file: Some(ghost.clone()),
-        };
-        assert_eq!(
-            router_start_idlepc_command(&vm).as_deref(),
-            Some("vm set_idle_pc \"R42\" 0x603a8bac")
-        );
-        let mut no_selected_idlepc = vm.clone();
-        no_selected_idlepc.idle_pc = None;
-        assert_eq!(router_start_idlepc_command(&no_selected_idlepc), None);
-        let commands = router_initialization_commands(&vm);
-        assert_eq!(
-            ghost_router_initialization_commands(&vm, &ghost),
-            vec![
-                "vm create \"Ghost\" 0 c7200".to_owned(),
-                "vm set_ios \"Ghost\" \"/images/router.image\"".to_owned(),
-                "vm set_ghost_status \"Ghost\" 1".to_owned(),
-                format!("vm set_ghost_file \"Ghost\" \"{}\"", ghost.display()),
-                "vm set_ram \"Ghost\" 512".to_owned(),
-            ]
-        );
-        for expected in [
-            "vm create \"R42\" 42 c7200",
-            "vm set_clock_divisor \"R42\" 16",
-            "vm set_ram_mmap \"R42\" 1",
-            "vm set_sparse_mem \"R42\" 0",
-            "vm set_exec_area \"R42\" 128",
-            "vm set_disk0 \"R42\" 256",
-            "vm set_disk1 \"R42\" 512",
-            "c7200 set_npe \"R42\" npe-200",
-            "c7200 set_midplane \"R42\" std",
-            "c7200 set_mac_addr \"R42\" aabb.ccdd.eeff",
-            "c7200 set_system_id \"R42\" FTX0945W0MY",
-            "vm slot_add_binding \"R42\" 1 0 PA-4E",
-            "vm slot_add_binding \"R42\" 0 16 WIC-1T",
-            "vm set_ghost_status \"R42\" 2",
-        ] {
-            assert!(
-                commands.iter().any(|command| command == expected),
-                "missing {expected}"
-            );
-        }
-        assert!(
-            commands
-                .iter()
-                .any(|command| command.contains(&ghost.display().to_string()))
-        );
-        assert_eq!(
-            router_start_settings_commands(&vm)
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            [
-                "vm set_idle_max \"R42\" 0 900",
-                "vm set_idle_sleep_time \"R42\" 0 80"
-            ]
-        );
-    }
-
-    #[test]
-    fn accepts_every_upstream_dynamips_platform_and_chassis_family() {
-        for platform in [
-            "c1700", "c2600", "c2691", "c3600", "c3725", "c3745", "c7200",
-        ] {
-            let chassis = match platform {
-                "c1700" => Some("1760"),
-                "c2600" => Some("2651XM"),
-                "c3600" => Some("3660"),
-                _ => None,
-            };
-            validate_platform_settings(platform, chassis, None).unwrap();
-        }
-        assert_eq!(default_slot0("c3600", Some("3660")), Some("Leopard-2FE"));
-        assert_eq!(default_slot0("c2600", Some("2651XM")), Some("C2600-MB-2FE"));
-        validate_platform_settings("c2600", Some("2611"), None).unwrap();
-    }
-
-    #[test]
-    fn auto_delete_disks_removes_only_hypervisor_artifacts() {
-        let directory = tempfile::tempdir().unwrap();
-        let disk = directory.path().join("c7200_i42_disk0");
-        let nvram = directory.path().join("c7200_i42_nvram");
-        let startup = directory.path().join("configs/i42_startup-config.cfg");
-        fs::create_dir_all(startup.parent().unwrap()).unwrap();
-        fs::write(&disk, b"disk").unwrap();
-        fs::write(&nvram, b"nvram").unwrap();
-        fs::write(&startup, b"hostname R42\n").unwrap();
-
-        remove_auto_delete_disk_files(directory.path(), "c7200", 42).unwrap();
-
-        assert!(!disk.exists());
-        assert!(!nvram.exists());
-        assert!(startup.exists());
-    }
-
-    #[test]
-    fn removes_only_empty_dynamips_runtime_directories() {
-        let directory = tempfile::tempdir().unwrap();
-        let project = directory.path().join("project");
-        let working = project.join("node");
-        fs::create_dir_all(working.join("configs")).unwrap();
-
-        remove_empty_runtime_directories(&working).unwrap();
-        assert!(!project.exists());
-
-        fs::create_dir_all(working.join("configs")).unwrap();
-        let nvram = working.join("c7200_i1_nvram");
-        fs::write(&nvram, b"preserve").unwrap();
-        remove_empty_runtime_directories(&working).unwrap();
-        assert!(working.exists());
-        assert!(nvram.exists());
-        assert!(!working.join("configs").exists());
-    }
-
-    #[test]
-    fn removes_deleted_node_configs_without_touching_virtual_disks() {
-        let directory = tempfile::tempdir().unwrap();
-        let configs = directory.path().join("configs");
-        let startup = configs.join("i1_startup-config.cfg");
-        let disk = directory.path().join("c7200_i1_disk0");
-        fs::create_dir_all(&configs).unwrap();
-        fs::write(&startup, b"hostname R1\n").unwrap();
-        fs::write(&disk, b"preserve virtual disk").unwrap();
-
-        remove_generated_runtime_configs(directory.path()).unwrap();
-
-        assert!(!configs.exists());
-        assert!(disk.exists());
-    }
-
-    #[tokio::test]
-    #[ignore = "requires the real Dynamips executable; set NETWORK_SIMULATOR_TEST_DYNAMIPS and run with --ignored"]
-    async fn upstream_dynamips_creates_and_reports_a_real_c7200_hypervisor_instance() {
-        let binary = env::var_os("NETWORK_SIMULATOR_TEST_DYNAMIPS")
-            .expect("NETWORK_SIMULATOR_TEST_DYNAMIPS points to upstream Dynamips");
-        let directory = tempfile::tempdir().unwrap();
-        let runtime = DynamipsRuntime::with_paths(
-            binary,
-            directory.path().join("ios"),
-            directory.path().join("state"),
-        );
-        fs::create_dir_all(directory.path().join("ios")).unwrap();
-        let working_dir = directory.path().join("state/c7200-probe");
-        fs::create_dir_all(&working_dir).unwrap();
-        let vm = super::DynamipsVm {
-            node_id: "00000000-0000-0000-0000-00000000000a".to_owned(),
-            name: "R1".to_owned(),
-            platform: "c7200".to_owned(),
-            chassis: None,
-            slot0: "C7200-IO-FE".to_owned(),
-            image: directory.path().join("IOS image supplied by the operator"),
-            ram_mb: 256,
-            nvram: 128,
-            idle_pc: None,
-            startup_config: String::new(),
-            working_dir: working_dir.clone(),
-            hypervisor_port: super::available_tcp_port().await.unwrap(),
-            console_port: super::available_tcp_port().await.unwrap(),
-            aux_port: None,
-            log_file: working_dir.join("dynamips.log"),
-            options: super::DynamipsOptions::default(),
-            ghost_file: None,
-        };
-        let router = runtime
-            .spawn_hypervisor(&vm)
-            .await
-            .expect("real Dynamips hypervisor starts");
-        runtime
-            .routers
-            .lock()
-            .await
-            .insert(vm.node_id.clone(), router);
-        runtime
-            .send(vm.hypervisor_port, "hypervisor version")
-            .await
-            .unwrap();
-        runtime
-            .send(
-                vm.hypervisor_port,
-                &format!(
-                    "hypervisor working_dir {}",
-                    super::quote(&working_dir.display().to_string())
-                ),
-            )
-            .await
-            .unwrap();
-        runtime
-            .send(
-                vm.hypervisor_port,
-                &format!("vm create {} 1 c7200", super::quote(&vm.name)),
-            )
-            .await
-            .unwrap();
-        runtime
-            .send(
-                vm.hypervisor_port,
-                &format!(
-                    "vm slot_add_binding {} 0 0 C7200-IO-FE",
-                    super::quote(&vm.name)
-                ),
-            )
-            .await
-            .unwrap();
-        assert_eq!(runtime.status(&vm).await.unwrap(), "stopped");
-        let switch_socket = tokio::net::UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
-            .await
-            .unwrap();
-        let switch_port = switch_socket.local_addr().unwrap().port();
-        let router_udp_port = runtime
-            .switch_endpoint(&vm, 0, 0, switch_port)
-            .await
-            .unwrap();
-        assert_ne!(router_udp_port, 0);
-        runtime.remove_switch_endpoint(&vm).await.unwrap();
-        runtime
-            .send(
-                vm.hypervisor_port,
-                &format!("vm clean_delete {}", super::quote(&vm.name)),
-            )
-            .await
-            .unwrap();
-        runtime.stop_process(&vm).await.unwrap();
-    }
-
-    #[tokio::test]
-    #[ignore = "requires the installed Cisco 3620 IOS image and Dynamips; set NETWORK_SIMULATOR_TEST_DYNAMIPS and NETWORK_SIMULATOR_TEST_C3600_IMAGE"]
-    async fn upstream_dynamips_boots_a_cisco_3620_and_binds_its_fast_ethernet_port() {
-        use crate::runtime::NodeAction;
-
-        let binary = env::var_os("NETWORK_SIMULATOR_TEST_DYNAMIPS")
-            .expect("NETWORK_SIMULATOR_TEST_DYNAMIPS points to upstream Dynamips");
-        let image = env::var_os("NETWORK_SIMULATOR_TEST_C3600_IMAGE")
-            .expect("NETWORK_SIMULATOR_TEST_C3600_IMAGE points to a Cisco 3620 IOS image");
-        let image = PathBuf::from(image);
-        let image_directory = image.parent().expect("IOS image has a parent directory");
-        let directory = tempfile::tempdir().unwrap();
-        let runtime =
-            DynamipsRuntime::with_paths(binary, image_directory, directory.path().join("state"));
-        let project_id = "00000000-0000-0000-0000-00000000000b";
-        let node_id = "00000000-0000-0000-0000-00000000000c";
-        let vm = runtime
-            .create_router(
-                project_id,
-                node_id,
-                "R3620",
-                image.to_str().unwrap(),
-                "c3600",
-                Some("3620"),
-                Some("NM-1FE-TX"),
-                192,
-                256,
-                Some("0x603a8bac"),
-                "hostname R3620\n",
-            )
-            .await
-            .expect("Dynamips creates the c3600/3620 router and Fast Ethernet module");
-
-        let exercise = async {
-            runtime.lifecycle(&vm, NodeAction::Start).await?;
-            let switch_socket =
-                tokio::net::UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
-                    .await
-                    .map_err(|error| super::RuntimeError::Unavailable(error.to_string()))?;
-            let switch_port = switch_socket.local_addr().unwrap().port();
-            runtime.switch_endpoint(&vm, 0, 0, switch_port).await?;
-            runtime.remove_switch_endpoint(&vm).await?;
-            Ok::<(), super::RuntimeError>(())
-        }
-        .await;
-        let cleanup = runtime.remove_router(&vm).await;
-        cleanup.expect("the Dynamips hypervisor and temporary node files are removed");
-        exercise.expect("the Cisco 3620 IOS image boots under Dynamips and exposes Ethernet");
-    }
-}
+#[path = "dynamips/tests.rs"]
+mod tests;

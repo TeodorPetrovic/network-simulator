@@ -83,6 +83,18 @@ describe("PAGES parity routes", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("Imported “Imported lab”.");
   });
 
+  it("lets a user create a README when the project has no README file yet", async () => {
+    vi.mocked(api.projectReadme).mockResolvedValue({ content: "" });
+    vi.mocked(api.updateProjectReadme).mockResolvedValue(undefined);
+    renderPage(ProjectsPage);
+    fireEvent.click(await screen.findByRole("button", { name: "Readme for Core lab" }));
+    const content = await screen.findByRole("textbox", { name: "Project readme content" });
+    fireEvent.change(content, { target: { value: "First project notes" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save readme" }));
+    await waitFor(() => expect(api.updateProjectReadme).toHaveBeenCalledWith("project-1", "First project notes"));
+    expect(await screen.findByRole("status")).toHaveTextContent("Project readme saved.");
+  });
+
   it("shows unsupported runtime states and labels non-consumed template fields", async () => {
     vi.mocked(api.templates).mockResolvedValue([qemuTemplate]);
     renderPage(PreferencesPage);

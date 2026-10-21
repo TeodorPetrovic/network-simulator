@@ -19,6 +19,11 @@ use tokio::{
 
 use crate::runtime::RuntimeError;
 
+mod bridge_forwarding;
+
+#[cfg(test)]
+mod live_tests;
+
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_REPLY_BYTES: usize = 256 * 1024;
@@ -418,6 +423,10 @@ impl UbridgeRuntime {
             ))
             .await?;
             self.command(&format!("bridge start {bridge}")).await?;
+            bridge_forwarding::enable_edge_forwarding(
+                host_bridge_tap.as_ref().map(|(_, tap)| tap.as_str()),
+            )
+            .await?;
             self.apply_link_filters(&bridge, filters, suspended).await?;
             if let Some(path) = capture_file {
                 self.command(&format!(

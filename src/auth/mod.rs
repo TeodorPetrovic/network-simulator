@@ -34,6 +34,8 @@ use uuid::Uuid;
 
 use super::AppState;
 
+mod acl;
+
 const ACCESS_TTL: u64 = 60 * 60;
 const REFRESH_TTL: u64 = 7 * 24 * 60 * 60;
 const WS_TICKET_TTL: u64 = 60;
@@ -56,7 +58,7 @@ struct LoginAttempt {
 }
 
 #[derive(Clone, Debug)]
-struct Principal {
+pub(crate) struct Principal {
     user_id: String,
     is_superadmin: bool,
     must_change_password: bool,
@@ -165,7 +167,6 @@ pub(crate) async fn initialize(
             .execute(pool)
             .await?;
         }
-        println!("Initial administrator password for {username}: {password}");
         tracing::warn!(%username, password_file = %initial_password_path.display(), "Created or recovered an active bootstrap administrator; change the initial password after login");
     }
     Ok(())
@@ -676,7 +677,13 @@ async fn auth_gate(
         }
         RouteClass::PrincipalScoped => {}
         RouteClass::Privilege(required) => {
-            if !has_privilege(state.store.pool(), &principal, normalized, required).await {
+            // The collection handler applies Project.Audit to each row. A
+            // project-specific ACE must still let a student open the list.
+            let project_collection =
+                request.method() == axum::http::Method::GET && normalized == "/projects";
+            if !project_collection
+                && !has_privilege(state.store.pool(), &principal, normalized, required).await
+            {
                 return AuthError::forbidden(format!(
                     "Permission denied (privilege {required} is required)"
                 ))
@@ -1507,94 +1514,33 @@ async fn has_privilege(
     if principal.is_superadmin {
         return true;
     }
-    let mut aces = direct_user_aces(pool, &principal.user_id, privilege).await;
-    aces.extend(group_aces(pool, &principal.user_id, privilege).await);
-    if let Some(result) = evaluate_acl(path, &aces) {
-        return result;
-    }
-    pool_access_decision(pool, path, &aces)
-        .await
-        .unwrap_or(false)
-}
-
-type AclTuple = (String, bool, bool);
-
-async fn direct_user_aces(pool: &SqlitePool, user_id: &str, privilege: &str) -> Vec<AclTuple> {
-    let rows = sqlx::query("SELECT a.path, a.propagate, a.allowed FROM auth_acl a JOIN auth_role_privileges rp ON rp.role_id = a.role_id JOIN auth_privileges p ON p.privilege_id = rp.privilege_id WHERE a.ace_type = 'user' AND a.user_id = ? AND p.name = ? ORDER BY length(a.path) DESC")
-        .bind(user_id).bind(privilege).fetch_all(pool).await.unwrap_or_default();
-    rows.into_iter().map(row_acl_tuple).collect()
-}
-
-async fn group_aces(pool: &SqlitePool, user_id: &str, privilege: &str) -> Vec<AclTuple> {
-    let rows = sqlx::query("SELECT DISTINCT a.path, a.propagate, a.allowed FROM auth_acl a JOIN auth_user_groups m ON m.user_group_id = a.group_id JOIN auth_role_privileges rp ON rp.role_id = a.role_id JOIN auth_privileges p ON p.privilege_id = rp.privilege_id WHERE a.ace_type = 'group' AND m.user_id = ? AND p.name = ? ORDER BY length(a.path) DESC")
-        .bind(user_id).bind(privilege).fetch_all(pool).await.unwrap_or_default();
-    rows.into_iter().map(row_acl_tuple).collect()
-}
-
-fn row_acl_tuple(row: sqlx::sqlite::SqliteRow) -> AclTuple {
-    (row.get("path"), row.get("propagate"), row.get("allowed"))
-}
-
-async fn pool_access_decision(pool: &SqlitePool, path: &str, aces: &[AclTuple]) -> Option<bool> {
-    let Some(project_id) = project_id_from_path(path) else {
-        return None;
-    };
-    let pool_ids: Vec<String> = sqlx::query_scalar("SELECT m.resource_pool_id FROM resource_pool_map m JOIN resources r ON r.resource_id = m.resource_id WHERE r.resource_type = 'project' AND r.resource_id = ?")
-        .bind(project_id).fetch_all(pool).await.unwrap_or_default();
-    let mut denied = false;
-    for pool_id in pool_ids {
-        let root = format!("/pools/{pool_id}");
-        let resource = format!("{root}/resources/{project_id}");
-        let relevant = aces
-            .iter()
-            .filter(|(ace_path, _, _)| {
-                let ace_path = normalize_acl_path(ace_path);
-                ace_path == root || ace_path == resource
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        if let Some(allowed) = evaluate_acl(&resource, &relevant) {
-            if allowed {
-                return Some(true);
-            }
-            denied = true;
+    let path = acl::canonical_resource_path(path);
+    match acl::privilege_decision(pool, &principal.user_id, &path, privilege).await {
+        Ok(decision) => decision,
+        Err(error) => {
+            tracing::error!(%error, %path, privilege, "could not evaluate access control entries");
+            false
         }
     }
-    denied.then_some(false)
 }
 
+pub(crate) async fn can_audit_project(
+    pool: &SqlitePool,
+    principal: &Principal,
+    project_id: &str,
+) -> bool {
+    has_privilege(
+        pool,
+        principal,
+        &format!("/projects/{project_id}"),
+        "Project.Audit",
+    )
+    .await
+}
+
+#[cfg(test)]
 fn evaluate_acl(path: &str, aces: &[(String, bool, bool)]) -> Option<bool> {
-    let path = normalize_acl_path(path);
-    let mut applicable = aces
-        .iter()
-        .filter(|(ace_path, _, _)| {
-            let ace_path = normalize_acl_path(ace_path);
-            path == ace_path
-                || path
-                    .strip_prefix(&ace_path)
-                    .is_some_and(|suffix| ace_path == "/" || suffix.starts_with('/'))
-        })
-        .collect::<Vec<_>>();
-    applicable.sort_by_key(|(ace_path, _, allowed)| {
-        (
-            std::cmp::Reverse(normalize_acl_path(ace_path).len()),
-            *allowed,
-            normalize_acl_path(ace_path),
-        )
-    });
-    for (ace_path, propagate, allowed) in applicable {
-        let ace_path = normalize_acl_path(ace_path);
-        if path == ace_path {
-            return Some(*allowed);
-        }
-        if !*allowed {
-            return Some(false);
-        }
-        if *propagate {
-            return Some(true);
-        }
-    }
-    None
+    acl::evaluate_acl(path, aces)
 }
 
 fn normalize_acl_path(path: &str) -> String {
@@ -1609,15 +1555,6 @@ fn normalize_acl_path(path: &str) -> String {
         path.pop();
     }
     path
-}
-
-fn project_id_from_path(path: &str) -> Option<&str> {
-    let mut segments = path.split('/').filter(|segment| !segment.is_empty());
-    if segments.next()? == "projects" {
-        segments.next()
-    } else {
-        None
-    }
 }
 
 fn url_query_value(query: &str, name: &str) -> Option<String> {

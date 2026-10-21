@@ -388,7 +388,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
     }
     const index = topology.nodes.length;
     const position = { x: x ?? -420 + (index % 5) * 180, y: y ?? -220 + Math.floor(index / 5) * 150 };
-    const name = generatedNodeName(template, topology.nodes, pendingNodeNames.current);
+    const name = template.template_type === "dynamips" ? generatedNodeName(template, topology.nodes, pendingNodeNames.current).replace(/[^a-zA-Z0-9._-]/g, "") : generatedNodeName(template, topology.nodes, pendingNodeNames.current);
     pendingNodeNames.current.add(name);
     try {
       const node = await api.createNodeFromTemplate(projectId, templateId, {
@@ -396,7 +396,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
         ...position,
         ...(template.template_type === "docker" && template.start_command ? { start_command: template.start_command } : {}),
         ...(template.template_type === "vpcs" && template.startup_script ? { startup_script: template.startup_script } : {}),
-        ...(template.template_type === "dynamips" && template.idlepc ? { idlepc: template.idlepc } : {}),
+        ...(template.template_type === "dynamips" ? { idlepc: template.idlepc, mmap: template.mmap ?? true, sparsemem: template.sparsemem ?? true, auto_delete_disks: template.auto_delete_disks ?? false, ghost_ios: template.ghost_ios ?? false, console_auto_start: template.console_auto_start ?? false } : {}),
       });
       setTopology((current) => current ? { ...current, nodes: upsertNode(current.nodes, node) } : current);
       setSelection({ kind: "node", id: node.node_id });

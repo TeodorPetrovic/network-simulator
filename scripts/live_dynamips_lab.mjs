@@ -5,6 +5,8 @@
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { execFileSync } from "node:child_process";
 
@@ -13,6 +15,21 @@ const results = [];
 let projectId;
 const consoles = new Set();
 const runtimeDirectories = new Set();
+const dynamipsImageDir = process.env.NETWORK_SIMULATOR_DYNAMIPS_IMAGES
+  ?? path.join(process.env.NETWORK_SIMULATOR_IMAGE_HOME
+    ?? path.join(os.homedir(), ".local/share/network-simulator/images"), "dynamips");
+
+const familyCases = [
+  { family: "c1700", platform: "c1700", chassis: "1720", prefixes: ["c1700-", "ishare-1-c1710-"], ram: 160, nvram: 128, slot0: "C1700-MB-1FE", idlepc: "0x80358a60", iomem: 15, sparsemem: false },
+  { family: "c2600", platform: "c2600", chassis: "2610", prefixes: ["c2600-", "ishare-3-c2600-"], ram: 160, nvram: 128, slot0: "C2600-MB-1E", idlepc: "0x8027ec88", iomem: 15, sparsemem: false },
+  { family: "c2691", platform: "c2691", prefixes: ["c2691-", "ishare-6-c2691-"], ram: 192, nvram: 256, slot0: "GT96100-FE", idlepc: "0x60bcf9f8", iomem: 5, sparsemem: true },
+  { family: "c3620", platform: "c3600", chassis: "3620", prefixes: ["c3620-"], ram: 192, nvram: 256, slot0: "NM-1FE-TX", idlepc: "0x603a8bac", iomem: 5, sparsemem: true },
+  { family: "c3640", platform: "c3600", chassis: "3640", prefixes: ["c3640-", "ishare-8-c3640-"], ram: 192, nvram: 256, slot0: "NM-1FE-TX", idlepc: "0x6050b114", iomem: 5, sparsemem: true },
+  { family: "c3660", platform: "c3600", chassis: "3660", prefixes: ["c3660-", "ishare-10-c3660-"], ram: 192, nvram: 256, slot0: "Leopard-2FE", idlepc: "0x6076e0b4", iomem: 5, sparsemem: true },
+  { family: "c3725", platform: "c3725", prefixes: ["c3725-", "ishare-16-c3725-"], ram: 128, nvram: 256, slot0: "GT96100-FE", idlepc: "0x60c09aa0", iomem: 5, sparsemem: true },
+  { family: "c3745", platform: "c3745", prefixes: ["c3745-", "ishare-17-c3745-"], ram: 256, nvram: 256, slot0: "GT96100-FE", slot1: "NM-1FE-TX", slot2: "NM-4T", wic0: "WIC-1T", wic1: "WIC-1T", wic2: "WIC-1T", idlepc: "0x60aa1da0", iomem: 5, sparsemem: true },
+  { family: "c7200", platform: "c7200", prefixes: ["c7200-", "ishare-22-c7200-"], ram: 512, nvram: 512, slot0: "C7200-IO-FE", npe: "npe-400", midplane: "vxr", idlepc: "0x6066a998", sparsemem: true },
+];
 
 async function api(path, { method = "GET", body } = {}) {
   const response = await fetch(`${base}${path}`, {
@@ -182,12 +199,52 @@ async function pingVpcs(console, address) {
   return output;
 }
 
-async function createNodeFromTemplate(project, templates, platform, name) {
-  const template = templates.find((candidate) => candidate.template_type === "dynamips" && candidate.platform === platform);
-  assert.ok(template, `no imported Dynamips appliance template for ${platform}`);
-  const node = await api(`/v3/projects/${project}/templates/${template.template_id}`, {
-    method: "POST", body: { name, x: 0, y: 0 },
-  });
+function imageForFamily(config) {
+  const fileName = fs.readdirSync(dynamipsImageDir).find((candidate) =>
+    candidate.endsWith(".image") && config.prefixes.some((prefix) => candidate.startsWith(prefix)));
+  assert.ok(fileName, `no IOS image for ${config.family} in ${dynamipsImageDir}`);
+  return path.join(dynamipsImageDir, fileName);
+}
+
+async function createDynamipsNode(project, config, name) {
+  const body = {
+    node_type: "dynamips",
+    name,
+    x: 0,
+    y: 0,
+    image: imageForFamily(config),
+    platform: config.platform,
+    chassis: config.chassis,
+    ram: config.ram,
+    nvram: config.nvram,
+    idlepc: config.idlepc,
+    slot0: config.slot0,
+    slot1: config.slot1,
+    slot2: config.slot2,
+    slot3: config.slot3,
+    slot4: config.slot4,
+    wic0: config.wic0,
+    wic1: config.wic1,
+    wic2: config.wic2,
+    npe: config.npe,
+    midplane: config.midplane,
+    iomem: config.iomem,
+    mmap: true,
+    sparsemem: config.sparsemem,
+    clock_divisor: 8,
+    idlemax: 500,
+    idlesleep: 30,
+    exec_area: 64,
+    disk0: 0,
+    disk1: 0,
+    ghost_ios: false,
+    console_type: "telnet",
+    aux_type: "none",
+    startup_config: "",
+    adapters: 1,
+  };
+  for (const key of Object.keys(body)) if (body[key] === undefined) delete body[key];
+  const node = await api(`/v3/projects/${project}/nodes`, { method: "POST", body });
   if (node.runtime_working_dir) runtimeDirectories.add(node.runtime_working_dir);
   return node;
 }
@@ -246,15 +303,16 @@ async function main() {
   const health = await api("/healthz");
   assert.equal(health.status, "ok");
   const templates = await api("/v3/templates");
-  for (const platform of ["c3600", "c3725", "c7200"]) {
-    assert.ok(templates.some((entry) => entry.template_type === "dynamips" && entry.platform === platform), `missing ${platform} appliance template`);
-  }
-
   const project = await api("/v3/projects", { method: "POST", body: { name: `Live IOS lab ${new Date().toISOString()}` } });
   projectId = project.project_id;
-  const r1 = await createNodeFromTemplate(projectId, templates, "c3725", "R1");
-  const r2 = await createNodeFromTemplate(projectId, templates, "c7200", "R2");
-  const r3 = await createNodeFromTemplate(projectId, templates, "c3600", "R3");
+
+  const routers = new Map();
+  for (const config of familyCases) {
+    routers.set(config.family, await createDynamipsNode(projectId, config, config.family.toUpperCase()));
+  }
+  const r1 = routers.get("c3725");
+  const r2 = routers.get("c7200");
+  const r3 = routers.get("c3620");
   const v1 = await api(`/v3/projects/${projectId}/nodes`, { method: "POST", body: { node_type: "vpcs", name: "VPC1", adapters: 1 } });
   await setStartupAddress(projectId, r1, "10.20.0.1", "255.255.255.252");
   await setStartupAddress(projectId, r2, "10.20.0.2", "255.255.255.252");
@@ -263,43 +321,61 @@ async function main() {
   await createLink(projectId, endpoint(r3), endpoint(v1));
 
   const routerConsoles = new Map();
-  const bootOnly = process.env.NETWORK_SIMULATOR_LIVE_BOOT_ONLY;
-  const bootTargets = bootOnly
-    ? [new Map([["c3725", r1], ["c7200", r2], ["c3600", r3]]).get(bootOnly)].filter(Boolean)
-    : [r1, r2];
-  assert.ok(bootTargets.length > 0, `unknown NETWORK_SIMULATOR_LIVE_BOOT_ONLY platform: ${bootOnly}`);
-  for (const router of bootTargets) {
+  for (const config of familyCases) {
+    const router = routers.get(config.family);
     await api(`/v3/projects/${projectId}/nodes/${router.node_id}/start`, { method: "POST" });
-    routerConsoles.set(router.node_id, await bootIos(projectId, router));
+    let console = await bootIos(projectId, router);
+    await sleep(4000);
+    const cpuBefore = await sampleDynamipsCpu(router.runtime_hypervisor_port, 5000);
+    let proposals;
+    let automatic;
+    if (config.family === "c3725") {
+      proposals = await api(`/v3/projects/${projectId}/nodes/${router.node_id}/dynamips/idlepc_proposals`);
+      assert.ok(Array.isArray(proposals) && proposals.length > 0, "Dynamips returned no Idle-PC proposals");
+    }
+    if (config.family === "c3725" || cpuBefore >= 10) {
+      automatic = await api(`/v3/projects/${projectId}/nodes/${router.node_id}/dynamips/auto_idlepc`);
+      assert.match(automatic.idlepc, /^0x[0-9a-f]+$/i);
+      await sleep(1000);
+    }
+    const cpuAfter = automatic
+      ? await sampleDynamipsCpu(router.runtime_hypervisor_port, 5000)
+      : cpuBefore;
+    assert.ok(cpuAfter < 10, `${config.family} idle-PC CPU was ${cpuAfter}% of one core after apply`);
+    record(
+      `IOS boot ${config.family}`,
+      `IOS prompt reached; image=${path.basename(router.image)}; idlepc=${automatic?.idlepc ?? router.idlepc ?? "unset"}; process CPU=${cpuAfter}% of one core${automatic ? ` (before auto-selection ${cpuBefore}%)` : ""}`,
+    );
+
+    if (automatic) {
+      const persisted = await api(`/v3/projects/${projectId}/nodes/${router.node_id}`);
+      assert.equal(persisted.idlepc, automatic.idlepc, `${config.family} auto-selected Idle-PC was not persisted`);
+    }
+    if (config.family === "c3725") {
+      const selected = automatic?.idlepc ?? router.idlepc;
+      assert.ok(selected, "c3725 must have an Idle-PC value");
+      await api(`/v3/projects/${projectId}/nodes/${router.node_id}/stop`, { method: "POST" });
+      console.close();
+      await api(`/v3/projects/${projectId}/nodes/${router.node_id}/start`, { method: "POST" });
+      console = await bootIos(projectId, router);
+      await sleep(5000);
+      const restartedCpu = await sampleDynamipsCpu(router.runtime_hypervisor_port, 8000);
+      assert.ok(restartedCpu < 10, `c3725 persisted Idle-PC CPU was ${restartedCpu}% after restart`);
+      routerConsoles.set(router.node_id, console);
+      record("Idle-PC restart persistence", `selected=${selected}; persisted router CPU=${restartedCpu}% of one core after restart`);
+    } else if (["c3725", "c7200", "c3620"].includes(config.family)) {
+      routerConsoles.set(router.node_id, console);
+    } else {
+      console.close();
+      await api(`/v3/projects/${projectId}/nodes/${router.node_id}/stop`, { method: "POST" });
+    }
   }
-  if (bootOnly) {
-    record("focused IOS boot", `${bootOnly} template reached the IOS CLI`);
-    return;
-  }
+
   for (const router of [r1, r2]) await iosCommand(routerConsoles.get(router.node_id), "enable", /#\s*$/m);
   let output = await iosPing(routerConsoles.get(r1.node_id), "10.20.0.2");
   assert.match(output, /Success rate is\s+100 percent/i, "router-to-router ping failed");
   record("router-to-router ping", "c3725 ↔ c7200, 5/5 IOS probes");
-
-  const proposals = await api(`/v3/projects/${projectId}/nodes/${r1.node_id}/dynamips/idlepc_proposals`);
-  assert.ok(Array.isArray(proposals) && proposals.length > 0, "Dynamips returned no Idle-PC proposals");
-  const automatic = await api(`/v3/projects/${projectId}/nodes/${r1.node_id}/dynamips/auto_idlepc`);
-  assert.match(automatic.idlepc, /^0x[0-9a-f]+$/i);
-  const persistedIdlePc = await api(`/v3/projects/${projectId}/nodes/${r1.node_id}`);
-  assert.equal(persistedIdlePc.idlepc, automatic.idlepc, "auto-selection route must persist the chosen Idle-PC");
-  const cpuBefore = await sampleDynamipsCpu(r1.runtime_hypervisor_port);
-  assert.ok(cpuBefore < 50, `selected Idle-PC CPU remained high before restart (${cpuBefore}%)`);
-  await api(`/v3/projects/${projectId}/nodes/${r1.node_id}/stop`, { method: "POST" });
-  await api(`/v3/projects/${projectId}/nodes/${r1.node_id}/start`, { method: "POST" });
-  routerConsoles.get(r1.node_id).close();
-  routerConsoles.set(r1.node_id, await bootIos(projectId, r1));
   await iosCommand(routerConsoles.get(r1.node_id), "enable", /#\s*$/m);
-  // Let IOS finish its console/login work before measuring steady-state
-  // process CPU; the persisted value is applied during router startup.
-  await sleep(5000);
-  const cpuAfter = await sampleDynamipsCpu(r1.runtime_hypervisor_port, 8000);
-  assert.ok(cpuAfter < 50, `persisted Idle-PC CPU remained high after restart (${cpuAfter}%)`);
-  record("Idle-PC", `proposals=${proposals.length}, selected=${automatic.idlepc}, persisted and restarted; Dynamips process CPU before=${cpuBefore}% after=${cpuAfter}%`);
 
   // Exercise deletion and recreation while both router hypervisors are live.
   await api(`/v3/projects/${projectId}/links/${l1.link_id}`, { method: "DELETE" });
@@ -327,7 +403,7 @@ async function main() {
   assert.match(vpcsPing, /(?:bytes from|icmp_seq=|reply from)/i, "VPCS did not report router ping response");
   output = await iosPing(r3Console, "10.30.0.2");
   assert.match(output, /Success rate is\s+100 percent/i, "router-to-VPCS ping failed");
-  record("router-to-VPCS ping", "c3600 ↔ VPCS, IOS and VPCS console probes succeeded");
+  record("router-to-VPCS ping", "c3600/3620 ↔ VPCS, IOS and VPCS console probes succeeded");
 
   // Replace the point-to-point VPCS link with a 3-host Ethernet-switch segment.
   await api(`/v3/projects/${projectId}/links/${await findLinkId(projectId, v1.node_id)}`, { method: "DELETE" });
@@ -354,7 +430,7 @@ async function main() {
   assert.match(output, /Success rate is\s+100 percent/i, "router could not reach VPCS through switch");
   output = await iosPing(r3Console, "10.30.0.3");
   assert.match(output, /Success rate is\s+100 percent/i, "router could not reach Docker through switch");
-  record("router + VPCS + Docker switch segment", "c3600, VPCS, and Alpine host exchanged IPv4 traffic through Ethernet switch");
+  record("router + VPCS + Docker switch segment", "c3600/3620, VPCS, and Alpine host exchanged IPv4 traffic through Ethernet switch");
 
   const nodeList = await api(`/v3/projects/${projectId}/nodes`);
   const r1After = nodeList.find((node) => node.node_id === r1.node_id);

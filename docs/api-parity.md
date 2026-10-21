@@ -1,6 +1,6 @@
 # GNS3 3.1 controller API parity matrix
 
-Compared against `/tmp/gns3-server-3.1/gns3server/api/routes/controller/` route decorators and `controller/__init__.py` router prefixes. Paths below include the server `/v3` prefix. The matrix records route coverage after the auth implementation; auth behavior is summarized below the table.
+Compared against `~/.cache/gns3-server-3.1/gns3server/api/routes/controller/` route decorators and `controller/__init__.py` router prefixes. Paths below include the server `/v3` prefix. The matrix records route coverage after the auth implementation; auth behavior is summarized below the table.
 
 Statuses mean:
 
@@ -128,7 +128,7 @@ Statuses mean:
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/reload` | Partial |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/start` | Partial |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/stop` | Partial |
-| `nodes.py` | POST | `/v3/projects/{project_id}/nodes/suspend` | Partial |
+| `nodes.py` | POST | `/v3/projects/{project_id}/nodes/suspend` | Partial — supported runtimes suspend; VPCS is skipped because GNS3 does not support its process suspension |
 | `nodes.py` | DELETE | `/v3/projects/{project_id}/nodes/{node_id}` | Implemented |
 | `nodes.py` | GET | `/v3/projects/{project_id}/nodes/{node_id}` | Implemented |
 | `nodes.py` | PUT | `/v3/projects/{project_id}/nodes/{node_id}` | Implemented |
@@ -150,7 +150,7 @@ Statuses mean:
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/{node_id}/reload` | Implemented |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/{node_id}/start` | Implemented |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/{node_id}/stop` | Implemented |
-| `nodes.py` | POST | `/v3/projects/{project_id}/nodes/{node_id}/suspend` | Implemented |
+| `nodes.py` | POST | `/v3/projects/{project_id}/nodes/{node_id}/suspend` | Implemented — VPCS returns 405, matching GNS3 |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/{node_id}/unisolate` | Partial |
 | `pools.py` | GET | `/v3/pools` | Implemented |
 | `pools.py` | POST | `/v3/pools` | Implemented |
@@ -169,11 +169,11 @@ Statuses mean:
 | `projects.py` | PUT | `/v3/projects/{project_id}` | Implemented |
 | `projects.py` | POST | `/v3/projects/{project_id}/close` | Implemented |
 | `projects.py` | POST | `/v3/projects/{project_id}/duplicate` | Partial — DB-backed implementation; archive, filesystem, or event behavior is narrower than GNS3 |
-| `projects.py` | GET | `/v3/projects/{project_id}/export` | Partial — DB-backed implementation; archive, filesystem, or event behavior is narrower than GNS3 |
+| `projects.py` | GET | `/v3/projects/{project_id}/export` | Partial — writes a GNS3 `.gns3project` ZIP; project files are included and `include_images=true` packages local QEMU/IOS images; export is size-limited |
 | `projects.py` | GET | `/v3/projects/{project_id}/files/{file_path:path}` | Partial — DB-backed implementation; archive, filesystem, or event behavior is narrower than GNS3 |
 | `projects.py` | POST | `/v3/projects/{project_id}/files/{file_path:path}` | Partial — DB-backed implementation; archive, filesystem, or event behavior is narrower than GNS3 |
 | `projects.py` | GET | `/v3/projects/{project_id}/gns3file` | Implemented |
-| `projects.py` | POST | `/v3/projects/{project_id}/import` | Partial — DB-backed implementation; archive, filesystem, or event behavior is narrower than GNS3 |
+| `projects.py` | POST | `/v3/projects/{project_id}/import` | Partial — reads GNS3 `.gns3project` ZIP/JSON, installs included QEMU/IOS images, and materializes supported node runtimes; filesystem project paths and some upstream node types remain unsupported |
 | `projects.py` | POST | `/v3/projects/{project_id}/lock` | Partial — records locked state; does not enforce every GNS3 lock interaction |
 | `projects.py` | GET | `/v3/projects/{project_id}/locked` | Implemented |
 | `projects.py` | GET | `/v3/projects/{project_id}/marker-definitions` | Missing — marker API not in the requested priority list |
@@ -234,6 +234,16 @@ Statuses mean:
 | `users.py` | GET | `/v3/access/users/{user_id}` | Implemented |
 | `users.py` | PUT | `/v3/access/users/{user_id}` | Implemented |
 | `users.py` | GET | `/v3/access/users/{user_id}/groups` | Implemented |
+
+## Selected classroom parity work
+
+This pass addresses portable `.gns3project` hand-ins, VPCS console modes and
+GNS3's unsupported VPCS suspend response, and Docker injected configuration
+files. The other classroom-facing missing routes selected for follow-up are
+node/link batch operations (useful for large pasted or imported topologies)
+and local appliance listing/install routes (useful for preparing a course's
+image catalog). Marker replay, remote compute administration, and other
+optional integrations remain outside this pass.
 
 ## Authentication behavior
 

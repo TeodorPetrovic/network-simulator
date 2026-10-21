@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs::{self, File},
     io::{Read, Write},
     net::{TcpListener, TcpStream},
@@ -22,6 +23,36 @@ fn processes_with_argument(needle: &str) -> Vec<u32> {
         .collect()
 }
 
+fn dynamips_processes_in_state(state_dir: &std::path::Path) -> Vec<u32> {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let pid = entry.file_name().to_string_lossy().parse::<u32>().ok()?;
+            let executable = fs::read_link(entry.path().join("exe")).ok()?;
+            if executable.file_name()?.to_string_lossy() != "dynamips" {
+                return None;
+            }
+            let cwd = fs::read_link(entry.path().join("cwd")).ok()?;
+            cwd.starts_with(state_dir).then_some(pid)
+        })
+        .collect()
+}
+
+fn root_dynamips_logs(root: &std::path::Path) -> HashSet<String> {
+    fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            name.ends_with("_log.txt").then_some(name)
+        })
+        .collect()
+}
+
 /// Live appliance test. It is ignored by default because it boots IOS, uses
 /// Docker/ubridge/VPCS, and requires operator-supplied IOS files in the global
 /// image library. Run with:
@@ -36,6 +67,9 @@ fn imported_ios_appliances_boot_and_route_a_live_lab() {
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root_logs_before = root_dynamips_logs(root);
+    let test_dynamips = std::env::var_os("NETWORK_SIMULATOR_TEST_DYNAMIPS")
+        .expect("NETWORK_SIMULATOR_TEST_DYNAMIPS points to upstream Dynamips 0.2.25");
     let log_path = data.path().join("controller.log");
     let log = File::create(&log_path).expect("create controller log");
     let error_log = log.try_clone().expect("clone controller log handle");
@@ -46,6 +80,7 @@ fn imported_ios_appliances_boot_and_route_a_live_lab() {
             data.path().join("controller.sqlite"),
         )
         .env("NETWORK_SIMULATOR_BIND", format!("127.0.0.1:{port}"))
+        .env("NETWORK_SIMULATOR_DYNAMIPS", test_dynamips)
         .env("NETWORK_SIMULATOR_DYNAMIPS_STATE", state.join("dynamips"))
         .env("NETWORK_SIMULATOR_VPCS_STATE", state.join("vpcs"))
         .env("NETWORK_SIMULATOR_DOCKER_STATE", state.join("docker"))
@@ -128,6 +163,8 @@ fn imported_ios_appliances_boot_and_route_a_live_lab() {
         let _ = controller.wait();
     }
     let orphaned_ubridge = processes_with_argument(&ubridge_socket.display().to_string());
+    let orphaned_dynamips = dynamips_processes_in_state(&state.join("dynamips"));
+    let root_logs_after = root_dynamips_logs(root);
     let mut log_contents = String::new();
     let _ = File::open(&log_path).and_then(|mut file| file.read_to_string(&mut log_contents));
     assert!(
@@ -149,5 +186,13 @@ fn imported_ios_appliances_boot_and_route_a_live_lab() {
     assert!(
         orphaned_ubridge.is_empty(),
         "controller shutdown left orphaned uBridge processes: {orphaned_ubridge:?}"
+    );
+    assert!(
+        orphaned_dynamips.is_empty(),
+        "controller shutdown left orphaned Dynamips hypervisors: {orphaned_dynamips:?}"
+    );
+    assert_eq!(
+        root_logs_after, root_logs_before,
+        "Dynamips wrote new *_log.txt files into the repository root"
     );
 }

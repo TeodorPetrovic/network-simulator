@@ -205,6 +205,11 @@ export type DynamipsTemplate = {
   memory: number;
   nvram: number;
   idlepc: string;
+  mmap?: boolean;
+  sparsemem?: boolean;
+  auto_delete_disks?: boolean;
+  ghost_ios?: boolean;
+  console_auto_start?: boolean;
 };
 
 export type EthernetSwitchPort = {
@@ -562,6 +567,7 @@ export const api = {
   projectReadme: async (id: string) => {
     const response = await fetchWithAuth(`/v3/projects/${encodeURIComponent(id)}/files/readme.md`);
     handleUnauthorized(response, `/projects/${id}/files/readme.md`);
+    if (response.status === 404) return { content: "" };
     if (!response.ok) {
       const body = (await response.json().catch(() => null)) as { message?: string } | null;
       throw new Error(body?.message ?? `Project readme is unavailable (${response.status})`);
@@ -619,7 +625,7 @@ export const api = {
   deleteSnapshot: (projectId: string, snapshotId: string) => request<void>(`/projects/${encodeURIComponent(projectId)}/snapshots/${encodeURIComponent(snapshotId)}`, { method: "DELETE" }),
   createNode: (projectId: string, node: Omit<Node, "node_id">) =>
     request<Node>(`/projects/${projectId}/nodes`, jsonBody(node)),
-  createNodeFromTemplate: (projectId: string, templateId: string, usage: { name: string; x: number; y: number; start_command?: string; startup_script?: string; idlepc?: string; startup_config?: string }) =>
+  createNodeFromTemplate: (projectId: string, templateId: string, usage: { name: string; x: number; y: number; start_command?: string; startup_script?: string; idlepc?: string; mmap?: boolean; sparsemem?: boolean; auto_delete_disks?: boolean; ghost_ios?: boolean; console_auto_start?: boolean; startup_config?: string }) =>
     request<Node>(`/projects/${projectId}/templates/${templateId}`, jsonBody(usage)),
   uploadDynamipsImage: async (file: File) => {
     const response = await fetchWithAuth(`/v3/dynamips/images/${encodeURIComponent(file.name)}`, {

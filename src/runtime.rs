@@ -46,6 +46,10 @@ pub struct DockerTemplateOptions {
     pub extra_hosts: String,
     #[serde(default)]
     pub extra_volumes: Vec<String>,
+    #[serde(default)]
+    pub extra_configs: Vec<DockerExtraConfig>,
+    #[serde(default)]
+    pub startup_config_content: Option<String>,
     #[serde(default = "default_docker_console_type")]
     pub console_type: String,
     #[serde(default = "default_docker_console_resolution")]
@@ -66,6 +70,8 @@ impl Default for DockerTemplateOptions {
             environment: String::new(),
             extra_hosts: String::new(),
             extra_volumes: Vec::new(),
+            extra_configs: Vec::new(),
+            startup_config_content: None,
             console_type: default_docker_console_type(),
             console_resolution: default_docker_console_resolution(),
             console_http_port: Some(80),
@@ -74,6 +80,13 @@ impl Default for DockerTemplateOptions {
             custom_adapters: Vec::new(),
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct DockerExtraConfig {
+    pub target: String,
+    #[serde(default)]
+    pub content: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -373,6 +386,90 @@ impl DockerRuntime {
                 "--volume".to_owned(),
                 format!("{}:{container_path}", host_path.display()),
             ]);
+        }
+        let config_root = self
+            .state_dir
+            .join(&project_id)
+            .join(&node_id)
+            .join("configs");
+        let mut injected_configs = options.extra_configs.clone();
+        if let Some(content) = options
+            .startup_config_content
+            .as_deref()
+            .filter(|content| !content.is_empty())
+        {
+            injected_configs.push(DockerExtraConfig {
+                target: "/startup-config".to_owned(),
+                content: content.to_owned(),
+            });
+        }
+        if !injected_configs.is_empty() {
+            if config_root.exists() {
+                fs::remove_dir_all(&config_root).map_err(|error| {
+                    RuntimeError::Failed(format!(
+                        "Could not reset Docker injected config directory: {error}"
+                    ))
+                })?;
+            }
+            fs::create_dir_all(&config_root).map_err(|error| {
+                RuntimeError::Failed(format!(
+                    "Could not create Docker injected config directory: {error}"
+                ))
+            })?;
+            let canonical_root = config_root.canonicalize().map_err(|error| {
+                RuntimeError::Failed(format!(
+                    "Could not resolve Docker injected config directory: {error}"
+                ))
+            })?;
+            for config in &injected_configs {
+                let relative = validate_extra_config_target(&config.target)?;
+                let host_path = canonical_root.join(relative);
+                if let Some(parent) = host_path.parent() {
+                    fs::create_dir_all(parent).map_err(|error| {
+                        RuntimeError::Failed(format!(
+                            "Could not create Docker injected config parent: {error}"
+                        ))
+                    })?;
+                    let canonical_parent = parent.canonicalize().map_err(|error| {
+                        RuntimeError::Failed(format!(
+                            "Could not resolve Docker injected config parent: {error}"
+                        ))
+                    })?;
+                    if !canonical_parent.starts_with(&canonical_root) {
+                        return Err(RuntimeError::Failed(
+                            "Docker injected config path escaped its node directory".to_owned(),
+                        ));
+                    }
+                }
+                let mut file = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&host_path)
+                    .map_err(|error| {
+                        RuntimeError::Failed(format!(
+                            "Could not write Docker injected config: {error}"
+                        ))
+                    })?;
+                use std::io::Write as _;
+                file.write_all(config.content.as_bytes()).map_err(|error| {
+                    RuntimeError::Failed(format!("Could not write Docker injected config: {error}"))
+                })?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(&host_path, fs::Permissions::from_mode(0o400)).map_err(
+                        |error| {
+                            RuntimeError::Failed(format!(
+                                "Could not make Docker injected config read-only: {error}"
+                            ))
+                        },
+                    )?;
+                }
+                args.extend([
+                    "--volume".to_owned(),
+                    format!("{}:{}:ro", host_path.display(), config.target),
+                ]);
+            }
         }
         args.push(image_id.clone());
         if let Some(command) = start_command.filter(|command| !command.trim().is_empty()) {
@@ -1401,6 +1498,10 @@ fn validate_docker_runtime_options(options: &DockerTemplateOptions) -> Result<()
             "Docker console_http_path must be an absolute URL path".to_owned(),
         ));
     }
+    validate_docker_extra_configs(
+        &options.extra_configs,
+        options.startup_config_content.as_deref(),
+    )?;
     let mut adapter_numbers = std::collections::HashSet::new();
     for adapter in &options.custom_adapters {
         if adapter.adapter_number > 99 || !adapter_numbers.insert(adapter.adapter_number) {
@@ -1420,6 +1521,97 @@ fn validate_docker_runtime_options(options: &DockerTemplateOptions) -> Result<()
         }
     }
     Ok(())
+}
+
+pub fn validate_docker_extra_configs(
+    configs: &[DockerExtraConfig],
+    startup_config_content: Option<&str>,
+) -> Result<(), RuntimeError> {
+    if configs.len() > 64 {
+        return Err(RuntimeError::Failed(
+            "Docker extra_configs may contain at most 64 files".to_owned(),
+        ));
+    }
+    let mut targets = std::collections::HashSet::<PathBuf>::new();
+    let mut total_bytes = 0_usize;
+    for config in configs {
+        let target = validate_extra_config_target(&config.target)?;
+        if targets
+            .iter()
+            .any(|existing| existing.starts_with(&target) || target.starts_with(existing))
+        {
+            return Err(RuntimeError::Failed(format!(
+                "Docker extra_configs contains overlapping target '{}'",
+                config.target
+            )));
+        }
+        targets.insert(target);
+        if config.content.len() > 1024 * 1024 {
+            return Err(RuntimeError::Failed(
+                "Docker extra config content must be 1 MiB or smaller".to_owned(),
+            ));
+        }
+        total_bytes = total_bytes.saturating_add(config.content.len());
+    }
+    if let Some(content) = startup_config_content {
+        if content.len() > 1024 * 1024 {
+            return Err(RuntimeError::Failed(
+                "Docker startup_config_content must be 1 MiB or smaller".to_owned(),
+            ));
+        }
+        if !content.is_empty() {
+            let startup_target = PathBuf::from("startup-config");
+            if targets.iter().any(|target| {
+                target.starts_with(&startup_target) || startup_target.starts_with(target)
+            }) {
+                return Err(RuntimeError::Failed(
+                    "Docker startup_config_content conflicts with extra_configs target /startup-config"
+                        .to_owned(),
+                ));
+            }
+            targets.insert(startup_target);
+        }
+        total_bytes = total_bytes.saturating_add(content.len());
+    }
+    if total_bytes > 4 * 1024 * 1024 {
+        return Err(RuntimeError::Failed(
+            "Docker injected config content must total 4 MiB or less".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_extra_config_target(target: &str) -> Result<PathBuf, RuntimeError> {
+    if !target.starts_with('/')
+        || target.ends_with('/')
+        || target.contains('\\')
+        || target.bytes().any(|byte| byte.is_ascii_control())
+        || target.len() > 1024
+    {
+        return Err(RuntimeError::Failed(format!(
+            "Docker extra config target '{}' must be an absolute file path",
+            target
+        )));
+    }
+    let mut relative = PathBuf::new();
+    for component in Path::new(target).components() {
+        match component {
+            std::path::Component::RootDir => {}
+            std::path::Component::Normal(part) => relative.push(part),
+            _ => {
+                return Err(RuntimeError::Failed(format!(
+                    "Docker extra config target '{}' contains an unsafe path component",
+                    target
+                )));
+            }
+        }
+    }
+    if relative.as_os_str().is_empty() {
+        return Err(RuntimeError::Failed(
+            "Docker extra config target must name a file".to_owned(),
+        ));
+    }
+    Ok(relative)
 }
 
 fn valid_container_id(container_id: &str) -> bool {
@@ -1517,10 +1709,11 @@ fn normalize_docker_state(state: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        DockerCustomAdapter, DockerRuntime, DockerTemplateOptions, docker_aux_exec_command,
-        docker_hostname, docker_vnc_tools_error, node_network_name, normalize_docker_state,
-        parse_environment, parse_extra_hosts, parse_start_command, proxy_docker_http,
-        validate_container_volume, validate_docker_runtime_options,
+        DockerCustomAdapter, DockerExtraConfig, DockerRuntime, DockerTemplateOptions,
+        docker_aux_exec_command, docker_hostname, docker_vnc_tools_error, node_network_name,
+        normalize_docker_state, parse_environment, parse_extra_hosts, parse_start_command,
+        proxy_docker_http, validate_container_volume, validate_docker_extra_configs,
+        validate_docker_runtime_options,
     };
     use std::{
         fs,
@@ -1608,6 +1801,61 @@ mod tests {
         assert!(validate_docker_runtime_options(&options).is_ok());
         options.console_resolution = "wide".to_owned();
         assert!(validate_docker_runtime_options(&options).is_err());
+    }
+
+    #[test]
+    fn validates_docker_injected_config_paths_content_and_conflicts() {
+        let config = DockerExtraConfig {
+            target: "/etc/router/router.conf".to_owned(),
+            content: "hostname lab".to_owned(),
+        };
+        assert!(validate_docker_extra_configs(&[config], None).is_ok());
+        assert!(
+            validate_docker_extra_configs(
+                &[DockerExtraConfig {
+                    target: "/etc/../outside".to_owned(),
+                    content: "bad".to_owned(),
+                }],
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            validate_docker_extra_configs(
+                &[DockerExtraConfig {
+                    target: "/startup-config".to_owned(),
+                    content: "file".to_owned(),
+                }],
+                Some("inline")
+            )
+            .is_err()
+        );
+        assert!(
+            validate_docker_extra_configs(
+                &[
+                    DockerExtraConfig {
+                        target: "/etc/router".to_owned(),
+                        content: "directory mount".to_owned(),
+                    },
+                    DockerExtraConfig {
+                        target: "/etc/router/router.conf".to_owned(),
+                        content: "nested file".to_owned(),
+                    },
+                ],
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            validate_docker_extra_configs(
+                &[DockerExtraConfig {
+                    target: "/startup-config/nested.conf".to_owned(),
+                    content: "nested file".to_owned(),
+                }],
+                Some("inline")
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1891,6 +2139,11 @@ mod tests {
             environment: "MODE=ospf".to_owned(),
             extra_hosts: "gateway:192.0.2.1".to_owned(),
             extra_volumes: vec!["/var/lib/router".to_owned()],
+            extra_configs: vec![DockerExtraConfig {
+                target: "/etc/router/router.conf".to_owned(),
+                content: "router-id 192.0.2.1\n".to_owned(),
+            }],
+            startup_config_content: Some("hostname %h\n".to_owned()),
             ..DockerTemplateOptions::default()
         };
         let (container_id, _) = runtime
@@ -1912,7 +2165,20 @@ mod tests {
         assert!(calls.contains("--env MODE=ospf"));
         assert!(calls.contains("--add-host gateway:192.0.2.1"));
         assert!(calls.contains("/var/lib/router"));
+        assert!(calls.contains(":/etc/router/router.conf:ro"));
+        assert!(calls.contains(":/startup-config:ro"));
         assert!(calls.contains("/bin/sh -c sleep 60"));
+        let config_root = directory
+            .path()
+            .join("state/00000000-0000-0000-0000-000000000001/00000000-0000-0000-0000-000000000002/configs");
+        assert_eq!(
+            fs::read_to_string(config_root.join("etc/router/router.conf")).unwrap(),
+            "router-id 192.0.2.1\n"
+        );
+        assert_eq!(
+            fs::read_to_string(config_root.join("startup-config")).unwrap(),
+            "hostname %h\n"
+        );
         let resize_request = resize_server.await.unwrap();
         assert!(resize_request.starts_with(&format!(
             "POST /containers/{container_id}/resize?h=40&w=120 HTTP/1.1"

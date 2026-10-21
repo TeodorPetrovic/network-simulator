@@ -11,7 +11,8 @@ use axum::{
         Path, Query, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::StatusCode,
+    http::{Request, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{any, get, post, put},
 };
@@ -69,6 +70,8 @@ pub struct AppState {
     bind_address: SocketAddr,
     started_at: Instant,
     project_operation_locks: Arc<StdMutex<HashMap<String, Arc<AsyncMutex<()>>>>>,
+    project_activity: ProjectActivityTracker,
+    idle_stop_minutes: Option<u64>,
 }
 
 impl AppState {
@@ -88,6 +91,8 @@ impl AppState {
                 .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 3080))),
             started_at: Instant::now(),
             project_operation_locks: Arc::new(StdMutex::new(HashMap::new())),
+            project_activity: ProjectActivityTracker::default(),
+            idle_stop_minutes: configured_idle_stop_minutes(),
         }
     }
 
@@ -133,6 +138,8 @@ impl AppState {
             bind_address: SocketAddr::from(([127, 0, 0, 1], 3080)),
             started_at: Instant::now(),
             project_operation_locks: Arc::new(StdMutex::new(HashMap::new())),
+            project_activity: ProjectActivityTracker::default(),
+            idle_stop_minutes: configured_idle_stop_minutes(),
         }
     }
 
@@ -161,12 +168,176 @@ impl AppState {
         if killed > 0 {
             tracing::warn!(killed, "killed orphaned VPCS processes from an earlier run");
         }
+        let killed = self.dynamips.reap_orphans();
+        if killed > 0 {
+            tracing::warn!(
+                killed,
+                "killed orphaned Dynamips hypervisors from an earlier run"
+            );
+        }
     }
 
     /// Terminate processes this controller owns that cannot outlive it.
     pub async fn shutdown_runtimes(&self) {
+        let rows = match sqlx::query(
+            "SELECT project_id, object_id, object_json FROM topology_objects
+             WHERE kind = 'node' AND json_extract(object_json, '$.status') IN ('started', 'suspended')",
+        )
+        .fetch_all(self.store.pool())
+        .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(%error, "could not load running nodes for graceful shutdown");
+                Vec::new()
+            }
+        };
+        for row in rows {
+            let project_id: String = row.get("project_id");
+            let node_id: String = row.get("object_id");
+            let node = match decode_json(row.get::<String, _>("object_json")) {
+                Ok(node) => node,
+                Err(error) => {
+                    tracing::warn!(error = %error.message, %project_id, %node_id, "skipping invalid node during graceful shutdown");
+                    continue;
+                }
+            };
+            if !controller_routes::bulk_node_action_applies(&node, NodeAction::Stop) {
+                continue;
+            }
+            let (Ok(project_uuid), Ok(node_uuid)) =
+                (Uuid::parse_str(&project_id), Uuid::parse_str(&node_id))
+            else {
+                tracing::warn!(%project_id, %node_id, "skipping node with an invalid ID during graceful shutdown");
+                continue;
+            };
+            if let Err(error) =
+                change_node_runtime_state(self.clone(), project_uuid, node_uuid, NodeAction::Stop)
+                    .await
+            {
+                tracing::error!(error = %error.message, %project_id, %node_id, "could not stop node during graceful shutdown");
+            }
+        }
+        self.dynamips.kill_all().await;
         self.ubridge.shutdown().await;
         self.vpcs.kill_all().await;
+    }
+
+    fn start_idle_stop_worker(&self) {
+        let Some(minutes) = self.idle_stop_minutes.filter(|minutes| *minutes > 0) else {
+            return;
+        };
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!("idle stop is configured but no Tokio runtime is active");
+            return;
+        };
+        let state = self.clone();
+        handle.spawn(async move {
+            let interval = Duration::from_secs(minutes.saturating_mul(60));
+            let mut ticker = tokio::time::interval(interval.min(Duration::from_secs(60)));
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                state.stop_idle_projects(interval).await;
+            }
+        });
+        tracing::info!(idle_stop_minutes = minutes, "project idle stop enabled");
+    }
+
+    async fn stop_idle_projects(&self, idle_for: Duration) {
+        let rows = match sqlx::query("SELECT project_id FROM projects ORDER BY project_id")
+            .fetch_all(self.store.pool())
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(%error, "could not list projects for idle stop");
+                return;
+            }
+        };
+        for row in rows {
+            let project_id: String = row.get("project_id");
+            if self
+                .project_activity
+                .is_idle(&project_id, self.started_at, idle_for)
+            {
+                self.stop_idle_project(&project_id, idle_for).await;
+            }
+        }
+    }
+
+    async fn stop_idle_project(&self, project_id: &str, idle_for: Duration) {
+        let _project_lock = self.lock_project_operations(project_id).await;
+        if !self
+            .project_activity
+            .is_idle(project_id, self.started_at, idle_for)
+        {
+            return;
+        }
+        let rows = match sqlx::query(
+            "SELECT object_id, object_json FROM topology_objects
+             WHERE project_id = ? AND kind = 'node' ORDER BY object_id",
+        )
+        .bind(project_id)
+        .fetch_all(self.store.pool())
+        .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(%error, %project_id, "could not load nodes for idle stop");
+                return;
+            }
+        };
+        for row in rows {
+            if !self
+                .project_activity
+                .is_idle(project_id, self.started_at, idle_for)
+            {
+                return;
+            }
+            let node_id: String = row.get("object_id");
+            let mut node = match decode_json(row.get::<String, _>("object_json")) {
+                Ok(node) => node,
+                Err(error) => {
+                    tracing::warn!(error = %error.message, %project_id, %node_id, "skipping invalid node during idle stop");
+                    continue;
+                }
+            };
+            if !controller_routes::bulk_node_action_applies(&node, NodeAction::Stop) {
+                continue;
+            }
+            match apply_node_lifecycle(self, project_id, &mut node, NodeAction::Stop).await {
+                Ok(status) => {
+                    node["status"] = json!(status);
+                    let result = async {
+                        let mut tx = self.store.pool().begin().await?;
+                        sqlx::query(
+                            "UPDATE topology_objects SET object_json = ?
+                             WHERE project_id = ? AND kind = 'node' AND object_id = ?",
+                        )
+                        .bind(serde_json::to_string(&node).map_err(internal_json_error)?)
+                        .bind(project_id)
+                        .bind(&node_id)
+                        .execute(&mut *tx)
+                        .await?;
+                        let event =
+                            Store::append_event(&mut tx, project_id, "node.updated", &node).await?;
+                        tx.commit().await?;
+                        Ok::<_, ApiError>(event)
+                    }
+                    .await;
+                    match result {
+                        Ok(event) => self.store.publish(event),
+                        Err(error) => {
+                            tracing::error!(error = %error.message, %project_id, %node_id, "could not persist idle-stopped node")
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(error = %error.message, %project_id, %node_id, "could not stop idle node")
+                }
+            }
+        }
     }
 
     pub async fn reattach_running_links(&self) {
@@ -240,7 +411,138 @@ impl AppState {
     }
 }
 
+#[derive(Clone, Default)]
+struct ProjectActivityTracker {
+    projects: Arc<StdMutex<HashMap<String, ProjectActivity>>>,
+}
+
+#[derive(Clone, Copy)]
+struct ProjectActivity {
+    last_activity: Instant,
+    open_websockets: usize,
+}
+
+impl ProjectActivityTracker {
+    fn record_request(&self, project_id: &str) {
+        let mut projects = self
+            .projects
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let activity = projects
+            .entry(project_id.to_owned())
+            .or_insert(ProjectActivity {
+                last_activity: Instant::now(),
+                open_websockets: 0,
+            });
+        activity.last_activity = Instant::now();
+    }
+
+    fn open_websocket(&self, project_id: String) -> ProjectWebSocketGuard {
+        let mut projects = self
+            .projects
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let activity = projects
+            .entry(project_id.clone())
+            .or_insert(ProjectActivity {
+                last_activity: Instant::now(),
+                open_websockets: 0,
+            });
+        activity.last_activity = Instant::now();
+        activity.open_websockets = activity.open_websockets.saturating_add(1);
+        ProjectWebSocketGuard {
+            tracker: self.clone(),
+            project_id,
+        }
+    }
+
+    fn is_idle(&self, project_id: &str, fallback_since: Instant, idle_for: Duration) -> bool {
+        self.is_idle_at(project_id, fallback_since, idle_for, Instant::now())
+    }
+
+    fn is_idle_at(
+        &self,
+        project_id: &str,
+        fallback_since: Instant,
+        idle_for: Duration,
+        now: Instant,
+    ) -> bool {
+        let projects = self
+            .projects
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(activity) = projects.get(project_id) else {
+            return now.saturating_duration_since(fallback_since) >= idle_for;
+        };
+        activity.open_websockets == 0
+            && now.saturating_duration_since(activity.last_activity) >= idle_for
+    }
+}
+
+struct ProjectWebSocketGuard {
+    tracker: ProjectActivityTracker,
+    project_id: String,
+}
+
+impl Drop for ProjectWebSocketGuard {
+    fn drop(&mut self) {
+        let mut projects = self
+            .tracker
+            .projects
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(activity) = projects.get_mut(&self.project_id) {
+            activity.open_websockets = activity.open_websockets.saturating_sub(1);
+            if activity.open_websockets == 0 {
+                activity.last_activity = Instant::now();
+            }
+        }
+    }
+}
+
+fn configured_idle_stop_minutes() -> Option<u64> {
+    let configured = std::env::var("NETWORK_SIMULATOR_IDLE_STOP_MINUTES").ok()?;
+    match configured.trim().parse::<u64>() {
+        Ok(minutes) if (1..=525_600).contains(&minutes) => Some(minutes),
+        _ => {
+            tracing::warn!(value = %configured, "ignoring invalid NETWORK_SIMULATOR_IDLE_STOP_MINUTES; expected an integer from 1 to 525600");
+            None
+        }
+    }
+}
+
+fn project_id_from_path(path: &str) -> Option<String> {
+    let segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let project_segment = match segments.as_slice() {
+        ["v3", "projects", project_id, ..] => *project_id,
+        ["v3", "compute", "projects", project_id, ..] => *project_id,
+        _ => return None,
+    };
+    Uuid::parse_str(project_segment)
+        .ok()
+        .map(|project_id| project_id.to_string())
+}
+
+async fn track_project_activity(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let project_id = project_id_from_path(request.uri().path());
+    let response = next.run(request).await;
+    if response.status().is_success() {
+        if let Some(project_id) = project_id {
+            state.project_activity.record_request(&project_id);
+        }
+    }
+    response
+}
+
 pub fn router(state: AppState) -> Router {
+    state.start_idle_stop_worker();
     let api = Router::new()
         .route("/healthz", get(health))
         .route(
@@ -409,7 +711,11 @@ pub fn router(state: AppState) -> Router {
             .merge(auth::router())
             .merge(image_upload)
             .merge(qemu_image_upload)
-            .layer(TraceLayer::new_for_http().make_span_with(request_span)),
+            .layer(TraceLayer::new_for_http().make_span_with(request_span))
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                track_project_activity,
+            )),
         state.clone(),
     )
     .with_state(state)
@@ -1158,6 +1464,8 @@ fn validate_template_profile_patch(template: &Value, patch: Value) -> Result<Val
             "environment",
             "extra_hosts",
             "extra_volumes",
+            "extra_configs",
+            "startup_config_content",
             "console_type",
             "console_resolution",
             "console_http_port",
@@ -1672,9 +1980,9 @@ fn validate_template_profile_patch(template: &Value, patch: Value) -> Result<Val
             "console_type" if kind == "vpcs" => {
                 let value = value
                     .as_str()
-                    .filter(|value| *value == "telnet")
+                    .filter(|value| matches!(*value, "telnet" | "ssh" | "none"))
                     .ok_or_else(|| {
-                        ApiError::bad_request("VPCS supports the telnet console type")
+                        ApiError::bad_request("VPCS console_type must be telnet, ssh, or none")
                     })?;
                 validated.insert(key.clone(), json!(value));
             }
@@ -1710,6 +2018,22 @@ fn validate_template_profile_patch(template: &Value, patch: Value) -> Result<Val
                 }
                 validated.insert(key.clone(), json!(text));
             }
+            "startup_config_content" if kind == "docker" => {
+                let text = value
+                    .as_str()
+                    .filter(|text| text.len() <= 1024 * 1024)
+                    .ok_or_else(|| {
+                        ApiError::bad_request("startup_config_content must be text under 1 MiB")
+                    })?;
+                validated.insert(key.clone(), json!(text));
+            }
+            "extra_configs" if kind == "docker" => {
+                let configs = validate_docker_extra_configs_api(Some(value), None)?;
+                validated.insert(
+                    key.clone(),
+                    serde_json::to_value(configs).map_err(internal_json_error)?,
+                );
+            }
             _ => {
                 return Err(ApiError::bad_request(format!(
                     "'{key}' is not valid for {kind}"
@@ -1722,6 +2046,24 @@ fn validate_template_profile_patch(template: &Value, patch: Value) -> Result<Val
 
 fn valid_container_path(path: &str) -> bool {
     path.starts_with('/') && !path.contains("..") && path.len() <= 512 && !path.contains('\0')
+}
+
+fn validate_docker_extra_configs_api(
+    configs: Option<&Value>,
+    startup_config_content: Option<&str>,
+) -> Result<Vec<crate::runtime::DockerExtraConfig>, ApiError> {
+    let configs = match configs {
+        Some(configs) if !configs.is_null() => {
+            serde_json::from_value::<Vec<crate::runtime::DockerExtraConfig>>(configs.clone())
+                .map_err(|_| {
+                    ApiError::bad_request("extra_configs must be an array of target/content files")
+                })?
+        }
+        Some(_) | None => Vec::new(),
+    };
+    crate::runtime::validate_docker_extra_configs(&configs, startup_config_content)
+        .map_err(|error| ApiError::bad_request(error.message()))?;
+    Ok(configs)
 }
 
 async fn pull_docker_image(
@@ -1787,14 +2129,22 @@ fn runtime_api_error(error: RuntimeError) -> ApiError {
     ApiError::new(status, error.message())
 }
 
-async fn list_projects(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
-    let rows = sqlx::query("SELECT project_json FROM projects ORDER BY name, project_id")
-        .fetch_all(state.store.pool())
-        .await?;
-    let projects = rows
-        .into_iter()
-        .map(|row| decode_json(row.get::<String, _>("project_json")))
-        .collect::<Result<Vec<_>, _>>()?;
+async fn list_projects(
+    State(state): State<AppState>,
+    axum::Extension(principal): axum::Extension<auth::Principal>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    let rows =
+        sqlx::query("SELECT project_id, project_json FROM projects ORDER BY name, project_id")
+            .fetch_all(state.store.pool())
+            .await?;
+    let mut projects = Vec::new();
+    for row in rows {
+        let project = decode_json(row.get::<String, _>("project_json"))?;
+        let project_id: String = row.get("project_id");
+        if auth::can_audit_project(state.store.pool(), &principal, &project_id).await {
+            projects.push(project);
+        }
+    }
     Ok(Json(projects))
 }
 
@@ -2184,6 +2534,28 @@ async fn create_node_from_template(
             "environment": template["environment"],
             "extra_hosts": template["extra_hosts"],
             "extra_volumes": template["extra_volumes"],
+            "extra_configs": usage
+                .get("extra_configs")
+                .filter(|value| !value.is_null())
+                .cloned()
+                .or_else(|| {
+                    template
+                        .get("extra_configs")
+                        .filter(|value| !value.is_null())
+                        .cloned()
+                })
+                .unwrap_or(json!([])),
+            "startup_config_content": usage
+                .get("startup_config_content")
+                .filter(|value| !value.is_null())
+                .cloned()
+                .or_else(|| {
+                    template
+                        .get("startup_config_content")
+                        .filter(|value| !value.is_null())
+                        .cloned()
+                })
+                .unwrap_or(json!("")),
             "console_type": template["console_type"],
             "console_resolution": template["console_resolution"],
             "console_http_port": template["console_http_port"],
@@ -2405,6 +2777,8 @@ async fn create_docker_node(
     set_default(object, "console_http_path", json!("/"));
     set_default(object, "aux_type", json!("none"));
     set_default(object, "custom_adapters", json!([]));
+    set_default(object, "extra_configs", json!([]));
+    set_default(object, "startup_config_content", json!(""));
 
     let memory_mb = object
         .get("memory")
@@ -2463,6 +2837,14 @@ async fn create_docker_node(
             .filter_map(Value::as_str)
             .map(str::to_owned)
             .collect(),
+        extra_configs: validate_docker_extra_configs_api(
+            object.get("extra_configs"),
+            object.get("startup_config_content").and_then(Value::as_str),
+        )?,
+        startup_config_content: object
+            .get("startup_config_content")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
         console_type: object
             .get("console_type")
             .and_then(Value::as_str)
@@ -2869,9 +3251,13 @@ async fn create_vpcs_node(
     set_default(object, "console_type", json!("telnet"));
     set_default(object, "console_auto_start", json!(false));
     set_default(object, "properties", json!({}));
-    if object.get("console_type").and_then(Value::as_str) != Some("telnet") {
+    if object
+        .get("console_type")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !matches!(value, "telnet" | "ssh" | "none"))
+    {
         return Err(ApiError::bad_request(
-            "VPCS supports the telnet console type",
+            "VPCS console_type must be telnet, ssh, or none",
         ));
     }
     if object.get("adapters").and_then(Value::as_u64) != Some(1) {
@@ -3084,6 +3470,16 @@ fn dynamips_options_from_template(
     // fails to deserialize as `DynamipsOptions::dynamips_id: u32` before the
     // allocator's value can be applied. Normalize it before deserializing.
     object.insert("dynamips_id".into(), json!(dynamips_id));
+    if object.get("sparsemem").is_none() {
+        let platform = object
+            .get("platform")
+            .and_then(Value::as_str)
+            .unwrap_or("c7200");
+        object.insert(
+            "sparsemem".into(),
+            json!(!matches!(platform, "c1700" | "c2600")),
+        );
+    }
     let mut options: DynamipsOptions = serde_json::from_value(Value::Object(object.clone()))
         .map_err(|error| {
             ApiError::bad_request(format!("Dynamips runtime settings are invalid: {error}"))
@@ -4402,6 +4798,12 @@ async fn update_node_configuration(
     }
     let mut extra_fields = Map::new();
     if node_type == "docker" {
+        validate_docker_extra_configs_api(
+            updated.get("extra_configs"),
+            updated
+                .get("startup_config_content")
+                .and_then(Value::as_str),
+        )?;
         detach_node_links(&state, &project_id, &node_id).await?;
         let options = DockerTemplateOptions {
             environment: updated["environment"]
@@ -4419,6 +4821,16 @@ async fn update_node_configuration(
                 .filter_map(Value::as_str)
                 .map(str::to_owned)
                 .collect(),
+            extra_configs: validate_docker_extra_configs_api(
+                updated.get("extra_configs"),
+                updated
+                    .get("startup_config_content")
+                    .and_then(Value::as_str),
+            )?,
+            startup_config_content: updated
+                .get("startup_config_content")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             console_type: updated["console_type"]
                 .as_str()
                 .unwrap_or("telnet")
@@ -4493,6 +4905,8 @@ fn validate_node_configuration_patch(node_type: &str, patch: Value) -> Result<Va
             "environment",
             "extra_hosts",
             "extra_volumes",
+            "extra_configs",
+            "startup_config_content",
             "console_type",
             "console_resolution",
             "console_http_port",
@@ -4500,7 +4914,7 @@ fn validate_node_configuration_patch(node_type: &str, patch: Value) -> Result<Va
             "aux_type",
             "custom_adapters",
         ],
-        "vpcs" => &["name", "startup_script"],
+        "vpcs" => &["name", "startup_script", "console_type"],
         "dynamips" => &["name", "startup_config"],
         _ => return Err(ApiError::bad_request("unsupported per-device runtime")),
     };
@@ -4595,6 +5009,19 @@ fn validate_node_configuration_patch(node_type: &str, patch: Value) -> Result<Va
                     })?;
                 json!(text)
             }
+            "startup_config_content" => {
+                let text = value
+                    .as_str()
+                    .filter(|text| text.len() <= 1024 * 1024)
+                    .ok_or_else(|| {
+                        ApiError::bad_request("startup_config_content must be text under 1 MiB")
+                    })?;
+                json!(text)
+            }
+            "extra_configs" => {
+                let configs = validate_docker_extra_configs_api(Some(value), None)?;
+                serde_json::to_value(configs).map_err(internal_json_error)?
+            }
             "startup_script" | "startup_config" => {
                 let text = value
                     .as_str()
@@ -4618,8 +5045,16 @@ fn validate_node_configuration_patch(node_type: &str, patch: Value) -> Result<Va
             "console_type" => {
                 let value = value
                     .as_str()
-                    .filter(|value| matches!(*value, "none" | "telnet" | "vnc" | "http" | "https"))
-                    .ok_or_else(|| ApiError::bad_request("unsupported Docker console_type"))?;
+                    .filter(|value| {
+                        if node_type == "vpcs" {
+                            matches!(*value, "telnet" | "ssh" | "none")
+                        } else {
+                            matches!(*value, "none" | "telnet" | "vnc" | "http" | "https")
+                        }
+                    })
+                    .ok_or_else(|| {
+                        ApiError::bad_request(format!("unsupported {node_type} console_type"))
+                    })?;
                 json!(value)
             }
             "console_resolution" => {
@@ -4835,6 +5270,20 @@ async fn suspend_node(
     State(state): State<AppState>,
     Path((project_id, node_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Value>, ApiError> {
+    let node = get_topology_object(
+        state.store.pool(),
+        &project_id.to_string(),
+        "node",
+        &node_id.to_string(),
+    )
+    .await?
+    .0;
+    if node.get("node_type").and_then(Value::as_str) == Some("vpcs") {
+        return Err(ApiError::new(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "VPCS nodes do not support suspend",
+        ));
+    }
     change_node_runtime_state(state, project_id, node_id, NodeAction::Suspend).await
 }
 
@@ -6015,8 +6464,11 @@ async fn project_notifications(
 ) -> Result<Response, ApiError> {
     let project_id = project_id.to_string();
     ensure_project_exists_pool(state.store.pool(), &project_id).await?;
-    Ok(websocket
-        .on_upgrade(move |socket| websocket_session(socket, state, project_id, query.after)))
+    let activity = state.project_activity.clone();
+    Ok(websocket.on_upgrade(move |socket| async move {
+        let _activity = activity.open_websocket(project_id.clone());
+        websocket_session(socket, state, project_id, query.after).await;
+    }))
 }
 
 async fn qemu_console(
@@ -6048,7 +6500,11 @@ async fn qemu_console(
                 format!("Could not connect to the QEMU serial console: {error}"),
             )
         })?;
-    Ok(websocket.on_upgrade(move |socket| qemu_console_session(socket, serial)))
+    let activity = state.project_activity.clone();
+    Ok(websocket.on_upgrade(move |socket| async move {
+        let _activity = activity.open_websocket(project_id);
+        qemu_console_session(socket, serial).await;
+    }))
 }
 
 async fn docker_console(
@@ -6097,8 +6553,10 @@ async fn docker_console(
         .map_err(runtime_api_error)?;
     let runtime = state.runtime.clone();
     let container_id = container_id.to_owned();
-    Ok(websocket.on_upgrade(move |socket| {
-        docker_console_session(socket, process, runtime, container_id, true)
+    let activity = state.project_activity.clone();
+    Ok(websocket.on_upgrade(move |socket| async move {
+        let _activity = activity.open_websocket(project_id);
+        docker_console_session(socket, process, runtime, container_id, true).await;
     }))
 }
 
@@ -6142,8 +6600,10 @@ async fn docker_aux_console(
         .map_err(runtime_api_error)?;
     let runtime = state.runtime.clone();
     let container_id = container_id.to_owned();
-    Ok(websocket.on_upgrade(move |socket| {
-        docker_console_session(socket, process, runtime, container_id, false)
+    let activity = state.project_activity.clone();
+    Ok(websocket.on_upgrade(move |socket| async move {
+        let _activity = activity.open_websocket(project_id);
+        docker_console_session(socket, process, runtime, container_id, false).await;
     }))
 }
 
@@ -6162,6 +6622,20 @@ async fn vpcs_console(
             "VPCS consoles are available for VPCS nodes only",
         ));
     }
+    match node["console_type"].as_str().unwrap_or("telnet") {
+        "none" => {
+            return Err(ApiError::new(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "VPCS console is disabled for this node",
+            ));
+        }
+        "telnet" | "ssh" => {}
+        _ => {
+            return Err(ApiError::bad_request(
+                "VPCS console_type must be telnet, ssh, or none",
+            ));
+        }
+    }
     if state
         .vpcs
         .status(&node_id)
@@ -6178,7 +6652,11 @@ async fn vpcs_console(
         .connect_console(&node_id)
         .await
         .map_err(runtime_api_error)?;
-    Ok(websocket.on_upgrade(move |socket| vpcs_console_session(socket, console)))
+    let activity = state.project_activity.clone();
+    Ok(websocket.on_upgrade(move |socket| async move {
+        let _activity = activity.open_websocket(project_id);
+        vpcs_console_session(socket, console).await;
+    }))
 }
 
 async fn dynamips_console(
@@ -6205,7 +6683,11 @@ async fn dynamips_console(
         .console(&vm)
         .await
         .map_err(runtime_api_error)?;
-    Ok(websocket.on_upgrade(move |socket| vpcs_console_session(socket, console)))
+    let activity = state.project_activity.clone();
+    Ok(websocket.on_upgrade(move |socket| async move {
+        let _activity = activity.open_websocket(project_id);
+        vpcs_console_session(socket, console).await;
+    }))
 }
 
 async fn qemu_console_session(socket: WebSocket, serial: UnixStream) {
@@ -6684,10 +7166,77 @@ fn decode_json(value: String) -> Result<Value, ApiError> {
 }
 
 #[cfg(test)]
+mod project_activity_tests {
+    use std::time::{Duration, Instant};
+
+    use super::{ProjectActivityTracker, project_id_from_path};
+
+    #[test]
+    fn project_scoped_api_activity_resets_the_idle_window() {
+        let project_id = "63fe90f9-485f-4379-b78c-8d8f984a62b2";
+        let tracker = ProjectActivityTracker::default();
+        let fallback = Instant::now() - Duration::from_secs(600);
+        let idle_for = Duration::from_secs(300);
+
+        assert!(tracker.is_idle(project_id, fallback, idle_for));
+        tracker.record_request(project_id);
+        assert!(!tracker.is_idle(project_id, fallback, idle_for));
+        assert!(tracker.is_idle_at(
+            project_id,
+            fallback,
+            idle_for,
+            Instant::now() + Duration::from_secs(301)
+        ));
+    }
+
+    #[test]
+    fn an_open_project_websocket_prevents_idle_stop_and_disconnect_resets_timer() {
+        let project_id = "63fe90f9-485f-4379-b78c-8d8f984a62b2";
+        let tracker = ProjectActivityTracker::default();
+        let fallback = Instant::now() - Duration::from_secs(600);
+        let idle_for = Duration::from_secs(300);
+        let connection = tracker.open_websocket(project_id.to_owned());
+
+        assert!(!tracker.is_idle_at(
+            project_id,
+            fallback,
+            idle_for,
+            Instant::now() + Duration::from_secs(3600)
+        ));
+        drop(connection);
+        assert!(!tracker.is_idle(project_id, fallback, idle_for));
+        assert!(tracker.is_idle_at(
+            project_id,
+            fallback,
+            idle_for,
+            Instant::now() + Duration::from_secs(301)
+        ));
+    }
+
+    #[test]
+    fn activity_routes_extract_ids_for_controller_and_compute_websockets() {
+        let project_id = "63fe90f9-485f-4379-b78c-8d8f984a62b2";
+        assert_eq!(
+            project_id_from_path(&format!("/v3/projects/{project_id}/nodes")),
+            Some(project_id.to_owned())
+        );
+        assert_eq!(
+            project_id_from_path(&format!(
+                "/v3/compute/projects/{project_id}/vpcs/nodes/00000000-0000-0000-0000-000000000001/console/ws"
+            )),
+            Some(project_id.to_owned())
+        );
+        assert_eq!(project_id_from_path("/v3/projects/not-a-uuid/nodes"), None);
+        assert_eq!(project_id_from_path("/v3/projects"), None);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use axum::{
         body::Body,
-        http::{Method, Request, StatusCode},
+        extract::{Path, State},
+        http::{HeaderMap, Method, Request, StatusCode},
     };
     use http_body_util::BodyExt;
     use serde_json::Value;
@@ -6696,10 +7245,10 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{
-        ApiError, AppState, attach_runtime_nio_with_rollback, canonical_capture_file_path_in,
+        ApiError, AppState, attach_runtime_nio_with_rollback, auth, canonical_capture_file_path_in,
         dynamips_options_from_template, link_filters_for_endpoint, parse_docker_resize_control,
-        router, safe_capture_file_name, validate_link_filters, validate_node_configuration_patch,
-        vpcs_startup_script,
+        router, safe_capture_file_name, suspend_node, validate_link_filters,
+        validate_node_configuration_patch, vpcs_startup_script,
     };
     use crate::storage::Store;
     use crate::{
@@ -6909,6 +7458,34 @@ mod tests {
             })
         };
         (status, json)
+    }
+
+    async fn request_bytes(
+        app: &axum::Router,
+        method: Method,
+        uri: String,
+    ) -> (StatusCode, HeaderMap, Vec<u8>) {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router returns a response");
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("response body reads")
+            .to_bytes()
+            .to_vec();
+        (status, headers, bytes)
     }
 
     async fn create_custom_from_runtime(app: &axum::Router, runtime: &str, name: &str) -> Value {
@@ -7803,6 +8380,24 @@ mod tests {
                 return Err(format!("VPCS node create returned {status}: {vpcs_node}"));
             }
 
+            for node in [&vpcs_node, &docker_node] {
+                let node_id = node["node_id"]
+                    .as_str()
+                    .ok_or_else(|| "created node has no ID".to_owned())?;
+                let (status, started) = request(
+                    &app,
+                    Method::POST,
+                    format!("/v3/projects/{current_project_id}/nodes/{node_id}/start"),
+                    Some(serde_json::json!({})),
+                )
+                .await;
+                if status != StatusCode::OK || started["status"] != "started" {
+                    return Err(format!("node start returned {status}: {started}"));
+                }
+            }
+
+            // Create after both runtimes are already running to exercise live
+            // endpoint attachment through the controller route.
             let endpoints = serde_json::json!([
                 { "node_id": docker_node["node_id"], "adapter_number": 0, "port_number": 0 },
                 { "node_id": vpcs_node["node_id"], "adapter_number": 0, "port_number": 0 }
@@ -7820,24 +8415,8 @@ mod tests {
                 || link["nodes"][0]["runtime_ubridge_segment"].is_string()
             {
                 return Err(format!(
-                    "mixed UDP NIO link create returned {status}: {link}"
+                    "live mixed UDP NIO link create returned {status}: {link}"
                 ));
-            }
-
-            for node in [&vpcs_node, &docker_node] {
-                let node_id = node["node_id"]
-                    .as_str()
-                    .ok_or_else(|| "created node has no ID".to_owned())?;
-                let (status, started) = request(
-                    &app,
-                    Method::POST,
-                    format!("/v3/projects/{current_project_id}/nodes/{node_id}/start"),
-                    Some(serde_json::json!({})),
-                )
-                .await;
-                if status != StatusCode::OK || started["status"] != "started" {
-                    return Err(format!("node start returned {status}: {started}"));
-                }
             }
 
             let container_id = docker_node["container_id"]
@@ -8774,6 +9353,7 @@ mod tests {
         let mut vpcs_node_id: Option<String> = None;
         let mut docker_node_id: Option<String> = None;
         let mut link_endpoints = Vec::<Value>::new();
+        let mut link_ids = Vec::<String>::new();
         let test_started_at = std::time::Instant::now();
         let mut links_created_at_ms = None;
         let mut chr_start_returned_at_ms = None;
@@ -8808,7 +9388,7 @@ mod tests {
                     "name": "CHR",
                     "memory": 512,
                     "cpus": 1,
-                    "adapters": 2,
+                    "adapters": 3,
                     "adapter_type": "virtio-net-pci"
                 })),
             ).await;
@@ -8820,7 +9400,7 @@ mod tests {
                 &app,
                 Method::PUT,
                 format!("/v3/projects/{current_project_id}/nodes/{chr_node_id}/config"),
-                Some(serde_json::json!({ "adapters": 2 })),
+                Some(serde_json::json!({ "adapters": 3 })),
             ).await;
             if status != StatusCode::OK {
                 return Err(format!("CHR adapter configuration returned {status}: {configured_chr}"));
@@ -8872,6 +9452,7 @@ mod tests {
             if status != StatusCode::CREATED {
                 return Err(format!("CHR↔VPCS link returned {status}: {vpcs_link}"));
             }
+            link_ids.push(vpcs_link["link_id"].as_str().ok_or("VPCS link has no ID")?.to_owned());
             link_endpoints.extend(vpcs_link["nodes"].as_array().into_iter().flatten().cloned());
 
             let docker_link = serde_json::json!({ "nodes": [
@@ -8887,6 +9468,7 @@ mod tests {
             if status != StatusCode::CREATED {
                 return Err(format!("CHR↔Docker link returned {status}: {docker_link}"));
             }
+            link_ids.push(docker_link["link_id"].as_str().ok_or("Docker link has no ID")?.to_owned());
             link_endpoints.extend(docker_link["nodes"].as_array().into_iter().flatten().cloned());
             links_created_at_ms = Some(test_started_at.elapsed().as_millis());
 
@@ -8938,8 +9520,11 @@ mod tests {
             let (Some(interface0), Some(interface1)) = (interface0, interface1) else {
                 return Err(format!("CHR did not expose both linked interfaces: {interface_output}"));
             };
+            eprintln!("CHR link MAC mapping: adapter 0={interface0}, adapter 1={interface1}; interfaces: {interface_output}");
             routeros_command(&mut serial, &format!("/ip address add address=10.0.1.1/24 interface={interface0}")).await?;
             routeros_command(&mut serial, &format!("/ip address add address=10.0.2.1/24 interface={interface1}")).await?;
+            routeros_command(&mut serial, &format!("/tool sniffer set filter-interface={interface1}")).await?;
+            routeros_command(&mut serial, "/tool sniffer start").await?;
 
             let container_id = docker_container.as_deref().ok_or("Docker node has no container ID")?;
             let docker_binary = env::var_os("NETWORK_SIMULATOR_DOCKER")
@@ -8994,7 +9579,7 @@ mod tests {
             let mut docker_ping_attempts = 0;
             let mut docker_ping_output = String::new();
             let mut first_docker_ping_output = String::new();
-            for attempt in 0..3 {
+            for attempt in 0..1 {
                 docker_ping_attempts = attempt + 1;
                 let output = Command::new(&docker_binary)
                     .args([
@@ -9024,8 +9609,11 @@ mod tests {
                     break;
                 }
             }
+            let _ = routeros_command(&mut serial, "/tool sniffer stop").await;
+            let chr_guest_capture = routeros_command(&mut serial, "/tool sniffer packet print detail without-paging").await?;
             let mut network_debug = String::new();
             if !docker_ping_ok {
+                network_debug.push_str(&format!("\nCHR guest-side packet capture:\n{chr_guest_capture}"));
                 network_debug.push_str(&format!(
                     "\nAlpine used {docker_ping_attempts} bounded probes; first probe output:\n{first_docker_ping_output}\nTest timing from setup: CHR/VPCS/Docker links created +{} ms; CHR start request returned +{} ms; CHR login prompt +{} ms; first Alpine probe +{} ms. Link records existed before startup, but the API launches QEMU with no NIC and hot-attaches link NIOs over QMP before the start request returns.\nQEMU NIC model: virtio-net-pci; expected adapter MACs: {}, {}",
                     links_created_at_ms.unwrap_or_default(),
@@ -9045,6 +9633,13 @@ mod tests {
                     String::from_utf8_lossy(&retry.stdout),
                     String::from_utf8_lossy(&retry.stderr)
                 ));
+                docker_ping_ok = retry.status.success()
+                    && String::from_utf8_lossy(&retry.stdout).contains("3 packets received");
+                eprintln!(
+                    "First Alpine probe:\n{first_docker_ping_output}\nCHR guest-side capture:\n{chr_guest_capture}\nRetry:\n{}{}",
+                    String::from_utf8_lossy(&retry.stdout),
+                    String::from_utf8_lossy(&retry.stderr)
+                );
                 let chr_arp = routeros_command(&mut serial, "/ip arp print detail").await?;
                 let chr_interfaces =
                     routeros_command(&mut serial, "/interface ethernet print detail").await?;
@@ -9164,6 +9759,118 @@ mod tests {
                     "QEMU connectivity failed; Alpine ping: {docker_ping_output}; CHR ping: {chr_ping_output}; VPCS ping: {}{network_debug}",
                     String::from_utf8_lossy(&vpcs_output),
                 ));
+            }
+
+            let (status, hot_peer) = request(
+                &app,
+                Method::POST,
+                format!("/v3/projects/{current_project_id}/nodes"),
+                Some(serde_json::json!({
+                    "name": "Hot added NIC peer",
+                    "node_type": "vpcs",
+                    "startup_script": "ip 10.0.3.2/24"
+                })),
+            ).await;
+            if status != StatusCode::CREATED {
+                return Err(format!("hot-add peer create returned {status}: {hot_peer}"));
+            }
+            let hot_peer_id = hot_peer["node_id"].as_str().ok_or("hot-add peer has no ID")?;
+            let (status, started) = request(
+                &app,
+                Method::POST,
+                format!("/v3/projects/{current_project_id}/nodes/{hot_peer_id}/start"),
+                Some(serde_json::json!({})),
+            ).await;
+            if status != StatusCode::OK || started["status"] != "started" {
+                return Err(format!("hot-add peer start returned {status}: {started}"));
+            }
+            let (status, hot_link) = request(
+                &app,
+                Method::POST,
+                format!("/v3/projects/{current_project_id}/links"),
+                Some(serde_json::json!({ "nodes": [
+                    { "node_id": chr_node_id, "adapter_number": 2, "port_number": 0 },
+                    { "node_id": hot_peer_id, "adapter_number": 0, "port_number": 0 }
+                ] })),
+            ).await;
+            if status != StatusCode::CREATED {
+                return Err(format!("live QEMU NIC hot-add returned {status}: {hot_link}"));
+            }
+            link_ids.push(hot_link["link_id"].as_str().ok_or("hot-add link has no ID")?.to_owned());
+
+            let docker_link_path = format!("/v3/projects/{current_project_id}/links/{}", link_ids[1]);
+            for (suspend, expected_success) in [(true, false), (false, true)] {
+                let (status, body) = request(
+                    &app,
+                    Method::PUT,
+                    docker_link_path.clone(),
+                    Some(serde_json::json!({"suspend":suspend})),
+                ).await;
+                if status != StatusCode::OK {
+                    return Err(format!("live link suspend={suspend} returned {status}: {body}"));
+                }
+                let probe = Command::new(&docker_binary)
+                    .args(["exec", container_id, "ping", "-c", "1", "-W", "2", "10.0.2.1"])
+                    .output().await.map_err(|error| error.to_string())?;
+                if probe.status.success() != expected_success {
+                    return Err(format!(
+                        "live link suspend={suspend} had unexpected ping result: {}{}",
+                        String::from_utf8_lossy(&probe.stdout),
+                        String::from_utf8_lossy(&probe.stderr)
+                    ));
+                }
+            }
+
+            for endpoint in &link_endpoints {
+                let endpoint_id = endpoint["runtime_endpoint_id"].as_str().unwrap_or_default();
+                let _ = ubridge.stop_link_capture(endpoint_id).await;
+            }
+            let (status, capture) = request(
+                &app,
+                Method::POST,
+                format!("{docker_link_path}/capture/start"),
+                Some(serde_json::json!({"capture_file_name":"live-route.pcap"})),
+            ).await;
+            if status != StatusCode::CREATED {
+                return Err(format!("live capture start returned {status}: {capture}"));
+            }
+            let probe = Command::new(&docker_binary)
+                .args(["exec", container_id, "ping", "-c", "1", "-W", "3", "10.0.2.1"])
+                .output().await.map_err(|error| error.to_string())?;
+            if !probe.status.success() {
+                return Err(format!("ping during live packet capture failed: {}", String::from_utf8_lossy(&probe.stdout)));
+            }
+            let (status, _) = request(
+                &app,
+                Method::POST,
+                format!("{docker_link_path}/capture/stop"),
+                Some(serde_json::json!({})),
+            ).await;
+            if status != StatusCode::NO_CONTENT {
+                return Err(format!("live capture stop returned {status}"));
+            }
+            let (status, headers, bytes) = request_bytes(
+                &app,
+                Method::GET,
+                format!("{docker_link_path}/capture/file"),
+            ).await;
+            if status != StatusCode::OK
+                || !headers.get("content-type").and_then(|value| value.to_str().ok()).unwrap_or_default().contains("pcap")
+                || bytes.len() < 40
+            {
+                return Err(format!("live capture download was invalid: status={status}, bytes={}", bytes.len()));
+            }
+
+            for link_id in &link_ids {
+                let (status, body) = request(
+                    &app,
+                    Method::DELETE,
+                    format!("/v3/projects/{current_project_id}/links/{link_id}"),
+                    None,
+                ).await;
+                if status != StatusCode::NO_CONTENT {
+                    return Err(format!("live link deletion returned {status}: {body}"));
+                }
             }
             Ok(())
         }
@@ -10017,10 +10724,29 @@ mod tests {
 
         let vpcs = validate_node_configuration_patch(
             "vpcs",
-            serde_json::json!({ "startup_script": "ip 192.0.2.2/24" }),
+            serde_json::json!({
+                "startup_script": "ip 192.0.2.2/24",
+                "console_type": "ssh"
+            }),
         )
-        .unwrap_or_else(|_| panic!("VPCS startup scripts should be configurable"));
+        .unwrap_or_else(|_| {
+            panic!("VPCS startup scripts and GNS3 console types should be configurable")
+        });
         assert_eq!(vpcs["startup_script"], "ip 192.0.2.2/24");
+        assert_eq!(vpcs["console_type"], "ssh");
+        for console_type in ["telnet", "ssh", "none"] {
+            assert!(
+                validate_node_configuration_patch(
+                    "vpcs",
+                    serde_json::json!({"console_type": console_type})
+                )
+                .is_ok()
+            );
+        }
+        assert!(
+            validate_node_configuration_patch("vpcs", serde_json::json!({"console_type": "vnc"}))
+                .is_err()
+        );
         let dynamips = validate_node_configuration_patch(
             "dynamips",
             serde_json::json!({ "startup_config": "hostname R1\n" }),
@@ -10031,6 +10757,125 @@ mod tests {
             validate_node_configuration_patch("dynamips", serde_json::json!({ "ram": 512 }))
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn vpcs_suspend_matches_gns3_method_not_allowed_behavior() {
+        let directory = TempDir::new().expect("temporary VPCS suspend test directory");
+        let store = Store::connect(
+            directory
+                .path()
+                .join("vpcs-suspend.sqlite")
+                .to_str()
+                .expect("UTF-8 database path"),
+        )
+        .await
+        .expect("test database connects");
+        let project_id = uuid::Uuid::new_v4();
+        let node_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO projects(project_id,name,status,project_json) VALUES(?,?,?,?)")
+            .bind(project_id.to_string())
+            .bind("VPCS suspend")
+            .bind("opened")
+            .bind(serde_json::json!({"name":"VPCS suspend"}).to_string())
+            .execute(store.pool())
+            .await
+            .unwrap();
+        let node = serde_json::json!({
+            "node_id": node_id,
+            "project_id": project_id,
+            "node_type": "vpcs",
+            "name": "PC1",
+            "status": "started"
+        });
+        sqlx::query("INSERT INTO topology_objects(project_id,kind,object_id,name,object_json) VALUES(?,?,?,?,?)")
+            .bind(project_id.to_string())
+            .bind("node")
+            .bind(node_id.to_string())
+            .bind("PC1")
+            .bind(node.to_string())
+            .execute(store.pool())
+            .await
+            .unwrap();
+
+        let state = AppState::new(store);
+        let error = match suspend_node(State(state), Path((project_id, node_id))).await {
+            Ok(_) => panic!("VPCS suspend should be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.status, StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn forwarded_proxy_headers_keep_bearer_authentication_enforced() {
+        let directory = TempDir::new().expect("temporary proxy-auth test directory");
+        let store = Store::connect_unseeded(
+            directory
+                .path()
+                .join("proxy-auth.sqlite")
+                .to_str()
+                .expect("UTF-8 database path"),
+        )
+        .await
+        .expect("test database connects without auth bootstrap");
+        let initial_password_path = directory.path().join("initial-password.txt");
+        auth::initialize(store.pool(), true, &initial_password_path)
+            .await
+            .expect("auth bootstrap completes");
+        let password = std::fs::read_to_string(initial_password_path)
+            .expect("initial password file is readable");
+        let app = router(AppState::new(store));
+
+        let login = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v3/access/users/authenticate")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "username":"admin",
+                            "password":password.trim()
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(login.status(), StatusCode::OK);
+        let login_body: Value =
+            serde_json::from_slice(&login.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        let token = login_body["access_token"].as_str().unwrap();
+
+        let without_token = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v3/access/users/me")
+                    .header("x-forwarded-for", "198.51.100.27")
+                    .header("x-forwarded-proto", "https")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(without_token.status(), StatusCode::UNAUTHORIZED);
+
+        let with_token = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v3/access/users/me")
+                    .header("x-forwarded-for", "198.51.100.27")
+                    .header("x-forwarded-proto", "https")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(with_token.status(), StatusCode::OK);
     }
 
     #[test]
