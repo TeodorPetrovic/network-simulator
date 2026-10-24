@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { GlobalToast } from "./GlobalToast";
 import { NodeDialog } from "./NodeDialog";
+import { useAppNodeActions } from "./useAppNodeActions";
 import { ProjectsPage } from "./AppProjectsIndex";
 import { useProjectSession } from "./useProjectSession";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -153,97 +154,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
     }
   }
 
-  async function addNode(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!projectId || !topology || !nodeName.trim() || !templateId) return;
-    const index = topology.nodes.length;
-    try {
-      setCreatingNode(true);
-      const node = await api.createNodeFromTemplate(projectId, templateId, {
-        name: nodeName.trim(),
-        x: -420 + (index % 4) * 270,
-        y: -210 + Math.floor(index / 4) * 170,
-        ...(nodeCommand.trim() ? { start_command: nodeCommand.trim() } : {}),
-        ...(nodeStartupScript.trim() ? { startup_script: nodeStartupScript } : {}),
-        ...(nodeIdlePc.trim() ? { idlepc: nodeIdlePc.trim() } : {}),
-        ...(nodeStartupConfig.trim() ? { startup_config: nodeStartupConfig } : {}),
-      });
-      setTopology((current) => current ? { ...current, nodes: upsertNode(current.nodes, node) } : current);
-      setSelection({ kind: "node", id: node.node_id });
-      setNodeName("");
-      setNodeDialogOpen(false);
-      const kind = node.node_type === "dynamips" ? "Cisco IOS router" : node.node_type === "qemu" ? "virtual machine" : node.node_type === "vpcs" ? "VPCS" : "container";
-      setNotice(`${node.name} ${kind} created and added to the topology`);
-    } catch (reason) {
-      setError(errorMessage(reason));
-    } finally {
-      setCreatingNode(false);
-    }
-  }
-
-  async function openNodeDialog() {
-    setNodeDialogOpen(true);
-    setLoadingTemplates(true);
-    try {
-      const available = await api.templates();
-      setTemplates(available);
-      const selected = available.find((item) => item.template_id === templateId) ?? available[0];
-      setTemplateId(selected?.template_id ?? "");
-      setNodeCommand(selected?.template_type === "docker" ? selected.start_command ?? "" : "");
-      setNodeStartupScript(selected?.template_type === "vpcs" ? selected.startup_script ?? "" : "");
-      setNodeStartupConfig("");
-      setNodeIdlePc(selected?.template_type === "dynamips" ? selected.idlepc : "");
-    } catch (reason) {
-      setTemplates([]);
-      setTemplateId("");
-      setError(errorMessage(reason));
-    } finally {
-      setLoadingTemplates(false);
-    }
-  }
-
-  async function importDynamipsImage(file?: File) {
-    if (!file) return;
-    setUploadingImage(true);
-    setError("");
-    try {
-      const uploaded = await api.uploadDynamipsImage(file);
-      const available = await api.templates();
-      setTemplates(available);
-      const template = available.find((item) => item.template_type === "dynamips" && item.image === uploaded.image);
-      if (template?.template_type === "dynamips") {
-        setTemplateId(template.template_id);
-        setNodeName((current) => current || file.name.replace(/\.[^.]+$/, ""));
-        setNodeIdlePc(template.idlepc);
-      }
-      setNotice(`Imported IOS image ${uploaded.name} (${(uploaded.bytes / (1024 * 1024)).toFixed(1)} MiB)`);
-    } catch (reason) {
-      setError(errorMessage(reason));
-    } finally {
-      setUploadingImage(false);
-    }
-  }
-
-  async function importQemuImage(file?: File) {
-    if (!file) return;
-    setUploadingQemuImage(true);
-    setError("");
-    try {
-      const uploaded = await api.uploadQemuImage(file);
-      const available = await api.templates();
-      setTemplates(available);
-      const template = available.find((item) => item.template_type === "qemu" && item.hda_disk_image === uploaded.image);
-      if (template?.template_type === "qemu") {
-        setTemplateId(template.template_id);
-        setNodeName((current) => current || file.name.replace(/\.[^.]+$/, ""));
-      }
-      setNotice(`Added QEMU image ${uploaded.name} (${(uploaded.bytes / (1024 * 1024)).toFixed(1)} MiB) to the global image library`);
-    } catch (reason) {
-      setError(errorMessage(reason));
-    } finally {
-      setUploadingQemuImage(false);
-    }
-  }
+  const { addNode, openNodeDialog, importDynamipsImage, importQemuImage } = useAppNodeActions({ projectId, topology, nodeName, templateId, nodeCommand, nodeStartupScript, nodeStartupConfig, nodeIdlePc, setCreatingNode, setTopology, setSelection, setNodeName, setNodeDialogOpen, setNotice, setError, setLoadingTemplates, setTemplates, setTemplateId, setNodeCommand, setNodeStartupScript, setNodeStartupConfig, setNodeIdlePc, setUploadingImage, setUploadingQemuImage });
 
   async function changeNodeLifecycle(nodeId: string, action: "start" | "stop" | "suspend" | "reload") {
     if (!projectId) return;
