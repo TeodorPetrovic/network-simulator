@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { Cable, Lock, Pencil, Scan, ZoomIn, ZoomOut } from "lucide-react";
+import { Scan, ZoomIn, ZoomOut } from "lucide-react";
 import type { Link, LinkEndpoint, Node, Project, ResourceMonitor, RuntimeInfo, RuntimeTemplate, TopologySnapshot } from "./api";
 import { api } from "./api";
 import { nodesForLifecycle } from "./lifecycle";
 import type { LifecycleAction } from "./lifecycle";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import {
   ContextMenu, ContextMenuTrigger,
@@ -23,6 +22,7 @@ import type { Selection } from "./map/TopologyCanvas";
 import { WorkspaceSidebar } from "./WorkspaceSidebar";
 import { WorkspaceContextMenu } from "./WorkspaceContextMenu";
 import { WorkspaceToolbar } from "./WorkspaceToolbar";
+import { ProjectStatusBar } from "./ProjectStatusBar";
 import { useWorkspaceActions } from "./useWorkspaceActions";
 
 type DrawingValues = { width: number; height: number; stroke: string; fill: string; strokeWidth: number; text: string; imageDataUrl?: string };
@@ -266,11 +266,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
               <div className={`sim-canvas ${props.connecting ? "is-connecting" : ""} ${pendingDrawing ? "is-drawing" : ""}`}>
                 {featureMessage && <div className="sim-map-inline-notice" role="status">{featureMessage}</div>}
                 <div className="sim-canvas-controls">
-                  <div className="sim-map-status">
-                    <div className="sim-map-count"><span className="sim-live-dot" />{topology.nodes.length} devices <span aria-hidden="true">·</span> {topology.links.length} links{projectLocked ? <><span aria-hidden="true">·</span><Lock size={12} />Locked</> : null}</div>
-                    {props.connecting && <div className="sim-link-hint"><Cable size={14} /><span>Select ports to build a link.</span><Badge variant="secondary">{props.linkEndpoints.length} selected</Badge></div>}
-                    {pendingDrawing && <div className="sim-link-hint"><Pencil size={14} /><span>Click to place {pendingDrawing.tool}.</span><Button size="xs" variant="ghost" onClick={() => setPendingDrawing(null)}>Cancel</Button></div>}
-                  </div>
+                  <ProjectStatusBar topology={topology} projectLocked={projectLocked} connecting={props.connecting} linkEndpointCount={props.linkEndpoints.length} pendingDrawing={pendingDrawing} onCancelDrawing={() => setPendingDrawing(null)} />
                   <div className="sim-map-actions">
                     <ResourceMonitorPopover compact resources={props.resources} runtimeInfo={props.runtimeInfo} error={props.resourceError} refreshing={props.refreshingResources} onRefresh={props.onRefreshResources} />
                     <Button variant="ghost" size="icon-sm" aria-label="Zoom out" onClick={() => setView((current) => ({ ...current, zoom: Math.max(0.4, Number((current.zoom - 0.1).toFixed(1))) }))}><ZoomOut /></Button>
