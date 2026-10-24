@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
 import {
-  Activity, Cable, Check, ChevronDown, ExternalLink, HelpCircle, Image, Link2,
-  ListTree, Network, Pause, Pencil, Play, Plus, Power, Search,
-  Scan, Server, Settings2, Square, Terminal, Trash2, ZoomIn, ZoomOut, Lock, Unlock,
-  MoreHorizontal, Camera, RectangleHorizontal, Circle, Minus, Type, Filter, Layers,
+  Activity, Cable, ChevronDown, HelpCircle, Image, Link2, ListTree, Network, Pause, Pencil,
+  Play, Plus, Power, Search, Scan, Server, Settings2, Square, Terminal, Trash2, ZoomIn,
+  ZoomOut, Lock, Unlock, MoreHorizontal, Camera, RectangleHorizontal, Circle, Minus, Type,
+  Filter, Layers,
 } from "lucide-react";
 import type { Link, LinkEndpoint, Node, Project, ResourceMonitor, RuntimeInfo, RuntimeTemplate, TopologySnapshot } from "./api";
-import { api, dockerHttpConsoleUrl } from "./api";
+import { api } from "./api";
 import { canApplyLifecycle, nodesForLifecycle } from "./lifecycle";
 import type { LifecycleAction } from "./lifecycle";
 import { Button } from "@/components/ui/button";
@@ -24,17 +23,16 @@ import {
 } from "@/components/ui/context-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ResourceMonitorPopover } from "./ResourceMonitorPopover";
-import { TemplateSettingsDialog } from "./TemplateSettingsDialog";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import { NodeSettingsDialog } from "./NodeSettingsDialog";
+import { DeviceTemplateCard, NodeInspector } from "./WorkspaceDeviceComponents";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { DrawingEditorDialog, HelpDialog, InfoDialog, InterfacePickerDialog, LinkPropertiesDialog, LogConsoleDialog, ScreenshotDialog, SnapshotsDialog, SymbolPickerDialog } from "./map/MapDialogs";
 import type { ScreenshotRequest } from "./map/MapDialogs";
 import { drawingSvg, reorderDrawings, serializeSvgScreenshot, svgScreenshotPng } from "./map/helpers";
 import type { DrawingTool } from "./map/helpers";
-import { TopologyCanvas, scene, maxZoom, messageFor, portLabel, safeFileName, sameEndpoint, valuesFromDrawing, deviceGroupLabel, nodeHasAuxConsole, iconForType, templateDescription, imageName, portCount } from "./map/TopologyCanvas";
+import { TopologyCanvas, scene, maxZoom, messageFor, portLabel, safeFileName, sameEndpoint, valuesFromDrawing, deviceGroupLabel, nodeHasAuxConsole } from "./map/TopologyCanvas";
+import { pngScreenshotAvailable, spreadOverlappingNodes } from "./workspaceUtils";
 import type { Selection } from "./map/TopologyCanvas";
 
 type DrawingValues = { width: number; height: number; stroke: string; fill: string; strokeWidth: number; text: string; imageDataUrl?: string };
@@ -607,251 +605,3 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   );
 }
 
-function pngScreenshotAvailable() {
-  const canvas = document.createElement("canvas");
-  return typeof canvas.toBlob === "function" && typeof canvas.toDataURL === "function";
-}
-
-function spreadOverlappingNodes(nodes: Node[]) {
-  const positions = new Map<string, number>();
-  for (const node of nodes) {
-    const key = `${Number(node.x ?? 0)}:${Number(node.y ?? 0)}`;
-    positions.set(key, (positions.get(key) ?? 0) + 1);
-  }
-  const columns = Math.min(3, Math.max(1, Math.ceil(Math.sqrt(nodes.length))));
-  return nodes.map((node, index) => {
-    const x = Number(node.x ?? 0);
-    const y = Number(node.y ?? 0);
-    if ((positions.get(`${x}:${y}`) ?? 0) < 2) return node;
-    const column = index % columns;
-    const row = Math.floor(index / columns);
-    return { ...node, x: x + (column - (columns - 1) / 2) * 150, y: y + row * 120 };
-  });
-}
-
-function DeviceTemplateCard({ template, onAdd, onSave }: { template: RuntimeTemplate; onAdd: () => void; onSave: (id: string, patch: Record<string, unknown>) => Promise<void> }) {
-  const Icon = iconForType(template.template_type);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  return <>
-  <div className="sim-device-template" draggable onDragStart={(event) => {
-    event.dataTransfer.effectAllowed = "copy";
-    event.dataTransfer.setData("application/x-network-simulator-template", template.template_id);
-    event.dataTransfer.setData("text/plain", template.name);
-  }}>
-    <span className="sim-template-icon"><Icon size={17} /></span>
-    <span className="sim-template-copy"><b title={template.name}>{template.name}</b><small>{templateDescription(template)}</small></span>
-    <Button variant="ghost" size="icon-xs" onClick={() => setSettingsOpen(true)} aria-label={`Configure ${template.name} template`} title="Configure template"><Settings2 /></Button>
-    <Button variant="ghost" size="icon-xs" onClick={onAdd} aria-label={`Add ${template.name}`} title="Add to topology"><Plus /></Button>
-  </div>
-    <TemplateSettingsDialog template={template} open={settingsOpen} onOpenChange={setSettingsOpen} onSave={onSave} />
-  </>;
-}
-
-function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
-  node: Node | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSave: (id: string, patch: Record<string, unknown>) => Promise<void>;
-}) {
-  const [draft, setDraft] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const kind = node?.node_type;
-  const supported = ["qemu", "docker", "vpcs", "dynamips"].includes(kind ?? "");
-
-  useEffect(() => {
-    if (!node) return;
-    setDraft({
-      name: node.name,
-      memory: String(node.memory ?? (kind === "qemu" ? 512 : 0)),
-      cpus: String(node.cpus ?? (kind === "qemu" ? 1 : 0)),
-      adapters: String(node.adapters ?? 1),
-      ...(kind === "qemu" ? {
-        adapter_type: String(node.adapter_type ?? "e1000"),
-        hda_disk_interface: String(node.hda_disk_interface ?? "ide"),
-        boot_priority: String(node.boot_priority ?? "c"),
-      } : {}),
-      ...(kind === "docker" ? {
-        start_command: String(node.start_command ?? ""),
-        environment: String(node.environment ?? ""),
-        extra_hosts: String(node.extra_hosts ?? ""),
-        console_type: String(node.console_type ?? "telnet"),
-        console_http_port: String(node.console_http_port ?? 80),
-        console_http_path: String(node.console_http_path ?? "/"),
-        aux_type: String(node.aux_type ?? "none"),
-        extra_volumes: Array.isArray(node.extra_volumes)
-          ? node.extra_volumes.filter((path): path is string => typeof path === "string").join("\n")
-          : "",
-      } : {}),
-      ...(kind === "vpcs" ? { startup_script: String(node.startup_script ?? "") } : {}),
-      ...(kind === "dynamips" ? { startup_config: String(node.startup_config ?? "") } : {}),
-    });
-    setError("");
-  }, [kind, node, open]);
-
-  const field = (name: string, label: string, type = "text", helper?: string, step?: string) => <label className="grid gap-1.5" key={name}>
-    <Label htmlFor={`node-${node?.node_id}-${name}`}>{label}</Label>
-    <Input id={`node-${node?.node_id}-${name}`} type={type} step={step} min={type === "number" ? "0" : undefined} value={draft[name] ?? ""} onChange={(event) => setDraft((current) => ({ ...current, [name]: event.target.value }))} />
-    {helper && <span className="text-xs text-muted-foreground">{helper}</span>}
-  </label>;
-  const selectField = (name: string, label: string, values: string[]) => <label className="grid gap-1.5" key={name}>
-    <Label>{label}</Label>
-    <Select value={draft[name] ?? values[0]} onValueChange={(value) => setDraft((current) => ({ ...current, [name]: value }))}>
-      <SelectTrigger aria-label={label}><SelectValue /></SelectTrigger>
-      <SelectContent>{values.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent>
-    </Select>
-  </label>;
-  const textArea = (name: string, label: string, helper: string, rows = 4) => <label className="grid gap-1.5" key={name}>
-    <Label htmlFor={`node-${node?.node_id}-${name}`}>{label}</Label>
-    <Textarea id={`node-${node?.node_id}-${name}`} value={draft[name] ?? ""} onChange={(event) => setDraft((current) => ({ ...current, [name]: event.target.value }))} rows={rows} />
-    <span className="text-xs text-muted-foreground">{helper}</span>
-  </label>;
-
-  async function save(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!node || !supported) return;
-    setSaving(true);
-    setError("");
-    const patch: Record<string, unknown> = { name: draft.name?.trim() };
-    if (kind === "qemu") {
-      patch.memory = Number(draft.memory);
-      patch.cpus = Number(draft.cpus);
-      patch.adapters = Number(draft.adapters);
-      patch.adapter_type = draft.adapter_type;
-      patch.hda_disk_interface = draft.hda_disk_interface;
-      patch.boot_priority = draft.boot_priority;
-    } else if (kind === "docker") {
-      patch.memory = Number(draft.memory);
-      patch.cpus = Number(draft.cpus);
-      patch.adapters = Number(draft.adapters);
-      patch.start_command = draft.start_command ?? "";
-      patch.environment = draft.environment ?? "";
-      patch.extra_hosts = draft.extra_hosts ?? "";
-      patch.extra_volumes = (draft.extra_volumes ?? "").split("\n").map((path) => path.trim()).filter(Boolean);
-      patch.console_type = draft.console_type ?? "telnet";
-      if (patch.console_type !== "none") {
-        patch.console_http_port = Number(draft.console_http_port);
-        patch.console_http_path = draft.console_http_path || "/";
-      }
-      patch.aux_type = draft.aux_type ?? "none";
-    } else if (kind === "vpcs") {
-      patch.startup_script = draft.startup_script ?? "";
-    } else if (kind === "dynamips") {
-      patch.startup_config = draft.startup_config ?? "";
-    }
-    try {
-      await onSave(node.node_id, patch);
-      onOpenChange(false);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not save device settings");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  function openHttpConsole() {
-    if (!node || (draft.console_type !== "http" && draft.console_type !== "https")) return;
-    const host = typeof node.console_host === "string" && node.console_host ? node.console_host : window.location.hostname;
-    const url = dockerHttpConsoleUrl(draft.console_type, host, Number(draft.console_http_port), draft.console_http_path || "/");
-    if (!url) {
-      setError("Enter a valid HTTP console port and path before opening the console.");
-      return;
-    }
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
-
-  if (!node || !supported) return null;
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="template-settings-dialog">
-    <DialogHeader><DialogTitle>Configure {node.name}</DialogTitle><DialogDescription>
-      Settings apply to this device only. Stop it before saving.{kind === "docker" ? " Docker settings replace its stopped container; configured persistent paths keep their data." : ""}
-    </DialogDescription></DialogHeader>
-    <form className="template-settings-form" onSubmit={(event) => void save(event)}>
-      <div className="template-settings-grid">
-        {field("name", "Device name")}
-        {(kind === "qemu" || kind === "docker") && field("adapters", "Network adapters", "number", "The count cannot be reduced below ports already used by links.")}
-        {(kind === "qemu" || kind === "docker") && field("memory", kind === "qemu" ? "RAM (MB)" : "Memory limit (MB)", "number", kind === "docker" ? "0 means no Docker memory limit." : undefined)}
-        {(kind === "qemu" || kind === "docker") && field("cpus", kind === "qemu" ? "vCPUs" : "CPU limit", "number", kind === "docker" ? "0 means no Docker CPU limit." : undefined, kind === "docker" ? "0.25" : "1")}
-        {kind === "qemu" && <>
-          {selectField("adapter_type", "Network adapter model", ["e1000", "virtio-net-pci", "rtl8139", "vmxnet3"])}
-          {selectField("hda_disk_interface", "Primary disk interface", ["ide", "scsi", "virtio", "sd"])}
-          {selectField("boot_priority", "Boot priority", ["c", "d", "n", "dc", "cd"])}
-        </>}
-        {kind === "docker" && <div className="template-settings-wide">
-          {selectField("console_type", "Console type", ["telnet", "vnc", "http", "https", "none"])}
-          {draft.console_type === "http" || draft.console_type === "https" ? <div className="grid gap-2 rounded-md border p-3 sm:col-span-2">
-            <p className="text-sm">The controller stores this console port and path but does not publish or proxy Docker ports. Open in a new tab assumes the service is reachable from your browser.</p>
-            <div className="grid gap-3 sm:grid-cols-2">{field("console_http_port", "HTTP port in the container", "number", undefined, "1")}{field("console_http_path", "HTTP path", "text", "Must begin with a slash.")}</div>
-            <Button type="button" variant="outline" className="w-fit" onClick={openHttpConsole}><ExternalLink />Open in new tab</Button>
-          </div> : null}
-          {draft.console_type === "vnc" && <p role="status" className="text-sm text-muted-foreground sm:col-span-2">The controller can start VNC on its TCP console port, but this UI has no browser VNC route.</p>}
-          {draft.console_type === "none" && <p role="status" className="text-sm text-muted-foreground sm:col-span-2">The controller does not accept Docker console type “none” yet. Select another type to save.</p>}
-          {selectField("aux_type", "Auxiliary console type", ["none", "telnet", "ssh"])}
-          {draft.aux_type !== "none" && <p role="status" className="text-sm text-muted-foreground sm:col-span-2">When the device is running, open its context menu and choose “Open auxiliary console”.</p>}
-          {textArea("start_command", "Start command", "Arguments passed to the image. Leave blank to use its default command.", 2)}
-          {textArea("environment", "Environment variables", "One KEY=VALUE entry per line.")}
-          {textArea("extra_hosts", "Extra hosts", "One host:address entry per line.")}
-          {textArea("extra_volumes", "Persistent container paths", "One absolute path inside the container per line. Data lives in the project runtime directory.")}
-        </div>}
-        {kind === "vpcs" && <div className="template-settings-wide">{textArea("startup_script", "Startup script", "VPCS commands run when this device starts.")}</div>}
-        {kind === "dynamips" && <div className="template-settings-wide">{textArea("startup_config", "Startup configuration", "IOS configuration written before the router starts.", 8)}</div>}
-      </div>
-      {node.status !== "stopped" && <p role="status" className="text-sm text-muted-foreground">Stop this device to edit its runtime settings.</p>}
-      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      <DialogFooter><Button type="button" variant="ghost" disabled={saving} onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" disabled={saving || node.status !== "stopped" || (kind === "docker" && draft.console_type === "none")}>{saving ? "Saving…" : "Save device settings"}</Button></DialogFooter>
-    </form>
-  </DialogContent></Dialog>;
-}
-
-function NodeInspector({ node, links, nodes, onLifecycle, onOpenConsole, onRename, onConfigure, onDelete }: {
-  node: Node;
-  links: Link[];
-  nodes: Node[];
-  onLifecycle: (id: string, action: LifecycleAction) => void;
-  onOpenConsole: (node: Node, auxiliary?: boolean) => void;
-  onRename: (id: string, name: string) => void;
-  onConfigure: () => void;
-  onDelete: () => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(node.name);
-  const [saving, setSaving] = useState(false);
-  const linkedPorts = links.flatMap((link) => link.nodes.filter((endpoint) => endpoint.node_id === node.node_id).map((endpoint) => ({
-    endpoint,
-    peers: link.nodes.filter((peer) => peer.node_id !== node.node_id).map((peer) => nodes.find((item) => item.node_id === peer.node_id)?.name ?? "Unknown device"),
-  })));
-  const canOpenConsole = ["docker", "qemu", "vpcs", "dynamips"].includes(node.node_type ?? "") && node.status === "started";
-
-  async function saveName() {
-    const trimmed = name.trim();
-    if (!trimmed || trimmed === node.name) { setEditing(false); setName(node.name); return; }
-    setSaving(true);
-    try { await onRename(node.node_id, trimmed); setEditing(false); }
-    catch { /* The parent reports the controller error in the application status area. */ }
-    finally { setSaving(false); }
-  }
-
-  return <Card className="mx-3 mb-3 p-3">
-    <div className="flex items-start justify-between gap-2">
-      <div className="min-w-0 flex-1">
-        <div className="mb-2 flex items-center gap-2"><Badge variant="outline" className="capitalize">{node.node_type ?? "device"}</Badge><Badge variant={node.status === "started" ? "default" : "secondary"} className="capitalize">{node.status ?? "stopped"}</Badge></div>
-        {editing ? <div className="flex gap-1"><Input data-rename-node autoFocus value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void saveName(); if (event.key === "Escape") { setEditing(false); setName(node.name); } }} aria-label="Device name" /><Button size="icon" disabled={saving || !name.trim()} onClick={() => void saveName()} aria-label="Save device name"><Check /></Button></div> : <div className="flex items-center gap-1"><h3 className="truncate text-sm font-semibold" title={node.name}>{node.name}</h3><Button variant="ghost" size="icon-xs" onClick={() => { setName(node.name); setEditing(true); }} aria-label="Rename device"><Pencil /></Button></div>}
-        <p className="mt-1 truncate text-xs text-muted-foreground">{imageName(node)}</p>
-      </div>
-      <Button variant="ghost" size="icon-xs" onClick={onDelete} aria-label="Delete device"><Trash2 /></Button>
-    </div>
-    <div className="mt-3 flex flex-wrap gap-2">
-      {["qemu", "docker", "vpcs", "dynamips"].includes(node.node_type ?? "") && <Button variant="outline" size="sm" onClick={onConfigure}><Settings2 />Configure</Button>}
-      {canApplyLifecycle(node, "start") && <Button size="sm" disabled={Boolean(node.runtime_missing)} onClick={() => onLifecycle(node.node_id, "start")}><Play />Start</Button>}
-      {canApplyLifecycle(node, "stop") && <Button variant="outline" size="sm" onClick={() => onLifecycle(node.node_id, "stop")}><Power />Stop</Button>}
-      {canOpenConsole && <Button variant="outline" size="sm" onClick={() => onOpenConsole(node)}><Terminal />Open console</Button>}
-      {canApplyLifecycle(node, "suspend") && <Button variant="outline" size="icon-sm" onClick={() => onLifecycle(node.node_id, "suspend")} aria-label="Suspend device" title="Suspend"><Pause /></Button>}
-      {canApplyLifecycle(node, "reload") && <Button variant="outline" size="icon-sm" onClick={() => onLifecycle(node.node_id, "reload")} aria-label="Restart device" title="Restart"><Activity /></Button>}
-    </div>
-    <Separator className="my-3" />
-    <div className="space-y-2">
-      <div className="sim-detail-row"><span>Interfaces</span><b>{portCount(node)}</b></div>
-      <div className="sim-detail-row"><span>Node ID</span><code>{node.node_id.slice(0, 8)}</code></div>
-      {linkedPorts.length ? <div className="space-y-2 pt-1"><p className="text-xs font-medium text-muted-foreground">Connected interfaces</p>{linkedPorts.map(({ endpoint, peers }) => <div key={`${endpoint.adapter_number}:${endpoint.port_number}`} className="flex items-center justify-between gap-2 text-xs"><span className="font-mono">{portLabel(node, endpoint)}</span><span className="truncate text-muted-foreground">{peers.join(", ")}</span></div>)}</div> : <p className="text-xs text-muted-foreground">No connected interfaces.</p>}
-    </div>
-  </Card>;
-}
