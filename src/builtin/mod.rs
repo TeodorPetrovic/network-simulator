@@ -23,50 +23,11 @@ const MAX_FDB_ENTRIES: usize = 8192;
 const FDB_AGE: Duration = Duration::from_secs(300);
 const FDB_AGE_INTERVAL: Duration = Duration::from_secs(60);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum SwitchPortMode {
-    Access { vlan: u16 },
-    Dot1q { native_vlan: u16 },
-    QinQ { vlan: u16, ethertype: u16 },
-}
+pub use types::BuiltinRuntime;
+use types::{ActivePort, BuiltinState, ForwardingNode, LearnedAddress, RuntimePort, SwitchPortMode};
 
-#[derive(Clone)]
-struct RuntimePort {
-    socket: Arc<UdpSocket>,
-    relay_address: SocketAddr,
-    mode: Option<SwitchPortMode>,
-}
-
-#[derive(Clone)]
-struct LearnedAddress {
-    port: u16,
-    learned_at: Instant,
-}
-
-struct ForwardingNode {
-    node_type: String,
-    modes: HashMap<u16, SwitchPortMode>,
-    ports: HashMap<u16, RuntimePort>,
-    learned: HashMap<(u16, [u8; 6]), LearnedAddress>,
-}
-
-struct ActivePort {
-    task: JoinHandle<()>,
-}
-
-#[derive(Default)]
-struct BuiltinState {
-    forwarding: HashMap<String, Arc<Mutex<ForwardingNode>>>,
-    active_ports: HashMap<(String, u16), ActivePort>,
-}
-
-/// Runtime state for builtins. These nodes do not start a separate VM process;
-/// the only long-running work is the UDP forwarding task for each switch/hub
-/// port that is attached to a topology link.
-#[derive(Clone, Default)]
-pub struct BuiltinRuntime {
-    state: Arc<Mutex<BuiltinState>>,
-}
+#[path = "types.rs"]
+mod types;
 
 impl BuiltinRuntime {
     pub fn validate_host_interfaces(node: &Value) -> Result<(), String> {
