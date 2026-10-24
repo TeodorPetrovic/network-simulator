@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Activity, FolderOpen, Network, Plus, Search, Trash2, X } from "lucide-react";
+import { Activity, FolderOpen, Network, Plus, Search, Trash2 } from "lucide-react";
 import { api, dockerHttpConsoleUrl, projectNotificationsUrl } from "./api";
 import type { LinkEndpoint, Node, Project, ProjectEvent, ResourceMonitor, RuntimeInfo, RuntimeTemplate, TopologySnapshot } from "./api";
 import { applyProjectEvent } from "./topology";
@@ -12,6 +12,7 @@ import { ApplianceManagerPage } from "./ApplianceManagerPage";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { GlobalToast } from "./GlobalToast";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -611,7 +612,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
           </div>
         </header>}
 
-        {(error || notice) && <Card className={`sim-flash ${error ? "sim-flash-error" : ""}`} role={error ? "alert" : "status"} aria-live="polite"><span>{error || notice}</span><Button variant="ghost" size="icon-xs" onClick={() => { setError(""); setNotice(""); }} aria-label="Dismiss notification"><X /></Button></Card>}
+        <GlobalToast error={error} notice={notice} onDismiss={() => { setError(""); setNotice(""); }} />
 
         <main className="main-area">
           {showApplianceManager ? <ApplianceManagerPage onBack={onBackFromApplianceManager ?? (() => navigateToProject(projectId))} onOpenPreferences={onOpenPreferences} onOpenImageCatalog={() => setMarketplaceOpen(true)} onTemplatesChanged={setTemplates} /> : projectId ? (busy || !project || !topology ? <div className="sim-loading"><Activity className="animate-pulse" />Loading project topology…</div> : <SimulatorWorkspace
