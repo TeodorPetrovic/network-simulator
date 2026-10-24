@@ -35,7 +35,7 @@ pub(super) async fn create_link(
     set_default(object, "filters", json!({}));
     set_default(object, "link_style", json!({}));
     object.insert("capturing".into(), json!(false));
-    let filters = validate_link_filters(object.get("filters").unwrap_or(&Value::Null))?;
+    let filters = super::validate_link_filters(object.get("filters").unwrap_or(&Value::Null))?;
     object.insert("filters".into(), filters);
     if !object.get("suspend").is_some_and(Value::is_boolean) {
         return Err(ApiError::bad_request("suspend must be a boolean"));

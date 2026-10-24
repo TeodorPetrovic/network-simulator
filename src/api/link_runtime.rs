@@ -355,8 +355,12 @@ pub(super) async fn attach_runtime_link_endpoint(
         let stored_path = link["capture_file_path"]
             .as_str()
             .ok_or_else(|| ApiError::conflict("Capturing link has no capture file path"))?;
-        let capture_path =
-            canonical_capture_file_path(project_id, &capture_file_name, Some(stored_path), false)?;
+        let capture_path = super::canonical_capture_file_path(
+            project_id,
+            &capture_file_name,
+            Some(stored_path),
+            false,
+        )?;
         engine
             .start_capture(&endpoint, &capture_path.to_string_lossy())
             .await
