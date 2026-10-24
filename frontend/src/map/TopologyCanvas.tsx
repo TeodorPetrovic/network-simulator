@@ -5,6 +5,7 @@ import type { Drawing, Link, LinkEndpoint, Node } from "../api";
 import { api } from "../api";
 import { sanitizeDrawingSvg } from "../topology";
 import { selectionBoxIds } from "./helpers";
+import { useCanvasKeyboardShortcuts } from "./useCanvasKeyboardShortcuts";
 import { resolveCanvasSymbol } from "./symbols";
 import { endpointLabel, iconForSymbolName, iconForType, kindLabel, localPortPoint, nodePorts, portCount, portIndex, portLabel, portPoint, sameEndpoint } from "./topologyUtils";
 export { deviceGroupLabel, endpointLabel, iconForSymbolName, iconForType, imageName, kindLabel, localPortPoint, messageFor, nodeHasAuxConsole, nodePorts, portCount, portIndex, portLabel, portPoint, safeFileName, sameEndpoint, templateDescription, valuesFromDrawing } from "./topologyUtils";
@@ -64,10 +65,10 @@ export function TopologyCanvas(props: CanvasProps) {
   const drawingDragRef = useRef<DrawingDragState | null>(null);
   const selectionRef = useRef<{ pointerId: number; start: { x: number; y: number }; additive: boolean } | null>(null);
   const panRef = useRef<PanState | null>(null);
-  const spaceDownRef = useRef(false);
   const panMovedRef = useRef(false);
   const movedRef = useRef(false);
   const lastMoveRef = useRef<Map<string, { x: number; y: number }> | null>(null);
+  const { spaceDownRef, onKeyDown, onKeyUp, onBlur } = useCanvasKeyboardShortcuts(props, lastMoveRef);
   const [dropActive, setDropActive] = useState(false);
   const [selectionBox, setSelectionBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [drawingPositions, setDrawingPositions] = useState<Record<string, { x: number; y: number }>>({});
@@ -284,16 +285,7 @@ export function TopologyCanvas(props: CanvasProps) {
   }
 
   return <div className={`sim-canvas-surface ${dropActive ? "is-drop-active" : ""}`} onDragOver={(event) => { if (event.dataTransfer.types.includes("application/x-network-simulator-template")) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDropActive(true); } }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) setDropActive(false); }} onDrop={dropTemplate}>
-    <svg ref={svgRef} viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`} role="group" aria-label="Network topology canvas" tabIndex={0} onPointerDown={startPan} onPointerMove={moveNode} onPointerUp={endMove} onPointerCancel={endMove} onKeyDown={(event) => {
-      const mod = event.metaKey || event.ctrlKey;
-      if (event.code === "Space") { event.preventDefault(); spaceDownRef.current = true; }
-      if (mod && event.key.toLowerCase() === "a") { event.preventDefault(); props.onMultiSelect(props.nodes.map((node) => node.node_id)); }
-      if (mod && (event.key === "+" || event.key === "=")) { event.preventDefault(); props.onZoom(0.1); }
-      if (mod && event.key === "-") { event.preventDefault(); props.onZoom(-0.1); }
-      if (mod && event.key.toLowerCase() === "z" && lastMoveRef.current) { event.preventDefault(); lastMoveRef.current.forEach((point, id) => props.onNodeMoveEnd(id, point.x, point.y)); lastMoveRef.current = null; }
-      if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); props.onDeleteSelected(); }
-      if (event.key === "Escape") props.onClearSelection();
-    }} onKeyUp={(event) => { if (event.code === "Space") spaceDownRef.current = false; }} onBlur={() => { spaceDownRef.current = false; }} onClick={(event) => {
+    <svg ref={svgRef} viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`} role="group" aria-label="Network topology canvas" tabIndex={0} onPointerDown={startPan} onPointerMove={moveNode} onPointerUp={endMove} onPointerCancel={endMove} onKeyDown={onKeyDown} onKeyUp={onKeyUp} onBlur={onBlur}  onClick={(event) => {
       if (panMovedRef.current) { panMovedRef.current = false; return; }
       if (event.target === event.currentTarget || (event.target as Element).tagName === "rect") {
         const point = scenePoint(event.clientX, event.clientY, svgRef.current!.getBoundingClientRect());
