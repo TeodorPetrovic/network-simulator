@@ -23,6 +23,7 @@ import { WorkspaceSidebar } from "./WorkspaceSidebar";
 import { WorkspaceContextMenu } from "./WorkspaceContextMenu";
 import { WorkspaceToolbar } from "./WorkspaceToolbar";
 import { ProjectStatusBar } from "./ProjectStatusBar";
+import { useWorkspaceSelection } from "./useWorkspaceSelection";
 import { useWorkspaceActions } from "./useWorkspaceActions";
 
 type DrawingValues = { width: number; height: number; stroke: string; fill: string; strokeWidth: number; text: string; imageDataUrl?: string };
@@ -87,8 +88,6 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [screenshotOpen, setScreenshotOpen] = useState(false);
   const [linkPropertiesOpen, setLinkPropertiesOpen] = useState(false);
   const [symbolNode, setSymbolNode] = useState<Node | null>(null);
-  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>(props.selection?.kind === "node" ? [props.selection.id] : []);
-  const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
   const [drawingTool, setDrawingTool] = useState<DrawingTool | null>(null);
   const [pendingDrawing, setPendingDrawing] = useState<{ tool: DrawingTool; values: DrawingValues } | null>(null);
   const [drawingEditOpen, setDrawingEditOpen] = useState(false);
@@ -100,7 +99,6 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [symbolDefaults, setSymbolDefaults] = useState<Record<string, string>>({});
   const [customSymbolIds, setCustomSymbolIds] = useState<string[]>([]);
   const [featureMessage, setFeatureMessage] = useState("");
-  const selectedDrawing = topology.drawings.find((drawing) => drawing.drawing_id === selectedDrawingId) ?? null;
   const visibleSummaryNodes = useMemo(() => topology.nodes.filter((node) => {
     const matchesQuery = !summaryQuery.trim() || `${node.name} ${node.node_type ?? ""}`.toLowerCase().includes(summaryQuery.trim().toLowerCase());
     const matchesStatus = summaryStatus === "all" || (node.status ?? "stopped") === summaryStatus;
@@ -114,13 +112,13 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
     }));
   }, [deviceQuery, props.templates]);
   const canvasNodes = useMemo(() => spreadOverlappingNodes(topology.nodes), [topology.nodes]);
+  const { selectedNodeIds, setSelectedNodeIds, selectedDrawingId, setSelectedDrawingId, selectedDrawing } = useWorkspaceSelection(props.selection, topology);
   const selectedNode = topology.nodes.find((node) => node.node_id === (props.selection?.kind === "node" ? props.selection.id : selectedNodeIds[0])) ?? props.selectedNode;
   const selectedLink = props.selection?.kind === "link" ? topology.links.find((link) => link.link_id === props.selection?.id) ?? props.selectedLink : props.selectedLink;
   const { placeDrawing, saveEditedDrawing, removeDrawing, moveDrawing, changeDrawingOrder, toggleProjectLock, toggleNodeLock, toggleNodeIsolation, toggleLinkSuspend, saveNodeLabelPosition, saveLinkEndpointLabelPosition } = useWorkspaceActions({ workspace: props, topology, selectedDrawing, pendingDrawing, projectLocked, setTopology, setSelectedNodeIds, setSelectedDrawingId, setPendingDrawing, setFeatureMessage, setDrawingEditOpen, setProjectLocked });
   const selectedLifecycleNodes = topology.nodes.filter((node) => selectedNodeIds.includes(node.node_id) && !node.locked);
 
   useEffect(() => { setTopology(props.topology); }, [props.topology]);
-  useEffect(() => { setSelectedNodeIds(props.selection?.kind === "node" ? [props.selection.id] : []); }, [props.selection?.kind, props.selection?.id]);
   useEffect(() => { setProjectLocked(Boolean(props.project.locked)); }, [props.project.project_id, props.project.locked]);
   useEffect(() => {
     let active = true;
