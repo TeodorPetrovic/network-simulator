@@ -33,9 +33,9 @@ use tower_http::{
 };
 use uuid::Uuid;
 
-#[path = "auth/mod.rs"]
+#[path = "../auth/mod.rs"]
 pub(crate) mod auth;
-#[path = "api/controller_routes.rs"]
+#[path = "controller_routes.rs"]
 mod controller_routes;
 
 use crate::{
