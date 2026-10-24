@@ -35,7 +35,7 @@ use uuid::Uuid;
 
 #[path = "../auth/mod.rs"]
 pub(crate) mod auth;
-#[path = "controller_routes.rs"]
+#[path = "controller_routes/mod.rs"]
 mod controller_routes;
 
 use crate::{
