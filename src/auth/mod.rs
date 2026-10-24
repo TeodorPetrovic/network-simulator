@@ -40,6 +40,7 @@ use gate::{auth_gate, has_privilege};
 use gate::{is_ticket_endpoint, request_has_forwarded_headers, trust_proxy_headers_unauthenticated};
 use groups::*;
 use keys::*;
+use me::{me, update_me};
 use passwords::*;
 use pools::*;
 use rbac::seed_rbac;
@@ -59,6 +60,7 @@ mod auth_mode;
 mod gate;
 mod groups;
 mod keys;
+mod me;
 mod pools;
 mod passwords;
 mod rbac;
@@ -376,25 +378,6 @@ fn url_query_value(query: &str, name: &str) -> Option<String> {
 
 
 
-async fn me(
-    State(state): State<AppState>,
-    axum::Extension(principal): axum::Extension<Principal>,
-) -> Result<Json<Value>, AuthError> {
-    get_user_value(state.store.pool(), &principal.user_id)
-        .await
-        .map(Json)
-}
-
-async fn update_me(
-    State(state): State<AppState>,
-    axum::Extension(principal): axum::Extension<Principal>,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, AuthError> {
-    update_user_row(state.store.pool(), &principal.user_id, &body, true).await?;
-    get_user_value(state.store.pool(), &principal.user_id)
-        .await
-        .map(Json)
-}
 
 fn required_string(value: &Value, key: &str) -> Result<String, AuthError> {
     value
