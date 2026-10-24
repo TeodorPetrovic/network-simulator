@@ -616,7 +616,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/v3/projects/{project_id}/nodes",
-            get(list_nodes).post(node_templates::create_node),
+            get(topology_listing::list_nodes).post(node_templates::create_node),
         )
         .route(
             "/v3/projects/{project_id}/templates/{template_id}",
@@ -650,7 +650,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/v3/projects/{project_id}/links",
-            get(list_links).post(link_create::create_link),
+            get(topology_listing::list_links).post(link_create::create_link),
         )
         .route(
             "/v3/projects/{project_id}/links/{link_id}",
@@ -680,7 +680,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/v3/projects/{project_id}/drawings",
-            get(list_drawings).post(topology::create_drawing),
+            get(topology_listing::list_drawings).post(topology::create_drawing),
         )
         .route(
             "/v3/projects/{project_id}/drawings/{drawing_id}",
@@ -832,66 +832,54 @@ impl From<sqlx::Error> for ApiError {
 
 mod system;
 
-mod marketplace_api;
-async fn list_nodes(
-    State(state): State<AppState>,
-    Path(project_id): Path<Uuid>,
-) -> Result<Json<Vec<Value>>, ApiError> {
-    let project_id = project_id.to_string();
-    let nodes = list_objects(state.store.pool(), &project_id, "node")
-        .await?
-        .0;
-    Ok(Json(
-        refresh_node_statuses(&state, &project_id, nodes).await,
-    ))
-}
-
-async fn list_links(
-    State(state): State<AppState>,
-    Path(project_id): Path<Uuid>,
-) -> Result<Json<Vec<Value>>, ApiError> {
-    list_objects(state.store.pool(), &project_id.to_string(), "link").await
-}
-
-async fn list_drawings(
-    State(state): State<AppState>,
-    Path(project_id): Path<Uuid>,
-) -> Result<Json<Vec<Value>>, ApiError> {
-    list_objects(state.store.pool(), &project_id.to_string(), "drawing").await
-}
-
+mod consoles;
 mod docker_node;
 mod dynamips_node;
-mod node_templates;
-mod qemu_node;
-mod vpcs_node;
-use dynamips_node::dynamips_options_from_template;
-use node_templates::create_node;
-
-mod consoles;
 mod link_capture;
 mod link_create;
 mod link_details;
 mod link_runtime;
+mod marketplace_api;
 mod node_configuration;
 mod node_handlers;
 mod node_lifecycle;
+mod node_runtime;
+mod node_templates;
 mod notifications;
+mod objects;
+mod project_store;
 mod projects;
+mod qemu_node;
 mod runtime_templates;
 mod template_profiles;
 mod templates;
 mod topology;
+mod topology_listing;
+mod vpcs_node;
 use consoles::parse_docker_resize_control;
+use dynamips_node::dynamips_options_from_template;
 use link_capture::{
     canonical_capture_file_path, canonical_capture_file_path_in, safe_capture_file_name,
 };
 use link_details::validate_link_filters;
+use link_runtime::{
+    attach_node_links, attach_runtime_link_endpoint, attach_runtime_nio_with_rollback,
+    detach_node_links, detach_runtime_link_endpoint, link_filters_for_endpoint,
+    link_runtime_endpoints, load_topology_node, node_link_entries, qemu_link_from_endpoint,
+    runtime_endpoint_status,
+};
 use node_configuration::{
     persist_node_configuration, validate_adapter_count_against_links,
     validate_builtin_configuration_links, validate_node_configuration_patch,
 };
 use node_lifecycle::{change_node_runtime_state, suspend_node};
+use node_runtime::{
+    apply_node_lifecycle, cleanup_link_runtime, cleanup_node_runtime, docker_interface_mac,
+    stop_runtime_node, vpcs_startup_script,
+};
+use node_templates::create_node;
+use objects::{list_objects, list_objects_in_tx, refresh_node_statuses};
+use project_store::{ensure_project_exists, ensure_project_exists_pool, fetch_project};
 use runtime_templates::{
     base_runtime_templates, runtime_api_error, valid_container_path,
     validate_docker_extra_configs_api,
@@ -902,372 +890,6 @@ use topology::{
     create_topology_object, delete_node_and_connected_links, delete_topology_object,
     get_topology_object, update_topology_object,
 };
-
-use link_runtime::{
-    attach_node_links, attach_runtime_link_endpoint, attach_runtime_nio_with_rollback,
-    detach_node_links, detach_runtime_link_endpoint, link_filters_for_endpoint,
-    link_runtime_endpoints, load_topology_node, node_link_entries, qemu_link_from_endpoint,
-    runtime_endpoint_status,
-};
-async fn apply_node_lifecycle(
-    state: &AppState,
-    project_id: &str,
-    node: &mut Value,
-    action: NodeAction,
-) -> Result<String, ApiError> {
-    let node_type = node
-        .get("node_type")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let node_id = node
-        .get("node_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| ApiError::conflict("Node has no node ID"))?;
-    let before_stop = matches!(&action, NodeAction::Stop) && !BuiltinRuntime::is_type(node_type)
-        || (matches!(&action, NodeAction::Reload) && matches!(node_type, "docker" | "vpcs"));
-    if before_stop {
-        detach_node_links(state, project_id, node_id).await?;
-    }
-    match node_type {
-        "docker" => {
-            let container_id = node
-                .get("container_id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| ApiError::conflict("Docker node has no runtime container"))?;
-            let status = state
-                .runtime
-                .lifecycle(container_id, action)
-                .await
-                .map_err(runtime_api_error)?;
-            if matches!(action, NodeAction::Start | NodeAction::Reload) {
-                if let Err(error) = attach_node_links(state, project_id, node_id, false).await {
-                    let _ = detach_node_links(state, project_id, node_id).await;
-                    let _ = state
-                        .runtime
-                        .lifecycle(container_id, NodeAction::Stop)
-                        .await;
-                    return Err(error);
-                }
-            }
-            Ok(status)
-        }
-        "qemu" => {
-            let vm = state.qemu.vm_from_node(node).map_err(runtime_api_error)?;
-            let status = state
-                .qemu
-                .lifecycle(&vm, action, &[])
-                .await
-                .map_err(runtime_api_error)?;
-            if matches!(&action, NodeAction::Start) {
-                if let Err(error) = attach_node_links(state, project_id, node_id, false).await {
-                    let _ = detach_node_links(state, project_id, node_id).await;
-                    let _ = state.qemu.lifecycle(&vm, NodeAction::Stop, &[]).await;
-                    return Err(error);
-                }
-            }
-            Ok(status)
-        }
-        "vpcs" => {
-            let name = node
-                .get("name")
-                .and_then(Value::as_str)
-                .ok_or_else(|| ApiError::conflict("VPCS node has no name"))?;
-            if matches!(action, NodeAction::Start | NodeAction::Reload) {
-                for (_link, endpoint, _runtime) in
-                    node_link_entries(state, project_id, node_id).await?
-                {
-                    if let (Some(adapter_port), Some(runtime_port)) = (
-                        endpoint["runtime_adapter_port"]
-                            .as_u64()
-                            .and_then(|port| u16::try_from(port).ok()),
-                        endpoint["runtime_udp_port"]
-                            .as_u64()
-                            .and_then(|port| u16::try_from(port).ok()),
-                    ) {
-                        state
-                            .vpcs
-                            .set_nio_ports(node_id, adapter_port, runtime_port)
-                            .await;
-                    }
-                }
-            }
-            let startup_script = if matches!(action, NodeAction::Start | NodeAction::Reload) {
-                vpcs_startup_script(state.store.pool(), project_id, node).await?
-            } else {
-                None
-            };
-            let status = state
-                .vpcs
-                .lifecycle(project_id, node_id, name, startup_script.as_deref(), action)
-                .await
-                .map_err(runtime_api_error)?;
-            if matches!(action, NodeAction::Start | NodeAction::Reload) {
-                if let Err(error) = attach_node_links(state, project_id, node_id, false).await {
-                    let _ = detach_node_links(state, project_id, node_id).await;
-                    let _ = state
-                        .vpcs
-                        .lifecycle(project_id, node_id, name, None, NodeAction::Stop)
-                        .await;
-                    return Err(error);
-                }
-            }
-            Ok(status)
-        }
-        "dynamips" => {
-            let vm = state
-                .dynamips
-                .vm_from_node(node)
-                .map_err(runtime_api_error)?;
-            if matches!(&action, NodeAction::Start) {
-                attach_node_links(state, project_id, node_id, true).await?;
-            }
-            let status = state
-                .dynamips
-                .lifecycle(&vm, action)
-                .await
-                .map_err(runtime_api_error)?;
-            if matches!(&action, NodeAction::Start)
-                && let Err(error) = attach_node_links(state, project_id, node_id, false).await
-            {
-                let _ = detach_node_links(state, project_id, node_id).await;
-                let _ = state.dynamips.lifecycle(&vm, NodeAction::Stop).await;
-                return Err(error);
-            }
-            Ok(status)
-        }
-        "ethernet_switch" | "ethernet_hub" => Err(ApiError::new(
-            StatusCode::METHOD_NOT_ALLOWED,
-            "Ethernet switches and hubs are always running",
-        )),
-        "cloud" | "nat" => match action {
-            NodeAction::Start => {
-                attach_node_links(state, project_id, node_id, false).await?;
-                Ok("started".to_owned())
-            }
-            NodeAction::Stop | NodeAction::Reload | NodeAction::Suspend => Err(ApiError::new(
-                StatusCode::METHOD_NOT_ALLOWED,
-                "Cloud and NAT nodes cannot be stopped, reloaded, or suspended",
-            )),
-        },
-        _ => Err(ApiError::new(
-            StatusCode::METHOD_NOT_ALLOWED,
-            "This node has no implemented runtime adapter",
-        )),
-    }
-}
-
-async fn vpcs_startup_script(
-    pool: &SqlitePool,
-    project_id: &str,
-    node: &Value,
-) -> Result<Option<String>, ApiError> {
-    if let Some(script) = node
-        .get("startup_script")
-        .and_then(Value::as_str)
-        .filter(|script| !script.is_empty())
-    {
-        return Ok(Some(script.to_owned()));
-    }
-    let Some(base_script_file) = node
-        .get("base_script_file")
-        .and_then(Value::as_str)
-        .filter(|path| !path.is_empty())
-    else {
-        return Ok(None);
-    };
-    let path = FsPath::new(base_script_file);
-    if path.is_absolute()
-        || path
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-        || base_script_file.contains('\\')
-    {
-        return Err(ApiError::bad_request(
-            "VPCS base_script_file must be a relative project file path",
-        ));
-    }
-    let normalized = path
-        .components()
-        .filter_map(|component| match component {
-            Component::Normal(value) => Some(value.to_string_lossy()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("/");
-    let row =
-        sqlx::query("SELECT contents FROM project_files WHERE project_id = ? AND file_path = ?")
-            .bind(project_id)
-            .bind(normalized)
-            .fetch_optional(pool)
-            .await?;
-    Ok(row.map(|row| String::from_utf8_lossy(&row.get::<Vec<u8>, _>("contents")).into_owned()))
-}
-
-async fn stop_runtime_node(
-    state: &AppState,
-    project_id: &str,
-    node: &Value,
-) -> Result<(), ApiError> {
-    let Some(node_type) = node.get("node_type").and_then(Value::as_str) else {
-        return Ok(());
-    };
-    if BuiltinRuntime::is_type(node_type) {
-        let node_id = node
-            .get("node_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        state.builtin.stop_node(node_id).await;
-        return Ok(());
-    }
-    if node_type != "docker"
-        && node_type != "qemu"
-        && node_type != "vpcs"
-        && node_type != "dynamips"
-    {
-        return Ok(());
-    }
-    match node_type {
-        "docker" if node.get("container_id").and_then(Value::as_str).is_none() => return Ok(()),
-        "qemu"
-            if node
-                .get("runtime_overlay")
-                .and_then(Value::as_str)
-                .is_none() =>
-        {
-            return Ok(());
-        }
-        "dynamips"
-            if node
-                .get("runtime_working_dir")
-                .and_then(Value::as_str)
-                .is_none()
-                || node
-                    .get("runtime_hypervisor_port")
-                    .and_then(Value::as_u64)
-                    .is_none() =>
-        {
-            return Ok(());
-        }
-        _ => {}
-    }
-    let mut node = node.clone();
-    apply_node_lifecycle(state, project_id, &mut node, NodeAction::Stop).await?;
-    Ok(())
-}
-
-async fn cleanup_node_runtime(state: &AppState, node: &Value) -> Result<(), ApiError> {
-    let node_type = node
-        .get("node_type")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let node_id = node
-        .get("node_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    match node_type {
-        "docker" => match node.get("container_id").and_then(Value::as_str) {
-            Some(container_id) => state
-                .runtime
-                .remove_node_resources(node_id, Some(container_id))
-                .await
-                .map_err(runtime_api_error),
-            None => Ok(()),
-        },
-        "qemu" => {
-            if node
-                .get("runtime_overlay")
-                .and_then(Value::as_str)
-                .is_none()
-            {
-                return Ok(());
-            }
-            let vm = state.qemu.vm_from_node(node).map_err(runtime_api_error)?;
-            state.qemu.remove_vm(&vm).await.map_err(runtime_api_error)
-        }
-        "vpcs" => state
-            .vpcs
-            .remove_node(
-                node.get("project_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-                node_id,
-            )
-            .await
-            .map_err(runtime_api_error),
-        "dynamips" => {
-            if node
-                .get("runtime_working_dir")
-                .and_then(Value::as_str)
-                .is_none()
-                || node
-                    .get("runtime_hypervisor_port")
-                    .and_then(Value::as_u64)
-                    .is_none()
-            {
-                return Ok(());
-            }
-            let vm = state
-                .dynamips
-                .vm_from_node(node)
-                .map_err(runtime_api_error)?;
-            state
-                .dynamips
-                .remove_router(&vm)
-                .await
-                .map_err(runtime_api_error)
-        }
-        "ethernet_switch" | "ethernet_hub" | "cloud" | "nat" => {
-            state.builtin.stop_node(node_id).await;
-            Ok(())
-        }
-        _ => Ok(()),
-    }
-}
-
-fn docker_interface_mac(node_id: &str, interface_number: u64) -> Result<String, ApiError> {
-    let node_id =
-        Uuid::parse_str(node_id).map_err(|_| ApiError::bad_request("Docker node ID is invalid"))?;
-    let bytes = node_id.as_bytes();
-    Ok(format!(
-        "02:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3], interface_number as u8
-    ))
-}
-
-async fn cleanup_link_runtime(
-    state: &AppState,
-    project_id: &str,
-    link: &Value,
-) -> Result<(), ApiError> {
-    let runtime_endpoints = link_runtime_endpoints(state.store.pool(), project_id, link)
-        .await
-        .unwrap_or_default();
-    for endpoint in link
-        .get("nodes")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let node_id = endpoint["node_id"].as_str().unwrap_or_default();
-        if let Some(runtime_endpoint) = runtime_endpoints
-            .iter()
-            .find(|candidate| candidate["node_id"].as_str() == Some(node_id))
-        {
-            detach_runtime_link_endpoint(state, project_id, endpoint, runtime_endpoint).await?;
-        } else {
-            let _ = LinkEngine::new(state.ubridge.clone())
-                .detach_endpoint(endpoint)
-                .await;
-            if let Some(endpoint_id) = endpoint["runtime_endpoint_id"].as_str()
-                && let Ok(host) = ubridge::host_veth_name(endpoint_id)
-            {
-                let _ = state.ubridge.delete_veth(&host).await;
-            }
-        }
-    }
-    Ok(())
-}
-
 fn validate_link_shape(endpoints: &[Value]) -> Result<(), ApiError> {
     if endpoints.len() < 2 {
         return Err(ApiError::bad_request(
@@ -1396,184 +1018,6 @@ async fn store_link_endpoints_in_tx(
         )
         .execute(&mut **tx)
         .await?;
-    }
-    Ok(())
-}
-
-async fn list_objects(
-    pool: &SqlitePool,
-    project_id: &str,
-    kind: &str,
-) -> Result<Json<Vec<Value>>, ApiError> {
-    ensure_project_exists_pool(pool, project_id).await?;
-    let rows = sqlx::query(
-        "SELECT object_json FROM topology_objects
-         WHERE project_id = ? AND kind = ? ORDER BY name, object_id",
-    )
-    .bind(project_id)
-    .bind(kind)
-    .fetch_all(pool)
-    .await?;
-    let values = rows
-        .into_iter()
-        .map(|row| decode_json(row.get::<String, _>("object_json")))
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(Json(values))
-}
-
-async fn refresh_node_statuses(
-    state: &AppState,
-    project_id: &str,
-    mut nodes: Vec<Value>,
-) -> Vec<Value> {
-    if nodes.is_empty() {
-        return nodes;
-    }
-    let statuses = state.runtime.project_node_states(project_id).await.ok();
-    let mut qemu_queries = Vec::new();
-    let mut dynamips_queries = Vec::new();
-    for (index, node) in nodes.iter_mut().enumerate() {
-        let Some(node_id) = node.get("node_id").and_then(Value::as_str) else {
-            continue;
-        };
-        match node.get("node_type").and_then(Value::as_str) {
-            Some("docker") if node.get("container_id").is_some() => {
-                let Some(statuses) = statuses.as_ref() else {
-                    continue;
-                };
-                match statuses.get(node_id) {
-                    Some(status) => {
-                        node["status"] = json!(status);
-                        node["runtime_missing"] = json!(false);
-                    }
-                    None => {
-                        node["status"] = json!("stopped");
-                        node["runtime_missing"] = json!(true);
-                    }
-                }
-            }
-            Some("qemu") => match state.qemu.vm_from_node(node) {
-                Ok(vm) if !vm.overlay.is_file() => {
-                    node["status"] = json!("stopped");
-                    node["runtime_missing"] = json!(true);
-                }
-                Ok(vm) => qemu_queries.push((index, node_id.to_owned(), vm)),
-                Err(error) => {
-                    tracing::debug!(error = %error.message(), %project_id, %node_id, "QEMU node metadata is invalid")
-                }
-            },
-            Some("vpcs") => match state.vpcs.status(node_id).await {
-                Ok(status) => {
-                    node["status"] = json!(status);
-                    node["runtime_missing"] = json!(false);
-                }
-                Err(error) => {
-                    tracing::debug!(error = %error.message(), %project_id, %node_id, "VPCS node state refresh was unavailable")
-                }
-            },
-            Some("dynamips") => match state.dynamips.vm_from_node(node) {
-                Ok(vm) => dynamips_queries.push((index, node_id.to_owned(), vm)),
-                Err(error) => {
-                    tracing::debug!(error = %error.message(), %project_id, %node_id, "Dynamips node metadata is invalid")
-                }
-            },
-            _ => {}
-        }
-    }
-    let qemu_results = futures_util::stream::iter(qemu_queries)
-        .map(|(index, node_id, vm)| async move { (index, node_id, state.qemu.status(&vm).await) })
-        .buffer_unordered(16)
-        .collect::<Vec<_>>()
-        .await;
-    for (index, node_id, result) in qemu_results {
-        match result {
-            Ok(status) => {
-                nodes[index]["status"] = json!(status);
-                nodes[index]["runtime_missing"] = json!(false);
-            }
-            Err(error) => {
-                tracing::debug!(error = %error.message(), %project_id, %node_id, "QEMU state refresh was unavailable")
-            }
-        }
-    }
-    let dynamips_results =
-        futures_util::stream::iter(dynamips_queries)
-            .map(|(index, node_id, vm)| async move {
-                (index, node_id, state.dynamips.status(&vm).await)
-            })
-            .buffer_unordered(16)
-            .collect::<Vec<_>>()
-            .await;
-    for (index, node_id, result) in dynamips_results {
-        match result {
-            Ok(status) => {
-                nodes[index]["status"] = json!(status);
-                nodes[index]["runtime_missing"] = json!(false);
-            }
-            Err(error) => {
-                nodes[index]["status"] = json!("stopped");
-                nodes[index]["runtime_missing"] = json!(false);
-                tracing::debug!(error = %error.message(), %project_id, %node_id, "Dynamips state refresh was unavailable")
-            }
-        }
-    }
-    nodes
-}
-
-async fn list_objects_in_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    project_id: &str,
-    kind: &str,
-) -> Result<Vec<Value>, ApiError> {
-    let rows = sqlx::query(
-        "SELECT object_json FROM topology_objects
-         WHERE project_id = ? AND kind = ? ORDER BY name, object_id",
-    )
-    .bind(project_id)
-    .bind(kind)
-    .fetch_all(&mut **tx)
-    .await?;
-    rows.into_iter()
-        .map(|row| decode_json(row.get::<String, _>("object_json")))
-        .collect()
-}
-
-async fn fetch_project(pool: &SqlitePool, project_id: &str) -> Result<Value, ApiError> {
-    let row = sqlx::query("SELECT project_json FROM projects WHERE project_id = ?")
-        .bind(project_id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or_else(|| ApiError::not_found(format!("Project {project_id} does not exist")))?;
-    decode_json(row.get::<String, _>("project_json"))
-}
-
-async fn ensure_project_exists_pool(pool: &SqlitePool, project_id: &str) -> Result<(), ApiError> {
-    let exists =
-        sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM projects WHERE project_id = ?)")
-            .bind(project_id)
-            .fetch_one(pool)
-            .await?;
-    if exists == 0 {
-        return Err(ApiError::not_found(format!(
-            "Project {project_id} does not exist"
-        )));
-    }
-    Ok(())
-}
-
-async fn ensure_project_exists(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    project_id: &str,
-) -> Result<(), ApiError> {
-    let exists =
-        sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM projects WHERE project_id = ?)")
-            .bind(project_id)
-            .fetch_one(&mut **tx)
-            .await?;
-    if exists == 0 {
-        return Err(ApiError::not_found(format!(
-            "Project {project_id} does not exist"
-        )));
     }
     Ok(())
 }
