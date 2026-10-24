@@ -206,7 +206,7 @@ fn jwt_validation_checks_issue_time_not_before_issuer_and_audience() {
 #[test]
 fn every_registered_v3_route_has_an_explicit_auth_classification() {
     let route_sources = [
-        include_str!("../api.rs"),
+        include_str!("../api/mod.rs"),
         include_str!("../api/controller_routes.rs"),
         include_str!("mod.rs"),
     ];
