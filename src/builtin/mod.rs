@@ -12,7 +12,7 @@ use std::{
 };
 
 use serde_json::{Value, json};
-use tokio::{net::UdpSocket, sync::Mutex, task::JoinHandle};
+use tokio::{net::UdpSocket, sync::Mutex};
 use uuid::Uuid;
 
 use crate::{links::AdapterNio, runtime::RuntimeError};
@@ -24,10 +24,14 @@ const FDB_AGE: Duration = Duration::from_secs(300);
 const FDB_AGE_INTERVAL: Duration = Duration::from_secs(60);
 
 pub use types::BuiltinRuntime;
-use types::{ActivePort, BuiltinState, ForwardingNode, LearnedAddress, RuntimePort, SwitchPortMode};
+use types::{ActivePort, ForwardingNode, LearnedAddress, RuntimePort, SwitchPortMode};
 
 #[path = "types.rs"]
 mod types;
+mod switch;
+use switch::switch_mode;
+#[cfg(test)]
+use switch::{age_forwarding_node, classify_egress, classify_ingress, forward_frame, learn_address, vlan_allowed};
 
 impl BuiltinRuntime {
     pub fn validate_host_interfaces(node: &Value) -> Result<(), String> {
@@ -321,161 +325,6 @@ impl BuiltinRuntime {
         }
     }
 
-    /// Add a switch/hub adapter to its node-scoped forwarder. Called before the
-    /// link endpoint's NIO is attached so an in-flight frame always has a peer.
-    pub async fn attach_switch_port(
-        &self,
-        node: &Value,
-        endpoint: &Value,
-    ) -> Result<(), RuntimeError> {
-        let node_type = node["node_type"].as_str().unwrap_or_default();
-        if node_type != "ethernet_switch" && node_type != "ethernet_hub" {
-            return Ok(());
-        }
-        let node_id = node["node_id"].as_str().unwrap_or_default().to_owned();
-        let port_number = endpoint["port_number"].as_u64().unwrap_or_default() as u16;
-        let key = (node_id.clone(), port_number);
-        if self.state.lock().await.active_ports.contains_key(&key) {
-            return Ok(());
-        }
-        let adapter_port = port_from_endpoint(endpoint, "runtime_adapter_port")?;
-        let runtime_port = port_from_endpoint(endpoint, "runtime_udp_port")?;
-        let local = SocketAddr::from((Ipv4Addr::LOCALHOST, runtime_port));
-        let socket = Arc::new(UdpSocket::bind(local).await.map_err(|error| {
-            RuntimeError::Failed(format!(
-                "Could not bind builtin adapter UDP port {runtime_port}: {error}"
-            ))
-        })?);
-        let relay_address = SocketAddr::from((Ipv4Addr::LOCALHOST, adapter_port));
-        let mode = if node_type == "ethernet_switch" {
-            Some(switch_mode(&node["ports_mapping"][port_number as usize])?)
-        } else {
-            None
-        };
-        let forwarding = {
-            let mut state = self.state.lock().await;
-            let instance = state
-                .forwarding
-                .entry(node_id.clone())
-                .or_insert_with(|| {
-                    let modes = node["ports_mapping"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .enumerate()
-                        .filter_map(|(index, port)| {
-                            (node_type == "ethernet_switch")
-                                .then(|| switch_mode(port).ok().map(|mode| (index as u16, mode)))
-                                .flatten()
-                        })
-                        .collect();
-                    Arc::new(Mutex::new(ForwardingNode {
-                        node_type: node_type.to_owned(),
-                        modes,
-                        ports: HashMap::new(),
-                        learned: HashMap::new(),
-                    }))
-                })
-                .clone();
-            instance.lock().await.ports.insert(
-                port_number,
-                RuntimePort {
-                    socket: socket.clone(),
-                    relay_address,
-                    mode,
-                },
-            );
-            instance
-        };
-        let task_socket = socket.clone();
-        let task = tokio::spawn(async move {
-            let mut buffer = vec![0u8; 65_536];
-            let mut aging = tokio::time::interval(FDB_AGE_INTERVAL);
-            aging.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            loop {
-                tokio::select! {
-                    received = task_socket.recv_from(&mut buffer) => {
-                        let Ok((length, _)) = received else { break; };
-                        let frame = buffer[..length].to_vec();
-                        for (target_socket, target_address, output) in
-                            forward_frame(&forwarding, port_number, frame).await
-                        {
-                            let _ = target_socket.send_to(&output, target_address).await;
-                        }
-                    }
-                    _ = aging.tick() => age_forwarding_table(&forwarding).await,
-                }
-            }
-        });
-        self.state
-            .lock()
-            .await
-            .active_ports
-            .insert(key, ActivePort { task });
-        Ok(())
-    }
-
-    pub async fn detach_switch_port(&self, node_id: &str, port_number: u16) {
-        let key = (node_id.to_owned(), port_number);
-        let mut state = self.state.lock().await;
-        if let Some(active) = state.active_ports.remove(&key) {
-            active.task.abort();
-        }
-        let remove_forwarder = if let Some(node) = state.forwarding.get(node_id) {
-            let mut node = node.lock().await;
-            node.ports.remove(&port_number);
-            node.learned
-                .retain(|_, learned| learned.port != port_number);
-            node.ports.is_empty()
-        } else {
-            false
-        };
-        if remove_forwarder {
-            state.forwarding.remove(node_id);
-        }
-    }
-
-    /// Apply updated switch VLAN settings without stopping the always-on
-    /// builtin node or disturbing its attached link endpoints.
-    pub async fn update_switch_configuration(&self, node: &Value) {
-        if node["node_type"].as_str() != Some("ethernet_switch") {
-            return;
-        }
-        let node_id = node["node_id"].as_str().unwrap_or_default();
-        let instance = self.state.lock().await.forwarding.get(node_id).cloned();
-        let Some(instance) = instance else {
-            return;
-        };
-        let modes = node["ports_mapping"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .enumerate()
-            .filter_map(|(index, port)| switch_mode(port).ok().map(|mode| (index as u16, mode)))
-            .collect::<HashMap<_, _>>();
-        let mut forwarding = instance.lock().await;
-        forwarding.modes = modes.clone();
-        for (port_number, port) in &mut forwarding.ports {
-            port.mode = modes.get(port_number).cloned();
-        }
-        forwarding.learned.clear();
-    }
-
-    pub async fn stop_node(&self, node_id: &str) {
-        let mut state = self.state.lock().await;
-        let keys = state
-            .active_ports
-            .keys()
-            .filter(|(candidate, _)| candidate == node_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        for key in keys {
-            if let Some(active) = state.active_ports.remove(&key) {
-                active.task.abort();
-            }
-        }
-        state.forwarding.remove(node_id);
-    }
 }
 
 fn builtin_template_id(node_type: &str) -> String {
@@ -911,26 +760,6 @@ fn validate_remote_host(host: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn switch_mode(port: &Value) -> Result<SwitchPortMode, RuntimeError> {
-    let vlan = port["vlan"].as_u64().unwrap_or(1) as u16;
-    match port["type"].as_str().unwrap_or("access") {
-        "access" => Ok(SwitchPortMode::Access { vlan }),
-        "dot1q" => Ok(SwitchPortMode::Dot1q { native_vlan: vlan }),
-        "qinq" => {
-            let ethertype = port["ethertype"]
-                .as_str()
-                .unwrap_or("0x8100")
-                .trim_start_matches("0x");
-            let ethertype = u16::from_str_radix(ethertype, 16).map_err(|_| {
-                RuntimeError::Failed("Switch port has an invalid QinQ ethertype".to_owned())
-            })?;
-            Ok(SwitchPortMode::QinQ { vlan, ethertype })
-        }
-        kind => Err(RuntimeError::Failed(format!(
-            "Unsupported switch port type '{kind}'"
-        ))),
-    }
-}
 
 fn port_from_endpoint(endpoint: &Value, key: &str) -> Result<u16, RuntimeError> {
     endpoint
@@ -984,174 +813,6 @@ fn host_ethernet_tap_name(endpoint: &Value) -> Result<String, RuntimeError> {
     Ok(format!("nsct{compact}"))
 }
 
-async fn forward_frame(
-    forwarding: &Arc<Mutex<ForwardingNode>>,
-    source_port: u16,
-    mut frame: Vec<u8>,
-) -> Vec<(Arc<UdpSocket>, SocketAddr, Vec<u8>)> {
-    let mut node = forwarding.lock().await;
-    if node.node_type == "ethernet_hub" {
-        return node
-            .ports
-            .iter()
-            .filter(|(port, _)| **port != source_port)
-            .map(|(_, target)| (target.socket.clone(), target.relay_address, frame.clone()))
-            .collect();
-    }
-    let Some(source_mode) = node.modes.get(&source_port).cloned() else {
-        return Vec::new();
-    };
-    let Some((vlan, stripped_frame)) = classify_ingress(&source_mode, &frame) else {
-        return Vec::new();
-    };
-    frame = stripped_frame;
-    if frame.len() < 14 {
-        return Vec::new();
-    }
-    let source_mac: [u8; 6] = frame[6..12].try_into().unwrap_or([0; 6]);
-    let destination_mac: [u8; 6] = frame[0..6].try_into().unwrap_or([0; 6]);
-    let now = Instant::now();
-    age_forwarding_node(&mut node, now);
-    if !is_multicast(source_mac) && source_mac != [0; 6] {
-        learn_address(&mut node, vlan, source_mac, source_port, now);
-    }
-
-    let known_destination = (!is_multicast(destination_mac))
-        .then(|| {
-            node.learned
-                .get(&(vlan, destination_mac))
-                .map(|entry| entry.port)
-        })
-        .flatten();
-    node.ports
-        .iter()
-        .filter(|(port, target)| {
-            **port != source_port
-                && known_destination.map_or(true, |known| known == **port)
-                && target
-                    .mode
-                    .as_ref()
-                    .is_some_and(|mode| vlan_allowed(mode, vlan))
-        })
-        .filter_map(|(_, target)| {
-            let output = classify_egress(target.mode.as_ref()?, vlan, &frame)?;
-            Some((target.socket.clone(), target.relay_address, output))
-        })
-        .collect()
-}
-
-async fn age_forwarding_table(forwarding: &Arc<Mutex<ForwardingNode>>) {
-    age_forwarding_node(&mut *forwarding.lock().await, Instant::now());
-}
-
-fn age_forwarding_node(node: &mut ForwardingNode, now: Instant) {
-    node.learned
-        .retain(|_, learned| now.saturating_duration_since(learned.learned_at) < FDB_AGE);
-}
-
-fn learn_address(
-    node: &mut ForwardingNode,
-    vlan: u16,
-    mac: [u8; 6],
-    port: u16,
-    learned_at: Instant,
-) {
-    let key = (vlan, mac);
-    if !node.learned.contains_key(&key) && node.learned.len() >= MAX_FDB_ENTRIES {
-        if let Some(oldest) = node
-            .learned
-            .iter()
-            .min_by_key(|(_, learned)| learned.learned_at)
-            .map(|(key, _)| *key)
-        {
-            node.learned.remove(&oldest);
-        }
-    }
-    node.learned
-        .insert(key, LearnedAddress { port, learned_at });
-}
-
-fn is_multicast(mac: [u8; 6]) -> bool {
-    mac[0] & 1 == 1
-}
-
-fn vlan_allowed(mode: &SwitchPortMode, vlan: u16) -> bool {
-    match mode {
-        SwitchPortMode::Access { vlan: access_vlan }
-        | SwitchPortMode::QinQ {
-            vlan: access_vlan, ..
-        } => *access_vlan == vlan,
-        SwitchPortMode::Dot1q { .. } => true,
-    }
-}
-
-fn classify_ingress(mode: &SwitchPortMode, frame: &[u8]) -> Option<(u16, Vec<u8>)> {
-    if frame.len() < 14 {
-        return None;
-    }
-    let ethertype = u16::from_be_bytes([frame[12], frame[13]]);
-    let tagged = matches!(ethertype, 0x8100 | 0x88a8 | 0x9100 | 0x9200) && frame.len() >= 18;
-    let tagged_vlan = tagged.then(|| u16::from_be_bytes([frame[14], frame[15]]) & 0x0fff);
-    match mode {
-        SwitchPortMode::Access { vlan } => match tagged_vlan {
-            Some(tag) if tag != *vlan => None,
-            _ => Some((*vlan, frame.to_vec())),
-        },
-        SwitchPortMode::Dot1q { native_vlan } => {
-            Some((tagged_vlan.unwrap_or(*native_vlan), frame.to_vec()))
-        }
-        SwitchPortMode::QinQ {
-            vlan,
-            ethertype: qinq_type,
-        } => {
-            if tagged && ethertype != *qinq_type {
-                return None;
-            }
-            Some((tagged_vlan.unwrap_or(*vlan), frame.to_vec()))
-        }
-    }
-}
-
-fn classify_egress(mode: &SwitchPortMode, vlan: u16, frame: &[u8]) -> Option<Vec<u8>> {
-    let (kind, native_vlan, ethertype) = match mode {
-        SwitchPortMode::Access { vlan } => ("access", *vlan, 0x8100),
-        SwitchPortMode::Dot1q { native_vlan } => ("dot1q", *native_vlan, 0x8100),
-        SwitchPortMode::QinQ { vlan, ethertype } => ("qinq", *vlan, *ethertype),
-    };
-    let frame = remove_outer_vlan(frame);
-    if kind == "access" || (kind == "dot1q" && vlan == native_vlan) {
-        return Some(frame);
-    }
-    Some(insert_vlan(&frame, ethertype, vlan))
-}
-
-fn remove_outer_vlan(frame: &[u8]) -> Vec<u8> {
-    if frame.len() >= 18
-        && matches!(
-            u16::from_be_bytes([frame[12], frame[13]]),
-            0x8100 | 0x88a8 | 0x9100 | 0x9200
-        )
-    {
-        let mut output = Vec::with_capacity(frame.len() - 4);
-        output.extend_from_slice(&frame[..12]);
-        output.extend_from_slice(&frame[16..]);
-        output
-    } else {
-        frame.to_vec()
-    }
-}
-
-fn insert_vlan(frame: &[u8], ethertype: u16, vlan: u16) -> Vec<u8> {
-    if frame.len() < 14 {
-        return frame.to_vec();
-    }
-    let mut output = Vec::with_capacity(frame.len() + 4);
-    output.extend_from_slice(&frame[..12]);
-    output.extend_from_slice(&ethertype.to_be_bytes());
-    output.extend_from_slice(&(vlan & 0x0fff).to_be_bytes());
-    output.extend_from_slice(&frame[12..]);
-    output
-}
 
 #[cfg(test)]
 mod tests {
