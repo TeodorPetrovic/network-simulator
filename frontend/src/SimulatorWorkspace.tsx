@@ -1,21 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Activity, Cable, ChevronDown, HelpCircle, Image, Link2, Network, Pause, Pencil,
-  Play, Plus, Power, Search, Scan, Settings2, Square, Terminal, Trash2, ZoomIn,
+  Play, Search, Scan, Settings2, Square, Terminal, Trash2, ZoomIn,
   ZoomOut, Lock, Unlock, MoreHorizontal, Camera, RectangleHorizontal, Circle, Minus, Type,
   Layers,
 } from "lucide-react";
 import type { Link, LinkEndpoint, Node, Project, ResourceMonitor, RuntimeInfo, RuntimeTemplate, TopologySnapshot } from "./api";
 import { api } from "./api";
-import { canApplyLifecycle, nodesForLifecycle } from "./lifecycle";
+import { nodesForLifecycle } from "./lifecycle";
 import type { LifecycleAction } from "./lifecycle";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import {
-  ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel,
-  ContextMenuSeparator, ContextMenuTrigger,
+  ContextMenu, ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { ResourceMonitorPopover } from "./ResourceMonitorPopover";
 import { NodeSettingsDialog } from "./NodeSettingsDialog";
@@ -24,11 +23,12 @@ import { DrawingEditorDialog, HelpDialog, InfoDialog, InterfacePickerDialog, Lin
 import type { ScreenshotRequest } from "./map/MapDialogs";
 import { drawingSvg, reorderDrawings, serializeSvgScreenshot, svgScreenshotPng } from "./map/helpers";
 import type { DrawingTool } from "./map/helpers";
-import { TopologyCanvas, scene, maxZoom, messageFor, portLabel, safeFileName, sameEndpoint, valuesFromDrawing, nodeHasAuxConsole } from "./map/TopologyCanvas";
+import { TopologyCanvas, scene, maxZoom, messageFor, portLabel, safeFileName, sameEndpoint, valuesFromDrawing } from "./map/TopologyCanvas";
 import { pngScreenshotAvailable, spreadOverlappingNodes } from "./workspaceUtils";
 import type { Selection } from "./map/TopologyCanvas";
 
 import { WorkspaceSidebar } from "./WorkspaceSidebar";
+import { WorkspaceContextMenu } from "./WorkspaceContextMenu";
 
 type DrawingValues = { width: number; height: number; stroke: string; fill: string; strokeWidth: number; text: string; imageDataUrl?: string };
 
@@ -487,36 +487,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
                 />
               </div>
             </ContextMenuTrigger>
-            <ContextMenuContent className="w-56">
-              <ContextMenuLabel>{selectedNode?.name ?? (selectedLink ? "Ethernet link" : selectedDrawing ? "Drawing" : "Topology")}</ContextMenuLabel>
-              <ContextMenuSeparator />
-              {selectedNode ? <>
-                {canApplyLifecycle(selectedNode, "start") && <ContextMenuItem disabled={Boolean(selectedNode.runtime_missing)} onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "start")}><Play />{selectedNode.status === "suspended" ? "Resume device" : "Start device"}</ContextMenuItem>}
-                {canApplyLifecycle(selectedNode, "stop") && <ContextMenuItem onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "stop")}><Power />Stop device</ContextMenuItem>}
-                {canApplyLifecycle(selectedNode, "suspend") && <ContextMenuItem onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "suspend")}><Pause />Suspend device</ContextMenuItem>}
-                {canApplyLifecycle(selectedNode, "reload") && <ContextMenuItem onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "reload")}><Activity />Reload device</ContextMenuItem>}
-                {selectedNode.status === "started" && <ContextMenuItem onSelect={() => props.onOpenConsole(selectedNode)}><Terminal />Open console</ContextMenuItem>}
-                {selectedNode.status === "started" && nodeHasAuxConsole(selectedNode) && <ContextMenuItem onSelect={() => props.onOpenConsole(selectedNode, true)}><Terminal />Open auxiliary console</ContextMenuItem>}
-                <ContextMenuItem onSelect={() => { document.querySelector<HTMLButtonElement>("[data-tab=topology]")?.click(); window.setTimeout(() => document.querySelector<HTMLInputElement>("[data-rename-node]")?.focus(), 0); }}><Pencil />Edit device name</ContextMenuItem>
-                {["qemu", "docker", "vpcs", "dynamips"].includes(selectedNode.node_type ?? "") && <ContextMenuItem onSelect={() => setConfigureNode(selectedNode)}><Settings2 />Configure device</ContextMenuItem>}
-                <ContextMenuItem onSelect={() => setSymbolNode(selectedNode)}><Image />Change symbol</ContextMenuItem>
-                <ContextMenuItem onSelect={() => void toggleNodeIsolation(selectedNode)}>{selectedNode.isolated ? <Unlock /> : <Lock />}{selectedNode.isolated ? "Unisolate device" : "Isolate device"}</ContextMenuItem>
-                <ContextMenuItem onSelect={() => void toggleNodeLock(selectedNode)}>{selectedNode.locked ? <Unlock /> : <Lock />}{selectedNode.locked ? "Unlock device" : "Lock device"}</ContextMenuItem>
-                <ContextMenuItem onSelect={() => props.onDuplicateNode(selectedNode)}><Plus />Duplicate device</ContextMenuItem>
-                <ContextMenuSeparator />
-                <ContextMenuItem variant="destructive" onSelect={props.onDeleteSelection}><Trash2 />Delete device</ContextMenuItem>
-              </> : selectedLink ? <>
-                <ContextMenuItem onSelect={() => setLinkPropertiesOpen(true)}><Settings2 />Link properties and filters</ContextMenuItem>
-                <ContextMenuItem onSelect={() => void toggleLinkSuspend(selectedLink)}>{selectedLink.suspend ? <Play /> : <Pause />}{selectedLink.suspend ? "Resume link" : "Suspend link"}</ContextMenuItem>
-                <ContextMenuItem onSelect={() => setLinkPropertiesOpen(true)}><Activity />Packet capture…</ContextMenuItem>
-                <ContextMenuSeparator /><ContextMenuItem variant="destructive" onSelect={props.onDeleteSelection}><Trash2 />Delete link</ContextMenuItem>
-              </> : selectedDrawing ? <>
-                <ContextMenuItem onSelect={() => { setDrawingEditTool((selectedDrawing.drawing_kind as DrawingTool) ?? "rectangle"); setDrawingEditValues(valuesFromDrawing(selectedDrawing)); setDrawingEditOpen(true); }}><Pencil />Edit drawing</ContextMenuItem>
-                <ContextMenuItem onSelect={() => void changeDrawingOrder("front")}><Layers />Bring forward</ContextMenuItem>
-                <ContextMenuItem onSelect={() => void changeDrawingOrder("back")}><Layers />Send backward</ContextMenuItem>
-                <ContextMenuItem variant="destructive" onSelect={() => void removeDrawing()}><Trash2 />Delete drawing</ContextMenuItem>
-              </> : <ContextMenuItem onSelect={props.onOpenNodeDialog}><Plus />Import or configure device</ContextMenuItem>}
-            </ContextMenuContent>
+            <WorkspaceContextMenu workspace={props} selectedNode={selectedNode} selectedLink={selectedLink} selectedDrawing={selectedDrawing} setConfigureNode={setConfigureNode} setSymbolNode={setSymbolNode} toggleNodeIsolation={toggleNodeIsolation} toggleNodeLock={toggleNodeLock} setLinkPropertiesOpen={setLinkPropertiesOpen} toggleLinkSuspend={toggleLinkSuspend} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} />
           </ContextMenu>
         </Card>
 
