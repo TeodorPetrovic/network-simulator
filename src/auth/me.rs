@@ -19,4 +19,3 @@ pub(super) async fn update_me(
         .await
         .map(Json)
 }
-

@@ -1,8 +1,9 @@
-use super::route_rules::{RouteClass, ROUTE_RULES};
+use super::route_rules::{ROUTE_RULES, ROUTE_RULES_EXTRA, RouteClass};
 
 pub(super) fn classify_route(method: &str, path: &str) -> Option<RouteClass> {
     ROUTE_RULES
         .iter()
+        .chain(ROUTE_RULES_EXTRA.iter())
         .find(|rule| {
             (rule.method == method || rule.method == "ANY") && route_path_matches(path, rule.path)
         })

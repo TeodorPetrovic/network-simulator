@@ -145,4 +145,3 @@ pub(super) fn random_hex(length: usize) -> Result<String, std::io::Error> {
         .map_err(|_| std::io::Error::other("system random source failed"))?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
-

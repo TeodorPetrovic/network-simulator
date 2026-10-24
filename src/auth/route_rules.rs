@@ -13,6 +13,9 @@ pub(super) struct RouteRule {
     pub(super) class: RouteClass,
 }
 
+#[path = "route_rules_extra.rs"]
+mod route_rules_extra;
 #[path = "route_rules_table.rs"]
 mod route_rules_table;
+pub(super) use route_rules_extra::ROUTE_RULES_EXTRA;
 pub(super) use route_rules_table::ROUTE_RULES;

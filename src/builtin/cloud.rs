@@ -277,7 +277,9 @@ pub(super) fn configured_allowed_host_interfaces() -> Result<HashSet<String>, St
     Ok(allowed)
 }
 
-pub(super) fn normalize_host_interface_allowlist(value: Option<&Value>) -> Result<HashSet<String>, String> {
+pub(super) fn normalize_host_interface_allowlist(
+    value: Option<&Value>,
+) -> Result<HashSet<String>, String> {
     let Some(value) = value else {
         return Ok(HashSet::new());
     };
@@ -334,7 +336,9 @@ pub(super) fn is_loopback_interface(interface: &str) -> bool {
     .is_some_and(|flags| flags & 0x8 != 0)
 }
 
-pub(super) fn normalize_cloud_console(object: &mut serde_json::Map<String, Value>) -> Result<(), String> {
+pub(super) fn normalize_cloud_console(
+    object: &mut serde_json::Map<String, Value>,
+) -> Result<(), String> {
     let host = object
         .get("remote_console_host")
         .and_then(Value::as_str)
@@ -413,7 +417,6 @@ pub(super) fn validate_remote_host(host: &str) -> Result<(), String> {
     Ok(())
 }
 
-
 pub(super) fn port_from_endpoint(endpoint: &Value, key: &str) -> Result<u16, RuntimeError> {
     endpoint
         .get(key)
@@ -465,5 +468,3 @@ pub(super) fn host_ethernet_tap_name(endpoint: &Value) -> Result<String, Runtime
     }
     Ok(format!("nsct{compact}"))
 }
-
-

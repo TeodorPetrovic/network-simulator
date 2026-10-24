@@ -14,7 +14,7 @@ struct LoginAttempt {
     last_seen: Instant,
 }
 
-fn hash_password(password: &str) -> Result<String, AuthError> {
+pub(super) fn hash_password(password: &str) -> Result<String, AuthError> {
     let salt = random_hex(16).map_err(|_| {
         AuthError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -174,4 +174,3 @@ pub(super) fn validate_username(username: &str) -> Result<(), AuthError> {
     }
     Ok(())
 }
-

@@ -326,4 +326,3 @@ pub(super) async fn logout(
         .map_err(db_error)?;
     Ok(StatusCode::NO_CONTENT)
 }
-

@@ -1,205 +1,201 @@
 use super::*;
 
-    #[tokio::test]
-    #[ignore = "requires upstream uBridge with CAP_NET_ADMIN and CAP_NET_RAW"]
-    async fn cloud_udp_nio_exchanges_frames_with_the_link_engine() {
-        use std::{env, path::PathBuf};
+#[tokio::test]
+#[ignore = "requires upstream uBridge with CAP_NET_ADMIN and CAP_NET_RAW"]
+async fn cloud_udp_nio_exchanges_frames_with_the_link_engine() {
+    use std::{env, path::PathBuf};
 
-        use crate::{links::LinkEngine, ubridge::UbridgeRuntime};
-        use tokio::time::timeout;
+    use crate::{links::LinkEngine, ubridge::UbridgeRuntime};
+    use tokio::time::timeout;
 
-        let binary = env::var_os("NETWORK_SIMULATOR_TEST_UBRIDGE")
-            .expect("NETWORK_SIMULATOR_TEST_UBRIDGE names a capable upstream uBridge");
-        let directory = tempfile::tempdir().expect("temporary uBridge state");
-        let ubridge = UbridgeRuntime::with_paths(
-            PathBuf::from(binary),
-            directory.path().join("ubridge.sock"),
-        );
-        let engine = LinkEngine::new(ubridge.clone());
-        let external_peer = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
-            .await
-            .expect("bind Cloud UDP peer");
-        let external_port = external_peer.local_addr().unwrap().port();
-        let cloud_local_port = ubridge.reserve_udp_port().await.unwrap();
-        let cloud_id = Uuid::new_v4().to_string();
-        let peer_id = Uuid::new_v4().to_string();
-        let cloud = BuiltinRuntime::normalize_node(json!({
-            "node_id": cloud_id,
-            "name": "Cloud UDP live test",
-            "node_type": "cloud",
-            "ports_mapping": [{
-                "name": "External UDP",
-                "type": "udp",
-                "lport": cloud_local_port,
-                "rhost": "127.0.0.1",
-                "rport": external_port
-            }]
-        }))
-        .expect("normalize Cloud UDP mapping");
-        let mut link = json!({
-            "link_id": Uuid::new_v4().to_string(),
-            "nodes": [
-                {"node_id": cloud_id, "node_type": "cloud", "adapter_number": 0, "port_number": 0},
-                {"node_id": peer_id, "node_type": "qemu", "adapter_number": 0, "port_number": 0}
-            ]
-        });
+    let binary = env::var_os("NETWORK_SIMULATOR_TEST_UBRIDGE")
+        .expect("NETWORK_SIMULATOR_TEST_UBRIDGE names a capable upstream uBridge");
+    let directory = tempfile::tempdir().expect("temporary uBridge state");
+    let ubridge =
+        UbridgeRuntime::with_paths(PathBuf::from(binary), directory.path().join("ubridge.sock"));
+    let engine = LinkEngine::new(ubridge.clone());
+    let external_peer = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("bind Cloud UDP peer");
+    let external_port = external_peer.local_addr().unwrap().port();
+    let cloud_local_port = ubridge.reserve_udp_port().await.unwrap();
+    let cloud_id = Uuid::new_v4().to_string();
+    let peer_id = Uuid::new_v4().to_string();
+    let cloud = BuiltinRuntime::normalize_node(json!({
+        "node_id": cloud_id,
+        "name": "Cloud UDP live test",
+        "node_type": "cloud",
+        "ports_mapping": [{
+            "name": "External UDP",
+            "type": "udp",
+            "lport": cloud_local_port,
+            "rhost": "127.0.0.1",
+            "rport": external_port
+        }]
+    }))
+    .expect("normalize Cloud UDP mapping");
+    let mut link = json!({
+        "link_id": Uuid::new_v4().to_string(),
+        "nodes": [
+            {"node_id": cloud_id, "node_type": "cloud", "adapter_number": 0, "port_number": 0},
+            {"node_id": peer_id, "node_type": "qemu", "adapter_number": 0, "port_number": 0}
+        ]
+    });
+    engine
+        .reserve_pair(&mut link)
+        .await
+        .expect("allocate link NIO ports");
+    let endpoints = link["nodes"].as_array().unwrap();
+    let cloud_endpoint = endpoints[0].clone();
+    let peer_endpoint = endpoints[1].clone();
+    let runtime_port = peer_endpoint["runtime_udp_port"].as_u64().unwrap() as u16;
+    let adapter_port = peer_endpoint["runtime_adapter_port"].as_u64().unwrap() as u16;
+    let peer_runtime = UdpSocket::bind((Ipv4Addr::LOCALHOST, runtime_port))
+        .await
+        .expect("bind peer runtime NIO");
+    let run: Result<(), String> = async {
+        let cloud_nio = BuiltinRuntime::adapter_nio(&cloud, &cloud_endpoint)
+            .map_err(|error| error.message().to_owned())?;
         engine
-            .reserve_pair(&mut link)
+            .attach_endpoint(&cloud_endpoint, cloud_nio, &json!({}), false, None)
             .await
-            .expect("allocate link NIO ports");
-        let endpoints = link["nodes"].as_array().unwrap();
-        let cloud_endpoint = endpoints[0].clone();
-        let peer_endpoint = endpoints[1].clone();
-        let runtime_port = peer_endpoint["runtime_udp_port"].as_u64().unwrap() as u16;
-        let adapter_port = peer_endpoint["runtime_adapter_port"].as_u64().unwrap() as u16;
-        let peer_runtime = UdpSocket::bind((Ipv4Addr::LOCALHOST, runtime_port))
-            .await
-            .expect("bind peer runtime NIO");
-        let run: Result<(), String> = async {
-            let cloud_nio = BuiltinRuntime::adapter_nio(&cloud, &cloud_endpoint)
-                .map_err(|error| error.message().to_owned())?;
-            engine
-                .attach_endpoint(&cloud_endpoint, cloud_nio, &json!({}), false, None)
-                .await
-                .map_err(|error| error.message().to_owned())?;
-            engine
-                .attach_endpoint(
-                    &peer_endpoint,
-                    AdapterNio::Udp {
-                        adapter_port,
-                        runtime_port,
-                    },
-                    &json!({}),
-                    false,
-                    None,
-                )
-                .await
-                .map_err(|error| error.message().to_owned())?;
-
-            let from_cloud = vec![
-                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02, 0, 0, 0, 0, 1, 0x88, 0xb5, 1, 2, 3,
-            ];
-            external_peer
-                .send_to(&from_cloud, (Ipv4Addr::LOCALHOST, cloud_local_port))
-                .await
-                .map_err(|error| error.to_string())?;
-            let mut received = [0u8; 128];
-            let (length, _) = timeout(
-                Duration::from_secs(3),
-                peer_runtime.recv_from(&mut received),
+            .map_err(|error| error.message().to_owned())?;
+        engine
+            .attach_endpoint(
+                &peer_endpoint,
+                AdapterNio::Udp {
+                    adapter_port,
+                    runtime_port,
+                },
+                &json!({}),
+                false,
+                None,
             )
             .await
-            .map_err(|_| "Cloud UDP frame did not reach the link peer".to_owned())?
-            .map_err(|error| error.to_string())?;
-            if received[..length] != from_cloud {
-                return Err("Cloud UDP link changed the incoming Ethernet frame".to_owned());
-            }
+            .map_err(|error| error.message().to_owned())?;
 
-            let from_peer = vec![
-                0x02, 0, 0, 0, 0, 1, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x88, 0xb5, 4, 5, 6,
-            ];
-            peer_runtime
-                .send_to(&from_peer, (Ipv4Addr::LOCALHOST, adapter_port))
-                .await
-                .map_err(|error| error.to_string())?;
-            let (length, _) = timeout(
-                Duration::from_secs(3),
-                external_peer.recv_from(&mut received),
-            )
+        let from_cloud = vec![
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02, 0, 0, 0, 0, 1, 0x88, 0xb5, 1, 2, 3,
+        ];
+        external_peer
+            .send_to(&from_cloud, (Ipv4Addr::LOCALHOST, cloud_local_port))
             .await
-            .map_err(|_| "Link peer frame did not reach the Cloud UDP peer".to_owned())?
             .map_err(|error| error.to_string())?;
-            if received[..length] != from_peer {
-                return Err("Cloud UDP link changed the outgoing Ethernet frame".to_owned());
-            }
-            Ok(())
+        let mut received = [0u8; 128];
+        let (length, _) = timeout(
+            Duration::from_secs(3),
+            peer_runtime.recv_from(&mut received),
+        )
+        .await
+        .map_err(|_| "Cloud UDP frame did not reach the link peer".to_owned())?
+        .map_err(|error| error.to_string())?;
+        if received[..length] != from_cloud {
+            return Err("Cloud UDP link changed the incoming Ethernet frame".to_owned());
         }
-        .await;
 
-        let _ = engine.detach_endpoint(&cloud_endpoint).await;
-        let _ = engine.detach_endpoint(&peer_endpoint).await;
-        assert!(
-            !ubridge
-                .has_link_endpoint(cloud_endpoint["runtime_endpoint_id"].as_str().unwrap())
-                .await
-        );
-        assert!(
-            !ubridge
-                .has_link_endpoint(peer_endpoint["runtime_endpoint_id"].as_str().unwrap())
-                .await
-        );
-        assert!(run.is_ok(), "Cloud UDP live test failed: {run:?}");
-    }
-
-    #[tokio::test]
-    #[ignore = "requires Docker with alpine:latest, capable uBridge, and active libvirt default NAT network 'default' bridged as virbr0 with 192.168.122.1/24"]
-    async fn nat_live_routes_docker_traffic_through_libvirt() {
-        use std::{env, path::PathBuf};
-
-        use crate::{
-            links::{LinkEngine, NioAdapter},
-            runtime::{DockerRuntime, NodeAction},
-            ubridge::UbridgeRuntime,
-        };
-        use tokio::{process::Command, time::timeout};
-
-        let ubridge_binary = env::var_os("NETWORK_SIMULATOR_TEST_UBRIDGE")
-            .expect("NETWORK_SIMULATOR_TEST_UBRIDGE names a capable upstream uBridge");
-        let directory = tempfile::tempdir().expect("temporary builtin NAT test state");
-        let ubridge = UbridgeRuntime::with_paths(
-            PathBuf::from(ubridge_binary),
-            directory.path().join("ubridge.sock"),
-        );
-        let docker = DockerRuntime::new();
-        let engine = LinkEngine::new(ubridge.clone());
-        let docker_binary = env::var_os("NETWORK_SIMULATOR_DOCKER")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("docker"));
-        let project_id = Uuid::new_v4().to_string();
-        let nat_id = Uuid::new_v4().to_string();
-        let docker_id = Uuid::new_v4().to_string();
-        let mut nat = BuiltinRuntime::normalize_node(json!({
-            "node_id": nat_id,
-            "name": "NAT live test",
-            "node_type": "nat",
-            "ports_mapping": [{"type":"ethernet", "interface":"virbr0"}]
-        }))
-        .expect("normalize libvirt NAT node");
-        nat["project_id"] = json!(project_id);
-        let mut link = json!({
-            "link_id": Uuid::new_v4().to_string(),
-            "nodes": [
-                {"node_id": nat_id, "node_type":"nat", "adapter_number":0, "port_number":0},
-                {"node_id": docker_id, "node_type":"docker", "adapter_number":0, "port_number":0}
-            ]
-        });
-        engine
-            .reserve_pair(&mut link)
+        let from_peer = vec![
+            0x02, 0, 0, 0, 0, 1, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x88, 0xb5, 4, 5, 6,
+        ];
+        peer_runtime
+            .send_to(&from_peer, (Ipv4Addr::LOCALHOST, adapter_port))
             .await
-            .expect("allocate NAT link NIO ports");
-        let endpoints = link["nodes"].as_array().unwrap();
-        let nat_endpoint = endpoints[0].clone();
-        let docker_endpoint = endpoints[1].clone();
-        let nat_tap = host_ethernet_tap_name(&nat_endpoint).expect("derive NAT bridge TAP");
-        let docker_host = crate::ubridge::host_veth_name(
-            docker_endpoint["runtime_endpoint_id"].as_str().unwrap(),
+            .map_err(|error| error.to_string())?;
+        let (length, _) = timeout(
+            Duration::from_secs(3),
+            external_peer.recv_from(&mut received),
         )
-        .expect("derive Docker host veth");
-        let docker_guest = crate::ubridge::guest_veth_name(
-            docker_endpoint["runtime_endpoint_id"].as_str().unwrap(),
-        )
-        .expect("derive Docker guest veth");
-        let docker_node = Uuid::parse_str(&docker_id).unwrap();
-        let mac = format!(
-            "02:{:02x}:{:02x}:{:02x}:{:02x}:00",
-            docker_node.as_bytes()[0],
-            docker_node.as_bytes()[1],
-            docker_node.as_bytes()[2],
-            docker_node.as_bytes()[3]
-        );
-        let mut container_id = None;
+        .await
+        .map_err(|_| "Link peer frame did not reach the Cloud UDP peer".to_owned())?
+        .map_err(|error| error.to_string())?;
+        if received[..length] != from_peer {
+            return Err("Cloud UDP link changed the outgoing Ethernet frame".to_owned());
+        }
+        Ok(())
+    }
+    .await;
 
-        let run: Result<(), String> = async {
+    let _ = engine.detach_endpoint(&cloud_endpoint).await;
+    let _ = engine.detach_endpoint(&peer_endpoint).await;
+    assert!(
+        !ubridge
+            .has_link_endpoint(cloud_endpoint["runtime_endpoint_id"].as_str().unwrap())
+            .await
+    );
+    assert!(
+        !ubridge
+            .has_link_endpoint(peer_endpoint["runtime_endpoint_id"].as_str().unwrap())
+            .await
+    );
+    assert!(run.is_ok(), "Cloud UDP live test failed: {run:?}");
+}
+
+#[tokio::test]
+#[ignore = "requires Docker with alpine:latest, capable uBridge, and active libvirt default NAT network 'default' bridged as virbr0 with 192.168.122.1/24"]
+async fn nat_live_routes_docker_traffic_through_libvirt() {
+    use std::{env, path::PathBuf};
+
+    use crate::{
+        links::{LinkEngine, NioAdapter},
+        runtime::{DockerRuntime, NodeAction},
+        ubridge::UbridgeRuntime,
+    };
+    use tokio::{process::Command, time::timeout};
+
+    let ubridge_binary = env::var_os("NETWORK_SIMULATOR_TEST_UBRIDGE")
+        .expect("NETWORK_SIMULATOR_TEST_UBRIDGE names a capable upstream uBridge");
+    let directory = tempfile::tempdir().expect("temporary builtin NAT test state");
+    let ubridge = UbridgeRuntime::with_paths(
+        PathBuf::from(ubridge_binary),
+        directory.path().join("ubridge.sock"),
+    );
+    let docker = DockerRuntime::new();
+    let engine = LinkEngine::new(ubridge.clone());
+    let docker_binary = env::var_os("NETWORK_SIMULATOR_DOCKER")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("docker"));
+    let project_id = Uuid::new_v4().to_string();
+    let nat_id = Uuid::new_v4().to_string();
+    let docker_id = Uuid::new_v4().to_string();
+    let mut nat = BuiltinRuntime::normalize_node(json!({
+        "node_id": nat_id,
+        "name": "NAT live test",
+        "node_type": "nat",
+        "ports_mapping": [{"type":"ethernet", "interface":"virbr0"}]
+    }))
+    .expect("normalize libvirt NAT node");
+    nat["project_id"] = json!(project_id);
+    let mut link = json!({
+        "link_id": Uuid::new_v4().to_string(),
+        "nodes": [
+            {"node_id": nat_id, "node_type":"nat", "adapter_number":0, "port_number":0},
+            {"node_id": docker_id, "node_type":"docker", "adapter_number":0, "port_number":0}
+        ]
+    });
+    engine
+        .reserve_pair(&mut link)
+        .await
+        .expect("allocate NAT link NIO ports");
+    let endpoints = link["nodes"].as_array().unwrap();
+    let nat_endpoint = endpoints[0].clone();
+    let docker_endpoint = endpoints[1].clone();
+    let nat_tap = host_ethernet_tap_name(&nat_endpoint).expect("derive NAT bridge TAP");
+    let docker_host =
+        crate::ubridge::host_veth_name(docker_endpoint["runtime_endpoint_id"].as_str().unwrap())
+            .expect("derive Docker host veth");
+    let docker_guest =
+        crate::ubridge::guest_veth_name(docker_endpoint["runtime_endpoint_id"].as_str().unwrap())
+            .expect("derive Docker guest veth");
+    let docker_node = Uuid::parse_str(&docker_id).unwrap();
+    let mac = format!(
+        "02:{:02x}:{:02x}:{:02x}:{:02x}:00",
+        docker_node.as_bytes()[0],
+        docker_node.as_bytes()[1],
+        docker_node.as_bytes()[2],
+        docker_node.as_bytes()[3]
+    );
+    let mut container_id = None;
+
+    let run: Result<(), String> = async {
             let network = Command::new("virsh")
                 .args(["net-info", "default"])
                 .output()
@@ -445,42 +441,41 @@ use super::*;
         }
         .await;
 
-        let _ = engine.detach_endpoint(&nat_endpoint).await;
-        let _ = engine.detach_endpoint(&docker_endpoint).await;
-        let _ = ubridge.delete_veth(&docker_host).await;
-        if let Some(container_id) = container_id.as_deref() {
-            let _ = docker
-                .remove_node_resources(&docker_id, Some(container_id))
-                .await;
-        }
-        let nat_tap_remaining = Command::new("ip")
-            .args(["link", "show", "dev", &nat_tap])
-            .output()
-            .await
-            .expect("inspect cleaned NAT TAP");
-        let docker_veth_remaining = Command::new("ip")
-            .args(["link", "show", "dev", &docker_host])
-            .output()
-            .await
-            .expect("inspect cleaned Docker veth");
-        assert!(
-            !nat_tap_remaining.status.success(),
-            "NAT bridge TAP remained: {nat_tap}"
-        );
-        assert!(
-            !docker_veth_remaining.status.success(),
-            "Docker host veth remained: {docker_host}"
-        );
-        assert!(
-            !ubridge
-                .has_link_endpoint(nat_endpoint["runtime_endpoint_id"].as_str().unwrap())
-                .await
-        );
-        assert!(
-            !ubridge
-                .has_link_endpoint(docker_endpoint["runtime_endpoint_id"].as_str().unwrap())
-                .await
-        );
-        assert!(run.is_ok(), "NAT live test failed: {run:?}");
+    let _ = engine.detach_endpoint(&nat_endpoint).await;
+    let _ = engine.detach_endpoint(&docker_endpoint).await;
+    let _ = ubridge.delete_veth(&docker_host).await;
+    if let Some(container_id) = container_id.as_deref() {
+        let _ = docker
+            .remove_node_resources(&docker_id, Some(container_id))
+            .await;
     }
+    let nat_tap_remaining = Command::new("ip")
+        .args(["link", "show", "dev", &nat_tap])
+        .output()
+        .await
+        .expect("inspect cleaned NAT TAP");
+    let docker_veth_remaining = Command::new("ip")
+        .args(["link", "show", "dev", &docker_host])
+        .output()
+        .await
+        .expect("inspect cleaned Docker veth");
+    assert!(
+        !nat_tap_remaining.status.success(),
+        "NAT bridge TAP remained: {nat_tap}"
+    );
+    assert!(
+        !docker_veth_remaining.status.success(),
+        "Docker host veth remained: {docker_host}"
+    );
+    assert!(
+        !ubridge
+            .has_link_endpoint(nat_endpoint["runtime_endpoint_id"].as_str().unwrap())
+            .await
+    );
+    assert!(
+        !ubridge
+            .has_link_endpoint(docker_endpoint["runtime_endpoint_id"].as_str().unwrap())
+            .await
+    );
+    assert!(run.is_ok(), "NAT live test failed: {run:?}");
 }

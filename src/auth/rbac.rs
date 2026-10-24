@@ -187,4 +187,3 @@ pub(super) async fn seed_rbac(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     }
     Ok(())
 }
-

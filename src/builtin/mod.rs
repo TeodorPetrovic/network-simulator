@@ -26,14 +26,24 @@ const FDB_AGE_INTERVAL: Duration = Duration::from_secs(60);
 pub use types::BuiltinRuntime;
 use types::{ActivePort, ForwardingNode, LearnedAddress, RuntimePort, SwitchPortMode};
 
+mod cloud;
+mod switch;
 #[path = "types.rs"]
 mod types;
-mod switch;
-mod cloud;
-use cloud::{default_nat_interface, host_ethernet_tap_name, normalize_cloud_console, normalize_cloud_ports, normalize_nat_ports, normalize_switch_ports, normalize_hub_ports, normalize_host_interface_allowlist, port_from_endpoint, port_from_mapping, required_mapping_text, safe_remote_host};
-pub use cloud::validate_host_interfaces;
 #[cfg(test)]
-use switch::{age_forwarding_node, classify_egress, classify_ingress, forward_frame, learn_address, switch_mode, vlan_allowed};
+use cloud::validate_host_interface_policy;
+pub use cloud::validate_host_interfaces;
+use cloud::{
+    default_nat_interface, host_ethernet_tap_name, normalize_cloud_console, normalize_cloud_ports,
+    normalize_host_interface_allowlist, normalize_hub_ports, normalize_nat_ports,
+    normalize_switch_ports, port_from_endpoint, port_from_mapping, required_mapping_text,
+    safe_remote_host,
+};
+#[cfg(test)]
+use switch::{
+    age_forwarding_node, classify_egress, classify_ingress, forward_frame, learn_address,
+    switch_mode, vlan_allowed,
+};
 
 impl BuiltinRuntime {
     pub fn validate_host_interfaces(node: &Value) -> Result<(), String> {
@@ -326,7 +336,6 @@ impl BuiltinRuntime {
             ))),
         }
     }
-
 }
 
 fn builtin_template_id(node_type: &str) -> String {
@@ -348,7 +357,6 @@ fn default_hub_ports() -> Vec<Value> {
         .map(|index| json!({"name":format!("Ethernet{index}"),"port_number":index}))
         .collect()
 }
-
 
 #[cfg(test)]
 #[path = "tests.rs"]

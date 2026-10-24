@@ -45,4 +45,3 @@ pub(super) struct BuiltinState {
 pub struct BuiltinRuntime {
     pub(super) state: Arc<Mutex<BuiltinState>>,
 }
-

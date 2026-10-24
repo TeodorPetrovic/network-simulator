@@ -83,4 +83,3 @@ fn write_initial_password(path: &FsPath, password: &str) -> std::io::Result<()> 
         file.sync_all()
     }
 }
-

@@ -34,26 +34,32 @@ use uuid::Uuid;
 
 use super::AppState;
 
+pub(crate) use auth_mode::parse_bool;
 use auth_mode::{auth_override, effective_auth_mode, request_requires_auth};
 pub(crate) use bootstrap::initialize;
-pub(crate) use auth_mode::parse_bool;
 use gate::{auth_gate, has_privilege};
-use gate::{is_ticket_endpoint, request_has_forwarded_headers, trust_proxy_headers_unauthenticated};
+use gate::{
+    is_ticket_endpoint, request_has_forwarded_headers, trust_proxy_headers_unauthenticated,
+};
 use groups::*;
 use keys::*;
 use me::{me, update_me};
+#[cfg(test)]
+use passwords::hash_password;
 use passwords::*;
 use pools::*;
 use rbac::seed_rbac;
 use roles::*;
-use session::{consume_ws_ticket, create_ws_ticket, login, authenticate, logout, refresh};
-use tokens::{authenticate_token, decode_token, encode_token, new_claims, now_epoch, random_hex, signing_key};
-#[cfg(test)]
-use tokens::Claims;
 use route_class::classify_route;
 use route_rules::RouteClass;
 #[cfg(test)]
-use route_rules::{RouteRule, ROUTE_RULES};
+use route_rules::{ROUTE_RULES, ROUTE_RULES_EXTRA, RouteRule};
+use session::{authenticate, consume_ws_ticket, create_ws_ticket, login, logout, refresh};
+#[cfg(test)]
+use tokens::Claims;
+use tokens::{
+    authenticate_token, decode_token, encode_token, new_claims, now_epoch, random_hex, signing_key,
+};
 use users::*;
 
 mod acl;
@@ -63,15 +69,15 @@ mod gate;
 mod groups;
 mod keys;
 mod me;
-mod pools;
 mod passwords;
+mod pools;
 mod rbac;
+mod roles;
 mod route_class;
 mod route_rules;
-mod roles;
 mod session;
-mod users;
 mod tokens;
+mod users;
 
 const ACCESS_TTL: u64 = 60 * 60;
 const REFRESH_TTL: u64 = 7 * 24 * 60 * 60;
@@ -80,7 +86,6 @@ const JWT_ISSUER: &str = "network-simulator";
 const JWT_AUDIENCE: &str = "network-simulator-api";
 
 static WARNED_FORWARDED_AUTH: AtomicBool = AtomicBool::new(false);
-
 
 #[derive(Clone, Debug)]
 pub(crate) struct Principal {
@@ -132,7 +137,6 @@ impl IntoResponse for AuthError {
         response
     }
 }
-
 
 pub(crate) async fn enforce_bind_auth_floor(
     pool: &SqlitePool,
@@ -253,7 +257,6 @@ pub(crate) fn protect(router: Router<AppState>, state: AppState) -> Router<AppSt
     router.layer(middleware::from_fn_with_state(state, auth_gate))
 }
 
-
 pub(crate) async fn can_audit_project(
     pool: &SqlitePool,
     principal: &Principal,
@@ -293,10 +296,6 @@ fn url_query_value(query: &str, name: &str) -> Option<String> {
         (key == name).then(|| value.replace('+', " "))
     })
 }
-
-
-
-
 
 fn required_string(value: &Value, key: &str) -> Result<String, AuthError> {
     value

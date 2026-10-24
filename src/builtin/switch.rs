@@ -345,4 +345,3 @@ pub(super) fn insert_vlan(frame: &[u8], ethertype: u16, vlan: u16) -> Vec<u8> {
     output.extend_from_slice(&frame[12..]);
     output
 }
-

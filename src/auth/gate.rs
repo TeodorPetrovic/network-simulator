@@ -162,7 +162,6 @@ pub(super) async fn auth_gate(
     next.run(request).await
 }
 
-
 pub(super) fn request_has_forwarded_headers(headers: &axum::http::HeaderMap) -> bool {
     [
         "forwarded",
@@ -203,4 +202,3 @@ pub(super) async fn has_privilege(
         }
     }
 }
-

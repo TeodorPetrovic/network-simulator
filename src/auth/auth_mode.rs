@@ -4,7 +4,6 @@ pub(super) fn auth_override() -> Option<bool> {
         .and_then(|value| parse_bool(&value))
 }
 
-
 pub(super) fn effective_auth_mode(
     persisted_enabled: bool,
     bind_is_non_loopback: bool,
@@ -17,7 +16,6 @@ pub(super) fn effective_auth_mode(
     }
 }
 
-
 pub(super) fn request_requires_auth(
     persisted_enabled: bool,
     bind_is_non_loopback: bool,
@@ -29,7 +27,6 @@ pub(super) fn request_requires_auth(
         || (!bind_is_non_loopback && forwarded_headers && !trust_proxy_headers)
 }
 
-
 pub(crate) fn parse_bool(value: &str) -> Option<bool> {
     match value.to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Some(true),
@@ -37,4 +34,3 @@ pub(crate) fn parse_bool(value: &str) -> Option<bool> {
         _ => None,
     }
 }
-
