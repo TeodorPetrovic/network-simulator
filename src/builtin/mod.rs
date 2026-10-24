@@ -27,17 +27,21 @@ pub use types::BuiltinRuntime;
 use types::{ActivePort, ForwardingNode, LearnedAddress, RuntimePort, SwitchPortMode};
 
 mod cloud;
+mod hub;
+mod nat;
 mod switch;
+use hub::{default_hub_ports, normalize_hub_ports};
+use nat::{default_nat_interface, normalize_nat_ports};
+use switch::{default_switch_ports, normalize_switch_ports};
 #[path = "types.rs"]
 mod types;
 #[cfg(test)]
 use cloud::validate_host_interface_policy;
 pub use cloud::validate_host_interfaces;
 use cloud::{
-    default_nat_interface, host_ethernet_tap_name, normalize_cloud_console, normalize_cloud_ports,
-    normalize_host_interface_allowlist, normalize_hub_ports, normalize_nat_ports,
-    normalize_switch_ports, port_from_endpoint, port_from_mapping, required_mapping_text,
-    safe_remote_host,
+    host_ethernet_tap_name, normalize_cloud_console, normalize_cloud_ports,
+    normalize_host_interface_allowlist, port_from_endpoint, port_from_mapping,
+    required_mapping_text, safe_interface_name, safe_remote_host, validate_port_count,
 };
 #[cfg(test)]
 use switch::{
@@ -344,18 +348,6 @@ fn builtin_template_id(node_type: &str) -> String {
         format!("network-simulator/builtin/{node_type}").as_bytes(),
     )
     .to_string()
-}
-
-fn default_switch_ports() -> Vec<Value> {
-    (0..DEFAULT_PORTS)
-        .map(|index| json!({"name":format!("Ethernet{index}"),"port_number":index,"type":"access","vlan":1,"ethertype":"0x8100"}))
-        .collect()
-}
-
-fn default_hub_ports() -> Vec<Value> {
-    (0..DEFAULT_PORTS)
-        .map(|index| json!({"name":format!("Ethernet{index}"),"port_number":index}))
-        .collect()
 }
 
 #[cfg(test)]

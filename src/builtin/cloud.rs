@@ -1,9 +1,5 @@
 use super::*;
 
-pub(super) fn default_nat_interface() -> String {
-    std::env::var("NETWORK_SIMULATOR_NAT_INTERFACE").unwrap_or_else(|_| "virbr0".to_owned())
-}
-
 pub(super) fn default_host_interfaces() -> Vec<Value> {
     let uplinks = default_route_interfaces();
     let Ok(entries) = std::fs::read_dir("/sys/class/net") else {
@@ -28,77 +24,6 @@ pub(super) fn default_host_interfaces() -> Vec<Value> {
         .enumerate()
         .map(|(index, interface)| {
             json!({"name":format!("Ethernet{index}"),"port_number":index,"type":"ethernet","interface":interface})
-        })
-        .collect()
-}
-
-pub(super) fn normalize_switch_ports(mapping: Option<Value>) -> Result<Vec<Value>, String> {
-    let ports = mapping
-        .as_ref()
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_else(default_switch_ports);
-    validate_port_count(&ports)?;
-    ports
-        .into_iter()
-        .enumerate()
-        .map(|(index, mut port)| {
-            let object = port
-                .as_object_mut()
-                .ok_or_else(|| "Each switch port must be an object".to_owned())?;
-            let kind = object
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or("access")
-                .to_owned();
-            if !matches!(kind.as_str(), "access" | "dot1q" | "qinq") {
-                return Err(format!("Unsupported switch port type '{kind}'"));
-            }
-            let vlan = object.get("vlan").and_then(Value::as_u64).unwrap_or(1);
-            if !(1..=4094).contains(&vlan) {
-                return Err("Switch VLAN must be from 1 to 4094".to_owned());
-            }
-            let ethertype = object
-                .get("ethertype")
-                .and_then(Value::as_str)
-                .unwrap_or("0x8100")
-                .to_ascii_lowercase();
-            if !matches!(
-                ethertype.as_str(),
-                "0x8100" | "0x88a8" | "0x9100" | "0x9200"
-            ) {
-                return Err(format!("Unsupported QinQ ethertype '{ethertype}'"));
-            }
-            if kind != "qinq" && ethertype != "0x8100" {
-                return Err("Non-default ethertype is valid only on QinQ ports".to_owned());
-            }
-            object.insert("name".into(), json!(format!("Ethernet{index}")));
-            object.insert("port_number".into(), json!(index));
-            object.insert("type".into(), json!(kind.clone()));
-            object.insert("vlan".into(), json!(vlan));
-            object.insert("ethertype".into(), json!(ethertype));
-            Ok(port)
-        })
-        .collect()
-}
-
-pub(super) fn normalize_hub_ports(mapping: Option<Value>) -> Result<Vec<Value>, String> {
-    let ports = mapping
-        .as_ref()
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_else(default_hub_ports);
-    validate_port_count(&ports)?;
-    ports
-        .into_iter()
-        .enumerate()
-        .map(|(index, mut port)| {
-            let object = port
-                .as_object_mut()
-                .ok_or_else(|| "Each hub port must be an object".to_owned())?;
-            object.insert("name".into(), json!(format!("Ethernet{index}")));
-            object.insert("port_number".into(), json!(index));
-            Ok(port)
         })
         .collect()
 }
@@ -176,25 +101,6 @@ pub(super) fn normalize_cloud_ports(mapping: Option<Value>) -> Result<Vec<Value>
             Ok(port)
         })
         .collect()
-}
-
-pub(super) fn normalize_nat_ports(
-    object: &mut serde_json::Map<String, Value>,
-    mapping: Option<Value>,
-) -> Result<Vec<Value>, String> {
-    let default = default_nat_interface();
-    let interface = mapping
-        .as_ref()
-        .and_then(Value::as_array)
-        .and_then(|ports| ports.first())
-        .and_then(|port| port.get("interface"))
-        .and_then(Value::as_str)
-        .or_else(|| object.get("nat_interface").and_then(Value::as_str))
-        .unwrap_or(&default);
-    let interface = safe_interface_name(Some(interface))?;
-    Ok(vec![
-        json!({"name":"nat0","port_number":0,"type":"ethernet","interface":interface}),
-    ])
 }
 
 /// Validate Cloud/NAT host interfaces against the actual host and controller

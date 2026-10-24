@@ -345,3 +345,59 @@ pub(super) fn insert_vlan(frame: &[u8], ethertype: u16, vlan: u16) -> Vec<u8> {
     output.extend_from_slice(&frame[12..]);
     output
 }
+
+pub(super) fn default_switch_ports() -> Vec<Value> {
+    (0..DEFAULT_PORTS)
+        .map(|index| json!({"name":format!("Ethernet{index}"),"port_number":index,"type":"access","vlan":1,"ethertype":"0x8100"}))
+        .collect()
+}
+
+pub(super) fn normalize_switch_ports(mapping: Option<Value>) -> Result<Vec<Value>, String> {
+    let ports = mapping
+        .as_ref()
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_else(default_switch_ports);
+    validate_port_count(&ports)?;
+    ports
+        .into_iter()
+        .enumerate()
+        .map(|(index, mut port)| {
+            let object = port
+                .as_object_mut()
+                .ok_or_else(|| "Each switch port must be an object".to_owned())?;
+            let kind = object
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("access")
+                .to_owned();
+            if !matches!(kind.as_str(), "access" | "dot1q" | "qinq") {
+                return Err(format!("Unsupported switch port type '{kind}'"));
+            }
+            let vlan = object.get("vlan").and_then(Value::as_u64).unwrap_or(1);
+            if !(1..=4094).contains(&vlan) {
+                return Err("Switch VLAN must be from 1 to 4094".to_owned());
+            }
+            let ethertype = object
+                .get("ethertype")
+                .and_then(Value::as_str)
+                .unwrap_or("0x8100")
+                .to_ascii_lowercase();
+            if !matches!(
+                ethertype.as_str(),
+                "0x8100" | "0x88a8" | "0x9100" | "0x9200"
+            ) {
+                return Err(format!("Unsupported QinQ ethertype '{ethertype}'"));
+            }
+            if kind != "qinq" && ethertype != "0x8100" {
+                return Err("Non-default ethertype is valid only on QinQ ports".to_owned());
+            }
+            object.insert("name".into(), json!(format!("Ethernet{index}")));
+            object.insert("port_number".into(), json!(index));
+            object.insert("type".into(), json!(kind.clone()));
+            object.insert("vlan".into(), json!(vlan));
+            object.insert("ethertype".into(), json!(ethertype));
+            Ok(port)
+        })
+        .collect()
+}
