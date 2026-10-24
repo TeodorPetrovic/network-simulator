@@ -239,7 +239,7 @@ async fn assert_student_isolated(
     // Every privileged route that names the other student's project must be
     // rejected by the gate, for every method, before any handler runs.
     let mut checked = 0;
-    for rule in ROUTE_RULES {
+    for rule in ROUTE_RULES.iter().chain(ROUTE_RULES_EXTRA.iter()) {
         let RouteClass::Privilege(_) = rule.class else {
             continue;
         };
