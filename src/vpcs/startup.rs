@@ -48,4 +48,3 @@ pub(super) fn write_startup_script(
     })?;
     Ok(path)
 }
-

@@ -376,4 +376,3 @@ impl VpcsRuntime {
             .ok_or_else(|| RuntimeError::Failed("Could not determine the VPCS version".to_owned()))
     }
 }
-

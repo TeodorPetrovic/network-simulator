@@ -351,5 +351,4 @@ impl QemuRuntime {
         };
         Ok(vm)
     }
-
 }

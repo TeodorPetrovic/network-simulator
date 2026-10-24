@@ -289,7 +289,6 @@ impl QemuRuntime {
         templates.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
         Ok(templates)
     }
-
 }
 
 mod create;
@@ -457,19 +456,15 @@ impl QemuRuntime {
         }
         Ok(())
     }
-
 }
 
 mod node;
 
-
 mod disks;
-
 
 mod images;
 
-impl QemuRuntime {
-}
+impl QemuRuntime {}
 
 mod lifecycle;
 

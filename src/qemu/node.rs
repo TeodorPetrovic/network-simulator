@@ -284,5 +284,4 @@ impl QemuRuntime {
         }
         runtime_fields
     }
-
 }

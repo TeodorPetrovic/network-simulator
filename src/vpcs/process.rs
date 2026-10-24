@@ -214,4 +214,3 @@ pub(super) async fn kill_vpcs_startup_tree(child: &mut tokio::process::Child) {
     let _ = child.start_kill();
     let _ = child.wait().await;
 }
-

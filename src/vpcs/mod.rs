@@ -37,8 +37,8 @@ pub struct VpcsRuntime {
 }
 
 mod process;
-use self::process::*;
 pub use self::process::reap_orphaned_processes;
+use self::process::*;
 
 #[derive(Serialize)]
 pub struct VpcsRuntimeInfo {
