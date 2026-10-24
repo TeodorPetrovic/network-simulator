@@ -372,4 +372,3 @@ pub(super) async fn idlepc_proposals(
         .map_err(runtime_api_error)?;
     Ok(Json(proposals))
 }
-

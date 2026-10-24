@@ -1,6 +1,8 @@
 use super::*;
 
-pub(super) async fn list_symbols(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
+pub(super) async fn list_symbols(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<Value>>, ApiError> {
     let rows=sqlx::query("SELECT symbol_id,length(contents) AS size,updated_at FROM controller_symbols ORDER BY symbol_id").fetch_all(state.store.pool()).await?;
     Ok(Json(rows.into_iter().map(|r|json!({"symbol_id":r.get::<String,_>("symbol_id"),"filename":r.get::<String,_>("symbol_id"),"size":r.get::<i64,_>("size"),"builtin":false})).collect()))
 }
@@ -129,4 +131,3 @@ pub(super) fn image_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     };
     Some((dimension("width")?, dimension("height")?))
 }
-

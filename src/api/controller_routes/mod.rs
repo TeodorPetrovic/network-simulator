@@ -21,27 +21,27 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 use super::*;
 
 mod templates;
-pub(super) use templates::*;
 pub(crate) use templates::check_version;
+use templates::*;
 mod statistics;
-pub(super) use statistics::*;
+use statistics::*;
 mod project_operations;
-pub(super) use project_operations::*;
+use project_operations::*;
 mod project_archive;
-pub(super) use project_archive::*;
+use project_archive::*;
 mod snapshots;
-pub(super) use snapshots::*;
+use snapshots::*;
 mod bulk_lifecycle;
-pub(super) use bulk_lifecycle::*;
 pub(crate) use bulk_lifecycle::bulk_node_action_applies;
+use bulk_lifecycle::*;
 mod node_resources;
-pub(super) use node_resources::*;
+use node_resources::*;
 mod images;
-pub(super) use images::*;
+use images::*;
 mod symbols;
-pub(super) use symbols::*;
+use symbols::*;
 mod archive;
-pub(super) use archive::*;
+use archive::*;
 
 const MAX_PROJECT_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_PROJECT_ARCHIVE_FILES_BYTES: u64 = 128 * 1024 * 1024;
@@ -318,12 +318,6 @@ async fn get_compute(
 mod archive_tests;
 
 #[cfg(test)]
-#[path = "tests/stats_and_imports.rs"]
-mod stats_and_imports;
-#[cfg(test)]
-#[path = "tests/templates_and_version.rs"]
-mod templates_and_version;
-#[cfg(test)]
 #[path = "tests/project_routes.rs"]
 mod project_routes;
 #[cfg(test)]
@@ -332,3 +326,9 @@ mod resource_routes;
 #[cfg(test)]
 #[path = "tests/runtime_and_notifications.rs"]
 mod runtime_and_notifications;
+#[cfg(test)]
+#[path = "tests/stats_and_imports.rs"]
+mod stats_and_imports;
+#[cfg(test)]
+#[path = "tests/templates_and_version.rs"]
+mod templates_and_version;

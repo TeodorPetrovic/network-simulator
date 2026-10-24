@@ -1,6 +1,8 @@
 use super::*;
 
-pub(super) async fn controller_statistics(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+pub(super) async fn controller_statistics(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, ApiError> {
     let project_counts =
         sqlx::query("SELECT status, COUNT(*) AS total FROM projects GROUP BY status")
             .fetch_all(state.store.pool())
@@ -74,4 +76,3 @@ pub(super) async fn controller_statistics(State(state): State<AppState>) -> Resu
         "webwireshark":{"containers":wireshark_containers}
     })))
 }
-

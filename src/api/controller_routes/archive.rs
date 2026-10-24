@@ -9,9 +9,9 @@ pub(super) struct ImportedProjectArchive {
 
 #[derive(Debug)]
 pub(super) struct ImportedProjectImage {
-    image_type: String,
-    file_name: String,
-    contents: Vec<u8>,
+    pub(super) image_type: String,
+    pub(super) file_name: String,
+    pub(super) contents: Vec<u8>,
 }
 
 pub(super) fn write_project_archive(
@@ -463,4 +463,3 @@ pub(super) fn strip_project_runtime_fields(project: &mut Value) {
         }
     }
 }
-

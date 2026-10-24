@@ -114,4 +114,3 @@ pub(super) async fn restore_snapshot(
     state.store.publish(event);
     Ok(Json(project))
 }
-

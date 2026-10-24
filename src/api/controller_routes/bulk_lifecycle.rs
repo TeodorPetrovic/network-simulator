@@ -86,4 +86,3 @@ pub(super) async fn reset_all_consoles(
         "Resetting runtime consoles is not supported",
     ))
 }
-

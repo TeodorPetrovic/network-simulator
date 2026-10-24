@@ -314,7 +314,11 @@ pub(super) async fn save_imported_project(
     Ok(())
 }
 
-pub(super) async fn rollback_imported_project(state: &AppState, project_id: &str, node_ids: &[String]) {
+pub(super) async fn rollback_imported_project(
+    state: &AppState,
+    project_id: &str,
+    node_ids: &[String],
+) {
     for node_id in node_ids {
         if let Err(error) = super::delete_node_and_connected_links(
             state.clone(),
@@ -420,4 +424,3 @@ pub(super) async fn duplicate_project(
     state.store.publish(event);
     Ok((StatusCode::CREATED, Json(new_project)).into_response())
 }
-

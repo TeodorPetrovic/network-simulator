@@ -1,6 +1,8 @@
 use super::*;
 
-pub(super) async fn list_api_templates(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
+pub(super) async fn list_api_templates(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<Value>>, ApiError> {
     let mut templates = available_templates(&state).await?;
     let rows = sqlx::query("SELECT template_json FROM controller_templates ORDER BY template_id")
         .fetch_all(state.store.pool())
@@ -139,4 +141,3 @@ pub(super) async fn duplicate_template(
         .await?;
     Ok((StatusCode::CREATED, Json(duplicate)).into_response())
 }
-

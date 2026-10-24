@@ -47,7 +47,11 @@ pub(super) async fn unlock_project(
     set_project_lock(state, project_id, false).await?;
     Ok(StatusCode::NO_CONTENT)
 }
-pub(super) async fn set_project_lock(state: AppState, project_id: Uuid, locked: bool) -> Result<(), ApiError> {
+pub(super) async fn set_project_lock(
+    state: AppState,
+    project_id: Uuid,
+    locked: bool,
+) -> Result<(), ApiError> {
     let pid = project_id.to_string();
     let mut tx = state.store.pool().begin().await?;
     let row = sqlx::query("SELECT project_json FROM projects WHERE project_id=?")
@@ -203,7 +207,9 @@ pub(super) fn normalize_imported_project(mut project: Value) -> Value {
     project
 }
 
-pub(super) fn package_project_images(project: &mut Value) -> Result<Vec<(String, Vec<u8>)>, ApiError> {
+pub(super) fn package_project_images(
+    project: &mut Value,
+) -> Result<Vec<(String, Vec<u8>)>, ApiError> {
     let Some(nodes) = project
         .get_mut("topology")
         .and_then(|topology| topology.get_mut("nodes"))
@@ -372,4 +378,3 @@ pub(super) async fn write_project_file(
     sqlx::query("INSERT INTO project_files(project_id,file_path,contents) VALUES(?,?,?) ON CONFLICT(project_id,file_path) DO UPDATE SET contents=excluded.contents, updated_at=CURRENT_TIMESTAMP").bind(pid).bind(file).bind(bytes.to_vec()).execute(state.store.pool()).await?;
     Ok(StatusCode::NO_CONTENT)
 }
-
