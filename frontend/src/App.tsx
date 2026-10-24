@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Activity, Network } from "lucide-react";
+import { Activity } from "lucide-react";
 import { api, dockerHttpConsoleUrl } from "./api";
 import type { LinkEndpoint, Node, Project, ResourceMonitor, RuntimeInfo } from "./api";
 import { nodesForLifecycle } from "./lifecycle";
@@ -8,10 +8,9 @@ import { errorMessage, samePort, upsertLink } from "./appUtils";
 import { SimulatorWorkspace } from "./SimulatorWorkspace";
 import type { ConsoleTarget } from "./ConsoleDock";
 import { ApplianceManagerPage } from "./ApplianceManagerPage";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { GlobalToast } from "./GlobalToast";
 import { NodeDialog } from "./NodeDialog";
+import { AppNavigationHeader } from "./AppNavigationHeader";
 import { useAppNodeActions } from "./useAppNodeActions";
 import { useAppDeviceActions } from "./useAppDeviceActions";
 import { ProjectsPage } from "./AppProjectsIndex";
@@ -313,17 +312,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
   return (
     <TooltipProvider>
       <div className="app-shell">
-        {!projectId && !showApplianceManager && <header className="sim-app-header">
-          <Button variant="ghost" className="sim-brand" onClick={() => navigateToProject(null)}>
-            <span className="sim-brand-mark"><Network size={18} /></span>
-            <span>Network Simulator</span>
-          </Button>
-          <div className="sim-header-actions">
-            <Badge variant={connection === "connected" ? "secondary" : connection === "disconnected" ? "destructive" : "outline"} className="gap-1.5">
-              <span className={`sim-connection-dot ${connection}`} />{connection === "connected" ? "Controller connected" : connection === "reconnecting" ? "Reconnecting" : connection === "checking" ? "Connecting" : "Controller unavailable"}
-            </Badge>
-          </div>
-        </header>}
+        {!projectId && !showApplianceManager && <AppNavigationHeader connection={connection} onNavigateHome={() => navigateToProject(null)} />}
 
         <GlobalToast error={error} notice={notice} onDismiss={() => { setError(""); setNotice(""); }} />
 
