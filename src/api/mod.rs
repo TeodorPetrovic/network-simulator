@@ -746,24 +746,8 @@ fn request_span<B>(request: &axum::http::Request<B>) -> tracing::Span {
 }
 
 #[cfg(test)]
-mod request_trace_tests {
-    use super::*;
-
-    #[test]
-    fn request_span_uses_only_the_path_and_drops_query_credentials() {
-        let request = axum::http::Request::builder()
-            .uri("/v3/projects/p1/notifications/ws?ticket=secret-ticket&after=12")
-            .body(())
-            .unwrap();
-        assert_eq!(
-            request_trace_path(&request),
-            "/v3/projects/p1/notifications/ws"
-        );
-        let span = request_span(&request);
-        assert!(span.metadata().unwrap().fields().field("path").is_some());
-        assert!(!request_trace_path(&request).contains("secret-ticket"));
-    }
-}
+#[path = "tests/request_trace_tests.rs"]
+mod request_trace_tests;
 
 async fn health(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     sqlx::query_scalar::<_, i64>("SELECT 1")
@@ -6917,70 +6901,8 @@ fn decode_json(value: String) -> Result<Value, ApiError> {
 }
 
 #[cfg(test)]
-mod project_activity_tests {
-    use std::time::{Duration, Instant};
-
-    use super::{ProjectActivityTracker, project_id_from_path};
-
-    #[test]
-    fn project_scoped_api_activity_resets_the_idle_window() {
-        let project_id = "63fe90f9-485f-4379-b78c-8d8f984a62b2";
-        let tracker = ProjectActivityTracker::default();
-        let fallback = Instant::now() - Duration::from_secs(600);
-        let idle_for = Duration::from_secs(300);
-
-        assert!(tracker.is_idle(project_id, fallback, idle_for));
-        tracker.record_request(project_id);
-        assert!(!tracker.is_idle(project_id, fallback, idle_for));
-        assert!(tracker.is_idle_at(
-            project_id,
-            fallback,
-            idle_for,
-            Instant::now() + Duration::from_secs(301)
-        ));
-    }
-
-    #[test]
-    fn an_open_project_websocket_prevents_idle_stop_and_disconnect_resets_timer() {
-        let project_id = "63fe90f9-485f-4379-b78c-8d8f984a62b2";
-        let tracker = ProjectActivityTracker::default();
-        let fallback = Instant::now() - Duration::from_secs(600);
-        let idle_for = Duration::from_secs(300);
-        let connection = tracker.open_websocket(project_id.to_owned());
-
-        assert!(!tracker.is_idle_at(
-            project_id,
-            fallback,
-            idle_for,
-            Instant::now() + Duration::from_secs(3600)
-        ));
-        drop(connection);
-        assert!(!tracker.is_idle(project_id, fallback, idle_for));
-        assert!(tracker.is_idle_at(
-            project_id,
-            fallback,
-            idle_for,
-            Instant::now() + Duration::from_secs(301)
-        ));
-    }
-
-    #[test]
-    fn activity_routes_extract_ids_for_controller_and_compute_websockets() {
-        let project_id = "63fe90f9-485f-4379-b78c-8d8f984a62b2";
-        assert_eq!(
-            project_id_from_path(&format!("/v3/projects/{project_id}/nodes")),
-            Some(project_id.to_owned())
-        );
-        assert_eq!(
-            project_id_from_path(&format!(
-                "/v3/compute/projects/{project_id}/vpcs/nodes/00000000-0000-0000-0000-000000000001/console/ws"
-            )),
-            Some(project_id.to_owned())
-        );
-        assert_eq!(project_id_from_path("/v3/projects/not-a-uuid/nodes"), None);
-        assert_eq!(project_id_from_path("/v3/projects"), None);
-    }
-}
+#[path = "tests/project_activity_tests.rs"]
+mod project_activity_tests;
 
 #[cfg(test)]
 mod tests {
