@@ -53,7 +53,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
   const { project, setProject, topology, setTopology, busy, connection, error, setError, templates, setTemplates } = useProjectSession(projectId, setNotice);
   const [consoleTargets, setConsoleTargets] = useState<ConsoleTarget[]>([]);
   const [activeConsoleId, setActiveConsoleId] = useState<string | null>(null);
-  const [consoleMinimized, setConsoleMinimized] = useState(false);
+  const [consoleMinimized, setConsoleMinimized] = useState(true);
   const [consoleDockOpen, setConsoleDockOpen] = useState(true);
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const pendingNodeNames = useRef(new Set<string>());
@@ -70,7 +70,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
   useEffect(() => {
     setConsoleTargets([]);
     setActiveConsoleId(null);
-    setConsoleMinimized(false);
+    setConsoleMinimized(true);
     setResources(null);
   }, [projectId]);
 
