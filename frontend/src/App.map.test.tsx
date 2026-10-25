@@ -24,19 +24,16 @@ describe("map", () => {
       expect(await screen.findByRole("button", { name: "Packet capture" })).toBeInTheDocument();
     });
 
-    it("zooms to a selected device and resets the map scale", async () => {
+    it("keeps zoom controls out of the canvas scene", async () => {
       vi.mocked(api.topology).mockResolvedValue({
         ...emptyTopology,
         nodes: [{ node_id: "n1", name: "Edge router", node_type: "qemu", x: 180, y: 90 }],
       });
       renderWorkspace();
-      fireEvent.click(await screen.findByRole("button", { name: "Node Edge router" }));
-      fireEvent.click(screen.getByRole("button", { name: "Zoom to selection" }));
-      expect(screen.getByText("300%")).toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
-      expect(screen.getByText("300%")).toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name: "Reset zoom" }));
-      expect(screen.getAllByText("100%")).toHaveLength(2);
+      await screen.findByRole("button", { name: "Node Edge router" });
+      expect(screen.getByRole("button", { name: "Project map menu" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Zoom in" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Zoom to selection" })).not.toBeInTheDocument();
     });
 
     it("shows live host metrics from the topology map resource control", async () => {

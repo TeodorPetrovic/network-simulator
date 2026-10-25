@@ -20,9 +20,11 @@ type Props = {
   changeDrawingOrder: (direction: "front" | "back") => void; removeDrawing: () => void;
   setSnapshotsOpen: (open: boolean) => void; setLogOpen: (open: boolean) => void; setScreenshotOpen: (open: boolean) => void;
   setHelpOpen: (open: boolean) => void; setInfoOpen: (open: boolean) => void;
+  zoom: number; onZoom: (delta: number) => void; onFitTopology: () => void; onZoomToSelection: () => void; onResetZoom: () => void;
+  showInterfaceLabels: boolean; onToggleInterfaceLabels: () => void;
 };
 
-export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, selectedLifecycleNodes, projectLocked, gridVisible, setGridVisible, snapToGrid, setSnapToGrid, selectedDrawing, runBulkLifecycle, deleteSelectedNodes, toggleProjectLock, startDrawingTool, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, setSnapshotsOpen, setLogOpen, setScreenshotOpen, setHelpOpen, setInfoOpen }: Props) {
+export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, selectedLifecycleNodes, projectLocked, gridVisible, setGridVisible, snapToGrid, setSnapToGrid, selectedDrawing, runBulkLifecycle, deleteSelectedNodes, toggleProjectLock, startDrawingTool, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, setSnapshotsOpen, setLogOpen, setScreenshotOpen, setHelpOpen, setInfoOpen, zoom, onZoom, onFitTopology, onZoomToSelection, onResetZoom, showInterfaceLabels, onToggleInterfaceLabels }: Props) {
   return (
       <header className="sim-toolbar">
         <div className="sim-project-title">
@@ -59,6 +61,14 @@ export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, 
               <DropdownMenuItem onSelect={() => void toggleProjectLock()}>{projectLocked ? <Unlock /> : <Lock />}{projectLocked ? "Unlock project" : "Lock project"}</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setGridVisible((value) => !value)}>{gridVisible ? "Hide grid" : "Show grid"}</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setSnapToGrid((value) => !value)}>{snapToGrid ? "Disable snap to grid" : "Snap to grid"}</DropdownMenuItem>
+              <DropdownMenuItem onSelect={onToggleInterfaceLabels}>{showInterfaceLabels ? "Hide interface labels" : "Show interface labels"}</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Zoom · {Math.round(zoom * 100)}%</DropdownMenuLabel>
+              <DropdownMenuItem onSelect={() => onZoomToSelection()}>Zoom to selection</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => onZoom(0.1)}>Zoom in</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => onZoom(-0.1)}>Zoom out</DropdownMenuItem>
+              <DropdownMenuItem onSelect={onFitTopology}>Fit topology</DropdownMenuItem>
+              <DropdownMenuItem onSelect={onResetZoom}>Reset zoom</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuLabel>Add drawing</DropdownMenuLabel>
               <DropdownMenuItem onSelect={() => startDrawingTool("rectangle")}><RectangleHorizontal />Rectangle</DropdownMenuItem>
