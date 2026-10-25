@@ -19,7 +19,7 @@ async function cmd(c, line, re, timeout = 20000) {
   const deadline = Date.now() + timeout;
   c.sendLine(line);
   while (Date.now() < deadline) {
-    if (re.test(c.output.slice(start))) return;
+    if (re.test(c.output.slice(start))) return c.output.slice(start);
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`timed out waiting for ${re}; console output:\n${c.output.slice(start, start + 3000)}`);
@@ -53,6 +53,24 @@ async function diagnosticVpcs(client, line) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   return client.output.slice(start);
+}
+async function waitForRouterLinks(client) {
+  const deadline = Date.now() + 30000;
+  let output = "";
+  while (Date.now() < deadline) {
+    output = await diagnosticCommand(client, "show ip interface brief");
+    if (/FastEthernet0\/0\s+\S+\s+YES manual up\s+up[\s\S]*FastEthernet1\/0\s+\S+\s+YES manual up\s+up/.test(output)) return;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  throw new Error(`router interfaces did not come up in time:\n${output}`);
+}
+async function warmRouterAdjacency(client, address) {
+  let output = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    output = await cmd(client, `ping ${address}`, /Success rate is \d+ percent/, 30000);
+    if (/Success rate is 100 percent/.test(output)) return;
+  }
+  throw new Error(`router adjacency to ${address} did not reach 100%:\n${output}`);
 }
 
 test("VPCS traffic routes through a c3620", async (t) => {
@@ -90,17 +108,44 @@ test("two c3620 routers exchange traffic with static routes", async (t) => {
   const c2=await lab.console(r2);
   await routerPrompt(c2);
   async function config(c, lines) { for (const line of lines) await cmd(c,line,/(?:Router[>#]|\(config[^)]*\)#)/,120000); }
-  await config(c1,["enable","configure terminal","interface FastEthernet0/0","ip address 10.0.1.1 255.255.255.0","no shutdown","interface FastEthernet1/0","ip address 10.0.2.1 255.255.255.0","no shutdown","ip route 10.0.3.0 255.255.255.0 10.0.2.2","end"]);
-  await config(c2,["enable","configure terminal","interface FastEthernet0/0","ip address 10.0.2.2 255.255.255.0","no shutdown","interface FastEthernet1/0","ip address 10.0.3.1 255.255.255.0","no shutdown","ip route 10.0.1.0 255.255.255.0 10.0.2.1","end"]);
+  await config(c1,["enable","terminal length 0","configure terminal","interface FastEthernet0/0","ip address 10.0.1.1 255.255.255.0","no shutdown","interface FastEthernet1/0","ip address 10.0.2.1 255.255.255.0","no shutdown","ip route 10.0.3.0 255.255.255.0 10.0.2.2","end"]);
+  await config(c2,["enable","terminal length 0","configure terminal","interface FastEthernet0/0","ip address 10.0.2.2 255.255.255.0","no shutdown","interface FastEthernet1/0","ip address 10.0.3.1 255.255.255.0","no shutdown","ip route 10.0.1.0 255.255.255.0 10.0.2.1","end"]);
+  // Dynamips reports interface protocol up asynchronously after no shutdown.
+  // Wait for both links before the first routed packet so startup loss does not
+  // masquerade as a routing failure.
+  await Promise.all([waitForRouterLinks(c1), waitForRouterLinks(c2)]);
+  await warmRouterAdjacency(c1, "10.0.2.2");
+  await warmRouterAdjacency(c1, "10.0.3.10");
+  await warmRouterAdjacency(c2, "10.0.1.10");
   try {
     await cmd(ca,"ping 10.0.3.10 -c 2",/84 bytes from 10\.0\.3\.10/,45000);
   } catch (error) {
     const diagnostics = [];
-    for (const [client, command] of [[c1,"show ip interface brief"],[c1,"show ip route"],[c1,"show ip arp"],[c1,"ping 10.0.2.2"],[c1,"ping 10.0.3.10"],[c1,"traceroute 10.0.3.10"],[c2,"show ip interface brief"],[c2,"show ip route"],[c2,"show ip arp"],[c2,"ping 10.0.3.10"],[c2,"ping 10.0.1.10"]]) {
+    await diagnosticCommand(c1,"debug ip icmp");
+    await diagnosticCommand(c1,"debug ip packet");
+    await diagnosticCommand(c2,"debug ip icmp");
+    await diagnosticCommand(c2,"debug ip packet");
+    diagnostics.push(`VPCS A to R2 link IP: ${await diagnosticVpcs(ca,"ping 10.0.2.2 -c 2")}`);
+    diagnostics.push(`VPCS A to CHR2 LAN IP: ${await diagnosticVpcs(ca,"ping 10.0.3.1 -c 2")}`);
+    diagnostics.push(`VPCS A to VPCS B retry: ${await diagnosticVpcs(ca,"ping 10.0.3.10 -c 2")}`);
+    for (const [client, command] of [
+      [c1,"show ip interface brief"],[c1,"show ip route"],[c1,"show ip arp"],
+      [c1,"show ip traffic"],[c1,"show interfaces"],
+      [c1,"ping 10.0.2.2"],[c1,"ping 10.0.3.10"],[c1,"ping 10.0.3.10 source 10.0.1.1"],
+      [c1,"traceroute 10.0.3.10"],
+      [c2,"show ip interface brief"],[c2,"show ip route"],[c2,"show ip arp"],
+      [c2,"show ip traffic"],[c2,"show interfaces"],
+      [c2,"ping 10.0.3.10"],[c2,"ping 10.0.1.10"]
+    ]) {
       diagnostics.push(`${command}: ${await diagnosticCommand(client, command)}`);
     }
+    diagnostics.push(`VPCS trace: ${await diagnosticVpcs(ca,"trace 10.0.3.10")}`);
+    diagnostics.push(`VPCS A ARP: ${await diagnosticVpcs(ca,"show arp")}`);
+    diagnostics.push(`VPCS B ARP: ${await diagnosticVpcs(cb,"show arp")}`);
     diagnostics.push(`VPCS A: ${await diagnosticVpcs(ca,"show ip")}`);
     diagnostics.push(`VPCS B: ${await diagnosticVpcs(cb,"show ip")}`);
+    diagnostics.push(`R1 debug tail: ${c1.output.slice(-5000)}`);
+    diagnostics.push(`R2 debug tail: ${c2.output.slice(-5000)}`);
     throw new Error(`${error.message}\n${diagnostics.join("\n")}`);
   }
   c1.sendLine("traceroute 10.0.3.10"); await c1.expectRegex(/10\.0\.2\.2[\s\S]*10\.0\.3\.10/,{timeout:60000});
