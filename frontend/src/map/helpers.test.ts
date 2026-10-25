@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Node } from "../api";
-import { availableInterfacesForNode, drawingSvg, endpointName, interfacesForNode, reorderDrawings, selectionBoxIds, serializeSvgScreenshot } from "./helpers";
+import { availableInterfacesForNode, drawingSvg, endpointName, interfacesForNode, moveSelectionDelta, reorderDrawings, selectionBoxIds, serializeSvgScreenshot } from "./helpers";
 
 describe("project map helpers", () => {
+  it("computes one shared snapped delta for a moved selection", () => {
+    expect(moveSelectionDelta({ x: 11, y: 11 }, { x: 27, y: 25 }, true)).toEqual({ x: 20, y: 10 });
+    expect(moveSelectionDelta({ x: 11, y: 11 }, { x: 27, y: 25 }, false)).toEqual({ x: 16, y: 14 });
+    expect(moveSelectionDelta({ x: 20, y: 20 }, { x: -50, y: 40 }, false, [{ x: 10, y: 20 }, { x: 80, y: 40 }], { width: 100, height: 100 })).toEqual({ x: -10, y: 20 });
+  });
   it("filters occupied ports for the link context menu", () => {
     const node: Node = { node_id: "q1", name: "QEMU", node_type: "qemu", adapters: 2 };
     expect(availableInterfacesForNode(node, [{ nodes: [{ node_id: "q1", adapter_number: 0, port_number: 0 }] }])).toEqual([{ node_id: "q1", adapter_number: 1, port_number: 0 }]);

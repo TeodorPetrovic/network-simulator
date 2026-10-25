@@ -7,7 +7,7 @@ type Props = {
   selectedNodeIds: string[];
   onMultiSelect: (ids: string[]) => void;
   onZoom: (delta: number) => void;
-  onNodeMoveEnd: (id: string, x: number, y: number) => void;
+  onNodeMoveEnd: (positions: Array<{ id: string; x: number; y: number }>) => void;
   onDeleteSelected: () => void;
   onClearSelection: () => void;
 };
@@ -24,7 +24,7 @@ export function useCanvasKeyboardShortcuts(props: Props, lastMoveRef: MutableRef
     if (mod && event.key === "-") { event.preventDefault(); props.onZoom(-0.1); }
     if (mod && event.key.toLowerCase() === "z" && lastMoveRef.current) {
       event.preventDefault();
-      lastMoveRef.current.forEach((point, id) => props.onNodeMoveEnd(id, point.x, point.y));
+      props.onNodeMoveEnd(Array.from(lastMoveRef.current, ([id, point]) => ({ id, ...point })));
       lastMoveRef.current = null;
     }
     if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); props.onDeleteSelected(); }
@@ -32,10 +32,12 @@ export function useCanvasKeyboardShortcuts(props: Props, lastMoveRef: MutableRef
     const delta = movement[event.key];
     if (delta && props.selectedNodeIds.length > 0 && !mod) {
       event.preventDefault();
+      const positions = [];
       for (const id of props.selectedNodeIds) {
         const node = props.nodes.find((item) => item.node_id === id);
-        if (node) props.onNodeMoveEnd(id, Number(node.x ?? 0) + delta.x, Number(node.y ?? 0) + delta.y);
+        if (node) positions.push({ id, x: Number(node.x ?? 0) + delta.x, y: Number(node.y ?? 0) + delta.y });
       }
+      props.onNodeMoveEnd(positions);
     }
     if (event.key === "Escape") props.onClearSelection();
   };

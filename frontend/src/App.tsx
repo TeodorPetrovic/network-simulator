@@ -223,14 +223,10 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
     }
   }
 
-  async function saveNodePosition(nodeId: string, x: number, y: number) {
+  async function saveNodePosition(positions: Array<{ id: string; x: number; y: number }>) {
     if (!projectId) return;
     try {
-      const node = await api.updateNode(projectId, nodeId, { x, y });
-      setTopology((current) => current ? {
-        ...current,
-        nodes: current.nodes.map((item) => item.node_id === nodeId ? node : item),
-      } : current);
+      for (const position of positions) await api.updateNode(projectId, position.id, { x: position.x, y: position.y });
     } catch (reason) {
       setError(errorMessage(reason));
       void reloadTopology();

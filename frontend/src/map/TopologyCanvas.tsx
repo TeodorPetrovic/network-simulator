@@ -4,7 +4,7 @@ import { Network } from "lucide-react";
 import type { Drawing, Link, LinkEndpoint, Node } from "../api";
 import { api } from "../api";
 import { sanitizeDrawingSvg } from "../topology";
-import { selectionBoxIds } from "./helpers";
+import { moveSelectionDelta, selectionBoxIds } from "./helpers";
 import { useCanvasKeyboardShortcuts } from "./useCanvasKeyboardShortcuts";
 import { defaultCanvasSymbolAsset, resolveCanvasSymbol } from "./symbols";
 import cloudSymbolUrl from "./gns3-symbols/cloud.svg?url";
@@ -51,7 +51,7 @@ type CanvasProps = {
   onPortClick: (endpoint: LinkEndpoint) => void;
   onNodeContext: (id: string) => void;
   onNodeMove: (id: string, x: number, y: number) => void;
-  onNodeMoveEnd: (id: string, x: number, y: number) => void;
+  onNodeMoveEnd: (positions: Array<{ id: string; x: number; y: number }>) => void;
   onNodeLabelMove: (id: string, x: number, y: number) => void;
   onLinkEndpointLabelMove: (linkId: string, nodeId: string, x: number, y: number) => void;
   onDrawingClick: (id: string) => void;
@@ -217,7 +217,7 @@ export function TopologyCanvas(props: CanvasProps) {
     if (!drag || drag.pointerId !== event.pointerId || !svgRef.current) return;
     const point = scenePoint(event.clientX, event.clientY, svgRef.current.getBoundingClientRect());
     movedRef.current = true;
-    const delta = { x: point.x - drag.start.x, y: point.y - drag.start.y };
+    const delta = moveSelectionDelta(drag.start, point, props.snapToGrid, drag.origins.values(), scene);
     drag.nodeIds.forEach((id) => { const origin = drag.origins.get(id); if (origin) props.onNodeMove(id, origin.x + delta.x, origin.y + delta.y); });
   }
 
@@ -282,9 +282,9 @@ export function TopologyCanvas(props: CanvasProps) {
     dragRef.current = null;
     if (movedRef.current && svgRef.current) {
       const point = scenePoint(event.clientX, event.clientY, svgRef.current.getBoundingClientRect());
-      const delta = { x: point.x - drag.start.x, y: point.y - drag.start.y };
+      const delta = moveSelectionDelta(drag.start, point, props.snapToGrid, drag.origins.values(), scene);
       lastMoveRef.current = drag.origins;
-      drag.nodeIds.forEach((id) => { const origin = drag.origins.get(id); if (origin) props.onNodeMoveEnd(id, origin.x + delta.x, origin.y + delta.y); });
+      props.onNodeMoveEnd(drag.nodeIds.flatMap((id) => { const origin = drag.origins.get(id); return origin ? [{ id, x: origin.x + delta.x, y: origin.y + delta.y }] : []; }));
     }
   }
 

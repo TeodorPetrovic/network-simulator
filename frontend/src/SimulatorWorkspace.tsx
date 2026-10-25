@@ -66,7 +66,7 @@ export type SimulatorWorkspaceProps = {
   onSelectPort: (endpoint: LinkEndpoint) => void;
   onNodeContext: (id: string) => void;
   onNodeMove: (id: string, x: number, y: number) => void;
-  onNodeMoveEnd: (id: string, x: number, y: number) => void;
+  onNodeMoveEnd: (positions: Array<{ id: string; x: number; y: number }>) => void;
   consoleOpen?: boolean;
   onCloseConsoleDock?: () => void;
   onOpenConsoleDock?: () => void;
