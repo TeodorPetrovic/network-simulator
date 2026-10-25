@@ -367,6 +367,7 @@ button, input, textarea, select { font: inherit; }
 .sim-project-title h1 { overflow: hidden; max-width: 340px; font-size: 14px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .sim-toolbar-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
 .sim-workspace-grid { position: relative; display: grid; min-height: 0; flex: 1; grid-template-columns: 48px minmax(0, 1fr) 260px; gap: 0; padding: 0; }
+.sim-workspace-grid.is-docks-closed { grid-template-columns: 48px minmax(0, 1fr) 0; }
 .sim-canvas-card { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; border: 0 !important; border-radius: 0 !important; background: #fff !important; box-shadow: none !important; }
 .sim-device-rail { grid-column: 1; grid-row: 1; }
 .sim-canvas-card { grid-column: 2; grid-row: 1; }

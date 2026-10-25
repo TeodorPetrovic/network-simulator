@@ -42,10 +42,10 @@ test("Edit menu disabled selection items and Preferences opens settings", async 
   await finish(ui);
 });
 
-test("View menu controls change zoom, labels, grid, snap, lock, and console dock; topology summary item disabled", async (t) => {
+test("View menu controls change zoom, labels, grid, snap, lock, console dock, and summary docks", async (t) => {
   const { page, ui } = await workspace(t);
   await page.getByRole("menuitem", { name: "View" }).click();
-  assert.equal(await menu(page, "Topology summary").isDisabled(), true);
+  assert.equal(await menu(page, /Topology summary ✓/).isDisabled(), false);
   const z0 = await zoom(page);
   await menu(page, new RegExp(`Zoom in · ${z0}%`)).click();
   assert.equal(await zoom(page), z0 + 10);
@@ -207,15 +207,15 @@ test("device flyout drag adds a node on canvas and over the right dock", async (
   await finish(ui);
 });
 
-test("right docks reopen after being closed", { todo: "workspace has close controls but no visible controls to reopen either right dock" }, async (t) => {
+test("right docks reopen after being closed", async (t) => {
   const { page, ui } = await workspace(t);
   const topo = page.getByLabel("Topology Summary"); const servers = page.getByLabel("Servers Summary");
   await button(page, "Collapse Servers Summary").click(); await page.getByLabel("Expand Servers Summary").waitFor();
   await button(page, "Expand Servers Summary").click(); await button(page, "Collapse Servers Summary").waitFor();
   await button(page, "Close Topology Summary").click(); await topo.waitFor({ state: "detached" });
   await button(page, "Close Servers Summary").click(); await servers.waitFor({ state: "detached" });
-  await button(page, "Open Topology Summary").click(); await topo.waitFor();
-  await button(page, "Open Servers Summary").click(); await servers.waitFor();
+  await page.getByRole("menuitem", { name: "View" }).click(); await page.getByRole("menuitem", { name: /Topology summary/ }).click(); await topo.waitFor();
+  await page.getByRole("menuitem", { name: "View" }).click(); await page.getByRole("menuitem", { name: /Servers summary/ }).click(); await servers.waitFor();
   await finish(ui);
 });
 
