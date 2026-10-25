@@ -3,6 +3,16 @@ use super::*;
 pub(super) struct ManagedVpcs {
     pub(super) child: Child,
     pub(super) console: SocketAddr,
+    pub(super) suspended: bool,
+}
+
+pub(super) fn signal_vpcs_tree(pid: u32, signal: libc::c_int) {
+    let mut victims = descendants_of(pid);
+    victims.push(pid);
+    for victim in victims {
+        // SAFETY: these PIDs are the tracked VPCS daemon and its descendants.
+        unsafe { libc::kill(victim as libc::pid_t, signal) };
+    }
 }
 
 impl ManagedVpcs {

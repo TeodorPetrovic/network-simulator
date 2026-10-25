@@ -203,6 +203,11 @@ pub(super) async fn set_project_status(
         .ok_or_else(|| ApiError::not_found(format!("Project {project_id} does not exist")))?;
     let mut project = decode_json(row.get::<String, _>("project_json"))?;
     let mut node_events = Vec::new();
+    let auto_start = status == "opened"
+        && project
+            .get("auto_start")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
     if status == "closed" {
         let node_rows = sqlx::query(
             "SELECT object_id, object_json FROM topology_objects
@@ -239,6 +244,35 @@ pub(super) async fn set_project_status(
                 node_events
                     .push(Store::append_event(&mut tx, &project_id, "node.updated", &node).await?);
             }
+        }
+    } else if auto_start {
+        let node_rows = sqlx::query(
+            "SELECT object_id, object_json FROM topology_objects
+             WHERE project_id = ? AND kind = 'node' ORDER BY object_id",
+        )
+        .bind(&project_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        for node_row in node_rows {
+            let node_id: String = node_row.get("object_id");
+            let mut node = decode_json(node_row.get::<String, _>("object_json"))?;
+            if !controller_routes::bulk_node_action_applies(&node, NodeAction::Start) {
+                continue;
+            }
+            let runtime_status =
+                apply_node_lifecycle(&state, &project_id, &mut node, NodeAction::Start).await?;
+            node["status"] = json!(runtime_status);
+            sqlx::query(
+                "UPDATE topology_objects SET object_json = ?
+                 WHERE project_id = ? AND kind = 'node' AND object_id = ?",
+            )
+            .bind(serde_json::to_string(&node).map_err(internal_json_error)?)
+            .bind(&project_id)
+            .bind(&node_id)
+            .execute(&mut *tx)
+            .await?;
+            node_events
+                .push(Store::append_event(&mut tx, &project_id, "node.updated", &node).await?);
         }
     }
     let object = as_object_mut(&mut project, "stored project is invalid")?;
