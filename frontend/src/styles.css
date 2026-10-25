@@ -151,6 +151,7 @@ button, input, textarea, select { font: inherit; }
 .pages-nav-link:hover, .pages-nav-link.is-active { color: var(--foreground); background: var(--muted); }
 .pages-nav-link.is-active { font-weight: 600; }
 .pages-main { min-height: 0; flex: 1; overflow: auto; }
+.main-area > .pages-shell { height: auto; flex: 1; }
 .pages-content { width: min(100%, 1440px); margin: 0 auto; padding: 28px clamp(16px, 3vw, 40px) 48px; }
 .pages-title-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
 .pages-title-row h1 { margin: 2px 0 0; font-size: clamp(24px, 3vw, 30px); font-weight: 680; letter-spacing: -.035em; }
@@ -169,6 +170,7 @@ button, input, textarea, select { font: inherit; }
 .projects-search > svg { position: absolute; left: 10px; z-index: 1; color: var(--muted-foreground); }
 .projects-search input { padding-left: 32px; }
 .projects-table-card { overflow: hidden; }
+[data-slot="card"]:has(> [data-slot="table-container"]) { padding-block: 0; }
 .projects-sort { display: inline-flex; align-items: center; gap: 5px; color: inherit; font-weight: 600; }
 .pages-checkbox { display: flex; align-items: flex-start; gap: 8px; color: var(--foreground); font-size: 13px; }
 .pages-checkbox input, .settings-boolean input, .pages-checkbox-row input { margin-top: 2px; accent-color: var(--primary); }
@@ -331,7 +333,7 @@ button, input, textarea, select { font: inherit; }
 .app-shell { display: flex; width: 100%; height: 100dvh; min-height: 0; flex-direction: column; overflow: hidden; background: var(--background); }
 .main-area { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; margin: 0; }
 .sim-app-header { z-index: 5; display: flex; height: 52px; min-height: 52px; align-items: center; gap: 20px; padding: 0 14px; border-bottom: 1px solid var(--border); background: var(--background); }
-.sim-brand { gap: 9px; padding-inline: 4px; font-weight: 650; }
+.sim-brand { display: inline-flex; align-items: center; gap: 9px; padding-inline: 4px; font-weight: 650; line-height: 1; }
 .sim-brand-mark { display: grid; width: 29px; height: 29px; place-items: center; border: 1px solid oklch(0.81 0.08 255); border-radius: 7px; color: var(--primary); background: oklch(0.96 0.02 255); }
 .sim-header-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 .sim-connection-dot { width: 6px; height: 6px; border-radius: 50%; background: oklch(0.72 0 0); }
@@ -569,6 +571,8 @@ button, input, textarea, select { font: inherit; }
 .registry-details > div:first-child p { margin-top: 4px; color: var(--muted-foreground); font-size: 11px; line-height: 1.5; }
 .registry-details .appliance-config-meta { margin: 0; }
 .registry-version-list { min-height: 100px; flex: 1; }
+.registry-version-cards { display: grid; min-width: 0; gap: 8px; padding: 2px 8px 4px 2px; }
+.registry-version-cards > [data-slot="card"] { min-width: 0; width: 100%; }
 .registry-requirement { display: grid; grid-template-columns: minmax(80px, auto) minmax(0, 1fr); gap: 3px 8px; border-top: 1px solid var(--border); padding-top: 7px; font-size: 10px; }
 .registry-requirement code { color: var(--muted-foreground); }
 .registry-requirement small { grid-column: 2; color: var(--muted-foreground); }

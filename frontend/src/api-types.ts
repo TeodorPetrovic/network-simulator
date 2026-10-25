@@ -164,7 +164,7 @@ export type DynamipsTemplate = {
   template_id: string;
   name: string;
   template_type: "dynamips";
-  platform: "c7200" | "c3600";
+  platform: "c1700" | "c2600" | "c2691" | "c3600" | "c3725" | "c3745" | "c7200";
   chassis?: string | null;
   slot0?: string;
   image: string;
