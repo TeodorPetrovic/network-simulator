@@ -392,7 +392,8 @@ button, input, textarea, select { font: inherit; }
 .sim-node:hover .sim-node-card, .sim-node.is-selected .sim-node-card { fill: oklch(0.975 0.018 255); stroke: var(--primary); stroke-width: 1.8px; }
 .sim-node-icon { color: #3c5368; }
 .sim-node-selection { fill: #d9ecff; stroke: #80b9ee; stroke-width: 1px; pointer-events: none; }
-.sim-node-symbol { pointer-events: none; }
+.sim-node-symbol { pointer-events: all; }
+.sim-node-hit-area { pointer-events: all; }
 .sim-node-type { display: none; }
 .sim-node-name { fill: #111; font-size: 12px; font-weight: 400; paint-order: normal; stroke: none; text-anchor: middle; }
 .sim-node-status { stroke: #fff; stroke-width: 1px; }
@@ -415,7 +416,7 @@ button, input, textarea, select { font: inherit; }
 .sim-link-hit { stroke: transparent !important; stroke-width: 14px !important; }
 .sim-canvas-empty { fill: var(--muted-foreground); font-size: 14px; text-anchor: middle; }
 .sim-empty-subtitle { fill: oklch(0.64 0.02 255); font-size: 12px; }
-.sim-device-rail { position: relative; z-index: 4; display: flex; min-width: 0; min-height: 0; flex-direction: column; align-items: center; border: 1px solid oklch(0.89 0.015 250); border-radius: 7px; background: oklch(0.995 0.003 250); }
+.sim-device-rail { position: relative; z-index: 4; display: flex; min-width: 0; min-height: 0; flex-direction: column; align-items: center; border: 0; border-right: 1px solid var(--border); border-radius: 0; background: oklch(0.995 0.003 250); }
 .sim-device-rail-buttons, .sim-device-rail-bottom { display: flex; width: 100%; flex-direction: column; align-items: center; gap: 4px; padding: 6px 3px; }
 .sim-device-rail-buttons { border-bottom: 1px solid var(--border); }
 .sim-device-rail-bottom { margin-top: auto; border-top: 1px solid var(--border); }
@@ -428,8 +429,8 @@ button, input, textarea, select { font: inherit; }
 .sim-device-flyout-list { min-height: 0; flex: 1; padding: 0 7px; }
 .sim-device-empty { padding: 20px 10px; color: var(--muted-foreground); font-size: 11px; text-align: center; }
 .sim-device-flyout [data-slot="button"].sim-device-catalog { width: calc(100% - 16px); height: 34px; flex: 0 0 auto; justify-content: center; margin: 8px; font-size: 10px; white-space: nowrap; }
-.sim-workspace-docks { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 8px; overflow: hidden; }
-.sim-summary-dock { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; border: 1px solid oklch(0.89 0.015 250); border-radius: 7px; background: oklch(0.995 0.003 250); }
+.sim-workspace-docks { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 0; overflow: hidden; border-left: 1px solid var(--border); }
+.sim-summary-dock { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: oklch(0.995 0.003 250); }
 .sim-summary-dock > header { display: flex; min-height: 40px; align-items: center; gap: 3px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--border); }
 .sim-summary-dock > header b { flex: 1; font-size: 11px; font-weight: 650; }
 .sim-summary-dock > header span { color: var(--muted-foreground); font-size: 9px; white-space: nowrap; }
@@ -540,8 +541,8 @@ button, input, textarea, select { font: inherit; }
 .sim-xterm { min-height: 0; flex: 1; padding: 5px 10px; }
 .sim-xterm .xterm { height: 100%; }
 .sim-xterm .xterm-viewport { overflow-y: auto !important; }
-.app-shell:has(.sim-console-dock:not(.is-minimized)) .sim-workspace-grid { padding-bottom: 268px; }
-.app-shell:has(.sim-console-dock.is-minimized) .sim-workspace-grid { padding-bottom: 38px; }
+.app-shell:has(.sim-console-dock:not(.is-minimized)) .sim-workspace-grid { padding-bottom: 0; }
+.app-shell:has(.sim-console-dock.is-minimized) .sim-workspace-grid { padding-bottom: 0; }
 
 .modal-backdrop { z-index: 60; }
 .marketplace-backdrop { z-index: 70; }

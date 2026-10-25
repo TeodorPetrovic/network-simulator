@@ -38,7 +38,7 @@ export function WorkspaceSidebar({ workspace, deviceQuery, setDeviceQuery, group
     {active && <section className="sim-device-flyout" aria-label={`${categories.find((item) => item.id === active)?.label} templates`}>
       <header><b>{categories.find((item) => item.id === active)?.label}</b><Button variant="ghost" size="icon-xs" aria-label="Close device list" onClick={() => setActive(null)}><X /></Button></header>
       <label className="sim-device-search"><Search /><Input value={deviceQuery} onChange={(event) => setDeviceQuery(event.target.value)} placeholder="Filter devices…" aria-label="Filter devices" /></label>
-      <ScrollArea className="sim-device-flyout-list">{visible.length ? visible.map((template) => <DeviceTemplateCard key={template.template_id} template={template} onAdd={() => workspace.onAddTemplate(template.template_id)} onSave={workspace.onSaveTemplate} />) : <p className="sim-device-empty">No templates in this category.</p>}</ScrollArea>
+      <ScrollArea className="sim-device-flyout-list">{visible.length ? visible.map((template) => <DeviceTemplateCard key={template.template_id} template={template} onAdd={() => workspace.onAddTemplate(template.template_id)} onSave={workspace.onSaveTemplate} onDragEnd={() => setActive(null)} />) : <p className="sim-device-empty">No templates in this category.</p>}</ScrollArea>
       <Button variant="outline" className="sim-device-catalog" onClick={workspace.onOpenMarketplace}><Search />Find devices and images</Button>
     </section>}
   </aside>;
