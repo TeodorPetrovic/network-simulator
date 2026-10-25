@@ -26,3 +26,4 @@ Install browsers with `node <playwright-core>/cli.js install chromium firefox`.
 - `smoke.test.mjs` – minimal start-a-device check.
 
 Every test asserts that the page produced no uncaught errors.
+Note: run browsers one after another (shared ubridge socket).
