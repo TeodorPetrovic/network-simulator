@@ -209,13 +209,14 @@ test("device flyout drag adds a node on canvas and over the right dock", async (
 
 test("right docks reopen after being closed", async (t) => {
   const { page, ui } = await workspace(t);
-  const topo = page.getByLabel("Topology Summary"); const servers = page.getByLabel("Servers Summary");
+  const topo = page.getByRole("region", { name: "Topology Summary" }); const servers = page.getByRole("region", { name: "Servers Summary" });
   await button(page, "Collapse Servers Summary").click(); await page.getByLabel("Expand Servers Summary").waitFor();
   await button(page, "Expand Servers Summary").click(); await button(page, "Collapse Servers Summary").waitFor();
   await button(page, "Close Topology Summary").click(); await topo.waitFor({ state: "detached" });
   await button(page, "Close Servers Summary").click(); await servers.waitFor({ state: "detached" });
   await page.getByRole("menuitem", { name: "View" }).click(); await page.getByRole("menuitem", { name: /Topology summary/ }).click(); await topo.waitFor();
   await page.getByRole("menuitem", { name: "View" }).click(); await page.getByRole("menuitem", { name: /Servers summary/ }).click(); await servers.waitFor();
+  await page.reload(); await topo.waitFor(); await servers.waitFor();
   await finish(ui);
 });
 
@@ -251,7 +252,7 @@ test("keyboard shortcuts select all, clear selection, delete, escape link mode, 
   await finish(ui);
 });
 
-test("floating console opens, moves, resizes, minimizes, restores, closes, and persists state", { todo: "resize handle did not change the floating console dimensions in Chromium" }, async (t) => {
+test("floating console opens, moves, resizes, minimizes, restores, closes, and persists state", async (t) => {
   const { server, page, ui, pid } = await workspace(t, { nodes: [{ type: "vpcs", name: "ConsolePC" }] });
   await button(page, "Node ConsolePC").click(); await button(page, "Start all").click();
   await waitFor(async () => (await server.api("GET", `/projects/${pid}/nodes`)).json[0]?.status === "started", { label: "console target started" });

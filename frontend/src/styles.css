@@ -528,7 +528,7 @@ button, input, textarea, select { font: inherit; }
 .sim-console-dock.is-minimized .sim-console-tabs { height: 32px; min-height: 32px; }
 .sim-console-dock { position: fixed; z-index: 40; right: auto; bottom: auto; left: 24px; width: 620px; height: 300px; border: 1px solid #303743; border-radius: 8px; overflow: hidden; box-shadow: 0 12px 36px #0006; resize: none; }
 .sim-console-tabs { cursor: move; user-select: none; }
-.sim-console-resize { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; background: linear-gradient(135deg, transparent 50%, #697587 50%, #697587 58%, transparent 58%, transparent 70%, #697587 70%, #697587 78%, transparent 78%); }
+.sim-console-resize { position: absolute; z-index: 20; right: 0; bottom: 0; width: 18px; height: 18px; cursor: nwse-resize; touch-action: none; pointer-events: auto; background: linear-gradient(135deg, transparent 50%, #697587 50%, #697587 58%, transparent 58%, transparent 70%, #697587 70%, #697587 78%, transparent 78%); }
 .sim-console-dock.is-minimized { width: 150px; height: 42px; border-radius: 8px; }
 .sim-console-dock.is-minimized .sim-console-panes { display: none; }
 .sim-console-loading { left: auto; right: 24px; width: 620px; }
