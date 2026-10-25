@@ -57,6 +57,22 @@ describe("project map dialogs", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Packet capture is not available"));
   });
 
+  it("starts packet capture with Web Wireshark when enabled and Docker is available", async () => {
+    vi.spyOn(api, "availableLinkFilters").mockResolvedValue([]);
+    vi.spyOn(api, "settings").mockResolvedValue({ WebWireshark: { enabled: true } });
+    vi.spyOn(api, "runtimes").mockResolvedValue({ docker: { available: true, version: "29", error: null } } as any);
+    vi.spyOn(api, "startLinkCapture").mockResolvedValue({ link_id: "l1", nodes: [], capturing: true, wireshark: true });
+    render(<LinkPropertiesDialog projectId="p1" link={{ link_id: "l1", nodes: [] }} nodes={[]} open onOpenChange={() => undefined} onUpdated={() => undefined} />);
+    const checkbox = await screen.findByRole("checkbox", { name: "Web Wireshark" });
+    expect(checkbox).toBeEnabled();
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole("button", { name: "Start capture" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Starting Web Wireshark… (3-6 s)");
+    await waitFor(() => expect(api.startLinkCapture).toHaveBeenCalledWith("p1", "l1", {
+      capture_file_name: "l1.pcap", data_link_type: "DLT_EN10MB", wireshark: true,
+    }));
+  });
+
   it("saves editable text and position for both link endpoints", async () => {
     const link: Link = {
       link_id: "l1",

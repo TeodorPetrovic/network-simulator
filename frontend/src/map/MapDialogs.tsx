@@ -143,6 +143,10 @@ export function LinkPropertiesDialog({ projectId, link, nodes, open, onOpenChang
   const [filterDescriptions, setFilterDescriptions] = useState<LinkFilterDescription[]>([]);
   const [captureFileName, setCaptureFileName] = useState("");
   const [captureActive, setCaptureActive] = useState(false);
+  const [webWireshark, setWebWireshark] = useState(false);
+  const [webWiresharkEnabled, setWebWiresharkEnabled] = useState(false);
+  const [dockerAvailable, setDockerAvailable] = useState(false);
+  const [startingWireshark, setStartingWireshark] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -153,6 +157,7 @@ export function LinkPropertiesDialog({ projectId, link, nodes, open, onOpenChang
     setColor(String(style.color ?? "#64748b"));
     setWidth(String(style.width ?? 2));
     setCaptureActive(Boolean(link.capturing));
+    setWebWireshark(Boolean(link.wireshark));
     setCaptureFileName(String(link.capture_file_name ?? `${link.link_id}.pcap`));
     setFilters(api.linkFilters(link));
     setEndpointLabels(link.nodes.map((endpoint) => {
@@ -168,6 +173,10 @@ export function LinkPropertiesDialog({ projectId, link, nodes, open, onOpenChang
       };
     }));
     setError(""); setNotice("");
+    void Promise.allSettled([api.settings(), api.runtimes()]).then(([settings, runtimes]) => {
+      setWebWiresharkEnabled(settings.status === "fulfilled" && (settings.value.WebWireshark as { enabled?: boolean } | undefined)?.enabled === true);
+      setDockerAvailable(runtimes.status === "fulfilled" && runtimes.value.docker.available);
+    });
     void api.availableLinkFilters(projectId, link.link_id).then(setFilterDescriptions).catch((reason) => setError(`Link filters are not available: ${errorMessage(reason)}`));
   }, [open, link?.link_id, projectId, nodes]);
   if (!link) return null;
@@ -215,7 +224,8 @@ export function LinkPropertiesDialog({ projectId, link, nodes, open, onOpenChang
     setBusy(true); setError(""); setNotice("");
     try {
       if (action === "start") {
-        const updated = await api.startLinkCapture(projectId, activeLink.link_id, { capture_file_name: captureFileName.trim() || `${activeLink.link_id}.pcap`, data_link_type: "DLT_EN10MB" });
+        setStartingWireshark(webWireshark);
+        const updated = await api.startLinkCapture(projectId, activeLink.link_id, { capture_file_name: captureFileName.trim() || `${activeLink.link_id}.pcap`, data_link_type: "DLT_EN10MB", ...(webWireshark ? { wireshark: true } : {}) });
         onUpdated(updated);
       } else {
         await api.stopLinkCapture(projectId, activeLink.link_id);
@@ -224,7 +234,7 @@ export function LinkPropertiesDialog({ projectId, link, nodes, open, onOpenChang
       setCaptureActive(action === "start"); setNotice(action === "start" ? "Packet capture started." : "Packet capture stopped.");
     }
     catch (reason) { setError(`Packet capture is not available: ${errorMessage(reason)}`); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setStartingWireshark(false); }
   }
   const streamUrl = async () => {
     const path = api.linkCaptureStreamUrl(projectId, activeLink.link_id);
@@ -270,7 +280,7 @@ export function LinkPropertiesDialog({ projectId, link, nodes, open, onOpenChang
       <Button variant="outline" className="w-fit" onClick={() => void saveEndpointLabels()} disabled={busy || endpointLabels.length !== 2}>Save endpoint labels</Button>
     </section>
     <Separator />
-    <section className="grid gap-2 md:grid-cols-[1fr_auto_auto_auto] md:items-end"><label className="grid gap-1.5"><Label>Capture file</Label><Input value={captureFileName} onChange={(event) => setCaptureFileName(event.target.value)} disabled={captureActive} /></label><div className="flex flex-wrap gap-2 md:col-span-3"><Badge variant={captureActive ? "default" : "secondary"}>{captureActive ? "Capturing" : "Stopped"}</Badge><Button size="sm" onClick={() => void capture(captureActive ? "stop" : "start")} disabled={busy}>{captureActive ? "Stop capture" : "Start capture"}</Button><Button size="sm" variant="outline" disabled={!captureActive} onClick={() => void openCaptureStream()}>Open capture stream</Button><Button size="sm" variant="outline" disabled={!captureActive} onClick={() => { void streamUrl().then((url) => copyStreamUrl(url, setNotice, setError)).catch((reason) => setError(`Capture stream is not available: ${errorMessage(reason)}`)); }}>Copy one-use stream URL</Button></div></section>
+    <section className="grid gap-2"><label className="grid gap-1.5"><Label>Capture file</Label><Input value={captureFileName} onChange={(event) => setCaptureFileName(event.target.value)} disabled={captureActive} /></label><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={webWireshark} disabled={!webWiresharkEnabled || !dockerAvailable || captureActive} onChange={(event) => setWebWireshark(event.target.checked)} />Web Wireshark</label>{!webWiresharkEnabled && <p className="text-xs text-muted-foreground">Web Wireshark is disabled in the server settings.</p>}{webWiresharkEnabled && !dockerAvailable && <p className="text-xs text-muted-foreground">Web Wireshark requires Docker to be available.</p>}<div className="flex flex-wrap gap-2"><Badge variant={captureActive ? "default" : "secondary"}>{captureActive ? "Capturing" : "Stopped"}</Badge><Button size="sm" onClick={() => void capture(captureActive ? "stop" : "start")} disabled={busy}>{captureActive ? "Stop capture" : "Start capture"}</Button><Button size="sm" variant="outline" disabled={!captureActive} onClick={() => void openCaptureStream()}>Open capture stream</Button><Button size="sm" variant="outline" disabled={!captureActive} onClick={() => { void streamUrl().then((url) => copyStreamUrl(url, setNotice, setError)).catch((reason) => setError(`Capture stream is not available: ${errorMessage(reason)}`)); }}>Copy one-use stream URL</Button></div>{startingWireshark && <p role="status">Starting Web Wireshark… (3-6 s)</p>}</section>
     {error && <Unavailable message={error} />}{notice && <p role="status" className="text-sm text-muted-foreground">{notice}</p>}
   </DialogContent></Dialog>;
 }
