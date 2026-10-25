@@ -1,17 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent, PointerEvent } from "react";
+import type { DragEvent, PointerEvent, ReactNode } from "react";
 import { Network } from "lucide-react";
 import type { Drawing, Link, LinkEndpoint, Node } from "../api";
 import { api } from "../api";
 import { sanitizeDrawingSvg } from "../topology";
 import { selectionBoxIds } from "./helpers";
 import { useCanvasKeyboardShortcuts } from "./useCanvasKeyboardShortcuts";
-import { resolveCanvasSymbol } from "./symbols";
+import { defaultCanvasSymbolAsset, resolveCanvasSymbol } from "./symbols";
+import cloudSymbolUrl from "./gns3-symbols/cloud.svg?url";
+import dockerSymbolUrl from "./gns3-symbols/docker_guest.svg?url";
+import switchSymbolUrl from "./gns3-symbols/ethernet_switch.svg?url";
+import hubSymbolUrl from "./gns3-symbols/hub.svg?url";
+import natSymbolUrl from "./gns3-symbols/nat.svg?url";
+import qemuSymbolUrl from "./gns3-symbols/qemu_guest.svg?url";
+import routerSymbolUrl from "./gns3-symbols/router.svg?url";
+import vpcsSymbolUrl from "./gns3-symbols/vpcs_guest.svg?url";
 import { iconForSymbolName, iconForType, localPortPoint, portCount, portIndex, portLabel, portPoint } from "./topologyUtils";
 export { deviceGroupLabel, endpointLabel, iconForSymbolName, iconForType, imageName, kindLabel, localPortPoint, messageFor, nodeHasAuxConsole, nodePorts, portCount, portIndex, portLabel, portPoint, safeFileName, sameEndpoint, templateDescription, valuesFromDrawing } from "./topologyUtils";
 
 export const scene = { width: 1440, height: 920 };
 export const maxZoom = 3;
+const defaultSymbolUrls: Record<string, string> = { "cloud.svg": cloudSymbolUrl, "docker_guest.svg": dockerSymbolUrl, "ethernet_switch.svg": switchSymbolUrl, "hub.svg": hubSymbolUrl, "nat.svg": natSymbolUrl, "qemu_guest.svg": qemuSymbolUrl, "router.svg": routerSymbolUrl, "vpcs_guest.svg": vpcsSymbolUrl };
 
 export type Selection = { kind: "node" | "link"; id: string } | null;
 type CanvasProps = {
@@ -25,6 +34,8 @@ type CanvasProps = {
   centerY: number;
   gridVisible: boolean;
   snapToGrid: boolean;
+  showInterfaceLabels?: boolean;
+  onToggleInterfaceLabels?: () => void;
   projectLocked: boolean;
   selectedNodeIds: string[];
   selectedDrawingId: string | null;
@@ -74,6 +85,7 @@ export function TopologyCanvas(props: CanvasProps) {
   const [drawingPositions, setDrawingPositions] = useState<Record<string, { x: number; y: number }>>({});
   const [labelPositions, setLabelPositions] = useState<Record<string, { x: number; y: number }>>({});
   const [linkLabelPositions, setLinkLabelPositions] = useState<Record<string, { x: number; y: number }>>({});
+  const [cursorPoint, setCursorPoint] = useState<{ x: number; y: number } | null>(null);
   const view = { width: scene.width / props.zoom, height: scene.height / props.zoom, x: props.centerX - scene.width / props.zoom / 2, y: props.centerY - scene.height / props.zoom / 2 };
   const nodeMap = useMemo(() => new Map(props.nodes.map((node) => [node.node_id, node])), [props.nodes]);
   const renderedDrawings = useMemo(() => props.drawings.flatMap((drawing) => {
@@ -161,6 +173,7 @@ export function TopologyCanvas(props: CanvasProps) {
   }
 
   function moveNode(event: PointerEvent<SVGSVGElement>) {
+    if (props.connecting && props.linkEndpoints.length === 1 && svgRef.current) setCursorPoint(scenePoint(event.clientX, event.clientY, svgRef.current.getBoundingClientRect()));
     const selection = selectionRef.current;
     if (selection && selection.pointerId === event.pointerId && svgRef.current) {
       const point = scenePoint(event.clientX, event.clientY, svgRef.current.getBoundingClientRect());
@@ -285,7 +298,7 @@ export function TopologyCanvas(props: CanvasProps) {
   }
 
   return <div className={`sim-canvas-surface ${dropActive ? "is-drop-active" : ""}`} onDragOver={(event) => { if (event.dataTransfer.types.includes("application/x-network-simulator-template")) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDropActive(true); } }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) setDropActive(false); }} onDrop={dropTemplate}>
-    <svg ref={svgRef} viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`} role="group" aria-label="Network topology canvas" tabIndex={0} onPointerDown={startPan} onPointerMove={moveNode} onPointerUp={endMove} onPointerCancel={endMove} onKeyDown={onKeyDown} onKeyUp={onKeyUp} onBlur={onBlur}  onClick={(event) => {
+    <svg ref={svgRef} viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`} role="group" aria-label="Network topology canvas" tabIndex={0} onWheel={(event) => { if (event.ctrlKey || event.metaKey) { event.preventDefault(); props.onZoom(event.deltaY > 0 ? -0.1 : 0.1); } }} onPointerDown={startPan} onPointerMove={moveNode} onPointerUp={endMove} onPointerCancel={endMove} onKeyDown={onKeyDown} onKeyUp={onKeyUp} onBlur={onBlur}  onClick={(event) => {
       if (panMovedRef.current) { panMovedRef.current = false; return; }
       if (event.target === event.currentTarget || (event.target as Element).tagName === "rect") {
         const point = scenePoint(event.clientX, event.clientY, svgRef.current!.getBoundingClientRect());
@@ -309,15 +322,21 @@ export function TopologyCanvas(props: CanvasProps) {
         if (!source || endpoints.length < 2) return null;
         const selected = props.selection?.kind === "link" && props.selection.id === link.link_id;
         const sourcePoint = portPoint(source.node, source.endpoint);
-        const style = (link.link_style ?? {}) as Record<string, unknown>;
         return <g key={link.link_id} className={`sim-link ${selected ? "is-selected" : ""} ${link.suspend ? "is-suspended" : ""}`} onClick={(event) => { event.stopPropagation(); props.onLinkClick(link.link_id); }} onContextMenu={() => props.onLinkClick(link.link_id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") props.onLinkClick(link.link_id); }} role="button" aria-label={`Ethernet segment connecting ${endpoints.map(({ node }) => node.name).join(", ")}`} tabIndex={0}>
-          {endpoints.slice(1).map(({ endpoint, node }) => { const point = portPoint(node, endpoint); return <g key={`${endpoint.node_id}:${endpoint.adapter_number}:${endpoint.port_number}`}><line x1={sourcePoint.x} y1={sourcePoint.y} x2={point.x} y2={point.y} style={{ stroke: String(style.color ?? ""), strokeWidth: Number(style.width ?? 0) || undefined, strokeDasharray: link.suspend ? "6 4" : undefined }} /><line className="sim-link-hit" x1={sourcePoint.x} y1={sourcePoint.y} x2={point.x} y2={point.y} /></g>; })}
+          {endpoints.slice(1).map(({ endpoint, node }) => { const point = portPoint(node, endpoint); return <g key={`${endpoint.node_id}:${endpoint.adapter_number}:${endpoint.port_number}`}><line className="sim-link-stroke" x1={sourcePoint.x} y1={sourcePoint.y} x2={point.x} y2={point.y} style={{ stroke: selected ? "#1683df" : "#555", strokeWidth: selected ? 2.5 : 2, strokeDasharray: link.suspend ? "6 4" : undefined }} /><line className="sim-link-hit" x1={sourcePoint.x} y1={sourcePoint.y} x2={point.x} y2={point.y} /></g>; })}
+          {endpoints.map(({ endpoint, node }, index) => {
+            const other = endpoints[index === 0 ? 1 : 0]?.node;
+            const dx = other ? Number(other.x ?? 0) - Number(node.x ?? 0) : 0;
+            const dy = other ? Number(other.y ?? 0) - Number(node.y ?? 0) : 0;
+            const distance = Math.hypot(dx, dy) || 1;
+            return <circle key={`status:${endpoint.node_id}`} className={`sim-link-status ${node.status === "started" ? "running" : "stopped"}`} cx={Number(node.x ?? 0) + dx / distance * 27} cy={Number(node.y ?? 0) + dy / distance * 27} r="3" />;
+          })}
           {endpoints.map(({ endpoint, node }) => {
             const localPort = localPortPoint(portIndex(node, endpoint), portCount(node));
             const key = `${link.link_id}:${endpoint.node_id}`;
             const savedLabel = endpoint.label;
             const text = savedLabel ? String(savedLabel.text ?? "") : portLabel(node, endpoint);
-            if (!text) return null;
+            if (!props.showInterfaceLabels || !text) return null;
             const position = linkLabelPositions[key] ?? { x: Number(savedLabel?.x ?? localPort.x + 8), y: Number(savedLabel?.y ?? localPort.y + 4) };
             return <g key={`label:${endpoint.node_id}`} transform={`translate(${Number(node.x ?? 0)},${Number(node.y ?? 0)})`}>
               <text className="sim-link-label" x={position.x} y={position.y} transform={Number(savedLabel?.rotation) ? `rotate(${Number(savedLabel?.rotation)}, ${position.x}, ${position.y})` : undefined} onPointerDown={(event) => startLinkLabelMove(event, link, endpoint, node)} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.stopPropagation()}>{text}</text>
@@ -325,18 +344,31 @@ export function TopologyCanvas(props: CanvasProps) {
           })}
         </g>;
       })}
+      {props.connecting && props.linkEndpoints.length === 1 && cursorPoint && (() => {
+        const endpoint = props.linkEndpoints[0]!;
+        const node = nodeMap.get(endpoint.node_id);
+        if (!node) return null;
+        const point = portPoint(node, endpoint);
+        return <line className="sim-link-preview" x1={point.x} y1={point.y} x2={cursorPoint.x} y2={cursorPoint.y} />;
+      })()}
       {props.nodes.map((node) => {
         const x = Number(node.x ?? 0);
         const y = Number(node.y ?? 0);
         const selected = (props.selection?.kind === "node" && props.selection.id === node.node_id) || props.selectedNodeIds.includes(node.node_id);
         const symbol = resolveCanvasSymbol(node.node_type ?? "", node.symbol, props.symbolDefaults, props.customSymbolIds);
+        const symbolAsset = symbol.kind === "default" ? defaultCanvasSymbolAsset(node.node_type ?? "", symbol.name) : null;
         const Icon = symbol.kind === "default" ? iconForSymbolName(symbol.name, node.node_type ?? "") : iconForType(node.node_type ?? "");
         const label = node.label && typeof node.label === "object" ? node.label as Record<string, unknown> : {};
-        const labelPosition = labelPositions[node.node_id] ?? { x: Number(label.x ?? 0), y: Number(label.y ?? 38) };
+        const labelPosition = labelPositions[node.node_id] ?? { x: Number(label.x ?? 0), y: Number(label.y ?? 56) };
+        const suspended = node.status === "suspended" || node.status === "suspending";
         return <g key={node.node_id} transform={`translate(${x},${y})`} className={`sim-node ${selected ? "is-selected" : ""} ${props.connecting ? "is-connecting" : ""} ${node.locked || props.projectLocked ? "is-locked" : ""}`} onPointerDown={(event) => startMove(event, node)} onClick={(event) => { event.stopPropagation(); if (event.metaKey || event.ctrlKey) props.onMultiSelectNode(node.node_id); else if (!movedRef.current) props.onNodeClick(node.node_id); movedRef.current = false; }} onContextMenu={() => props.onNodeContext(node.node_id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onNodeClick(node.node_id); } }} role="button" aria-label={`Node ${node.name}`} tabIndex={0}>
-          <Icon className="sim-node-icon" x={-17} y={-17} width={34} height={34} strokeWidth={1.7} />
-          {symbol.kind === "custom" && <AuthenticatedSymbolImage symbolId={symbol.symbolId} />}
-          <circle className={`sim-node-status ${node.status === "started" ? "running" : "stopped"}`} cx="19" cy="-17" r="3" />
+          {selected && <rect className="sim-node-selection" x="-48" y="-36" width="96" height="101" rx="6" />}
+          {symbol.kind === "custom" ? <AuthenticatedSymbolImage symbolId={symbol.symbolId} fallback={null} /> : <>
+            <Icon className="sim-node-icon" x={-24} y={-24} width={48} height={48} strokeWidth={1.5} />
+            {symbolAsset && <image className="sim-node-symbol" href={defaultSymbolUrls[symbolAsset]} x="-32" y="-32" width="64" height="64" preserveAspectRatio="xMidYMid meet" />}
+          </>}
+          <circle className={`sim-node-status ${node.status === "started" ? "running" : suspended ? "suspended" : "stopped"}`} cx="22" cy="-21" r="4" />
+          {(node.locked || props.projectLocked) && <text className="sim-node-lock" x="-22" y="-17" aria-label="Locked">🔒</text>}
           <text className="sim-node-name" data-node-label="true" x={labelPosition.x} y={labelPosition.y} onPointerDown={(event) => startLabelMove(event, node)} onClick={(event) => event.stopPropagation()}>{node.name}</text>
         </g>;
         })}
@@ -346,12 +378,13 @@ export function TopologyCanvas(props: CanvasProps) {
   </div>;
 }
 
-export function AuthenticatedSymbolImage({ symbolId }: { symbolId: string }) {
+export function AuthenticatedSymbolImage({ symbolId, fallback }: { symbolId: string; fallback: ReactNode }) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     let objectUrl: string | null = null;
     setUrl(null);
+    if (typeof api.symbolRaw !== "function") return;
     void api.symbolRaw(symbolId).then((blob) => {
       objectUrl = URL.createObjectURL(blob);
       if (cancelled) URL.revokeObjectURL(objectUrl);
@@ -363,7 +396,7 @@ export function AuthenticatedSymbolImage({ symbolId }: { symbolId: string }) {
     };
   }, [symbolId]);
   return url
-    ? <image className="sim-node-symbol" href={url} x="-23" y="-32" width="46" height="38" preserveAspectRatio="xMidYMid meet" />
-    : null;
+    ? <image className="sim-node-symbol" href={url} x="-32" y="-32" width="64" height="64" preserveAspectRatio="xMidYMid meet" />
+    : fallback;
 }
 

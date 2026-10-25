@@ -34,6 +34,11 @@ describe("project map helpers", () => {
     if (tool === "text") expect(svg).toContain("a &lt; b &amp; c");
   });
 
+  it("uses the plain GNS3 defaults for notes and shapes", () => {
+    expect(drawingSvg("rectangle", { width: 120, height: 60 })).toContain('fill="none" stroke="#111111" stroke-width="1"');
+    expect(drawingSvg("text", { width: 120, height: 60, text: "Router" })).toContain('fill="#111111" font-family="sans-serif" font-size="12"');
+  });
+
   it("accepts only embedded raster data for image drawings", () => {
     const svg = drawingSvg("image", { width: 40, height: 30, imageDataUrl: "data:image/png;base64,AA==" });
     expect(svg).toContain("<image href=\"data:image/png;base64,AA==\"");

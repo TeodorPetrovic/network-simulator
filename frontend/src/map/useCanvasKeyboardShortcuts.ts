@@ -4,6 +4,7 @@ import type { Node } from "../api";
 
 type Props = {
   nodes: Node[];
+  selectedNodeIds: string[];
   onMultiSelect: (ids: string[]) => void;
   onZoom: (delta: number) => void;
   onNodeMoveEnd: (id: string, x: number, y: number) => void;
@@ -27,6 +28,15 @@ export function useCanvasKeyboardShortcuts(props: Props, lastMoveRef: MutableRef
       lastMoveRef.current = null;
     }
     if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); props.onDeleteSelected(); }
+    const movement: Record<string, Point> = { ArrowLeft: { x: -10, y: 0 }, ArrowRight: { x: 10, y: 0 }, ArrowUp: { x: 0, y: -10 }, ArrowDown: { x: 0, y: 10 } };
+    const delta = movement[event.key];
+    if (delta && props.selectedNodeIds.length > 0 && !mod) {
+      event.preventDefault();
+      for (const id of props.selectedNodeIds) {
+        const node = props.nodes.find((item) => item.node_id === id);
+        if (node) props.onNodeMoveEnd(id, Number(node.x ?? 0) + delta.x, Number(node.y ?? 0) + delta.y);
+      }
+    }
     if (event.key === "Escape") props.onClearSelection();
   };
   const clearSpace = (event?: KeyboardEvent<SVGSVGElement>) => {

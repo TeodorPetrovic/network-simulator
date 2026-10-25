@@ -20,10 +20,10 @@ type Props = {
   changeDrawingOrder: (direction: "front" | "back") => void; removeDrawing: () => void;
   setSnapshotsOpen: (open: boolean) => void; setLogOpen: (open: boolean) => void; setScreenshotOpen: (open: boolean) => void; setLinkPropertiesOpen: (open: boolean) => void; selectedLink: Link | null | undefined;
   setHelpOpen: (open: boolean) => void; setInfoOpen: (open: boolean) => void;
-  setView: (zoom: number) => void; zoomIn: () => void; zoomOut: () => void; fitTopology: () => void;
+  zoom: number; onZoom: (delta: number) => void; onResetZoom: () => void; onFitTopology: () => void; onZoomToSelection: () => void; showInterfaceLabels: boolean; onToggleInterfaceLabels: () => void;
 };
 
-export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, selectedLifecycleNodes, projectLocked, gridVisible, setGridVisible, snapToGrid, setSnapToGrid, selectedDrawing, selectedLink, runBulkLifecycle, runAllLifecycle, deleteSelectedNodes, toggleProjectLock, startDrawingTool, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, setSnapshotsOpen, setLogOpen, setScreenshotOpen, setLinkPropertiesOpen, setHelpOpen, setInfoOpen, setView, zoomIn, zoomOut, fitTopology }: Props) {
+export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, selectedLifecycleNodes, projectLocked, gridVisible, setGridVisible, snapToGrid, setSnapToGrid, selectedDrawing, selectedLink, runBulkLifecycle, runAllLifecycle, deleteSelectedNodes, toggleProjectLock, startDrawingTool, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, setSnapshotsOpen, setLogOpen, setScreenshotOpen, setLinkPropertiesOpen, setHelpOpen, setInfoOpen, zoom, onZoom, onResetZoom, onFitTopology, onZoomToSelection, showInterfaceLabels, onToggleInterfaceLabels }: Props) {
   const supported = (label: string, action: () => void, disabled = false) => <MenubarItem disabled={disabled} onSelect={action}>{label}</MenubarItem>;
   const draw = (tool: DrawingTool, label: string) => supported(label, () => startDrawingTool(tool));
   const selected = selectedLifecycleNodes.length > 0;
@@ -39,8 +39,8 @@ export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, 
         {supported("Select all", () => {}, true)}{supported("Select none", () => {}, true)}<MenubarSeparator />{supported("Preferences…", props.onOpenPreferences)}
       </MenubarContent></MenubarMenu>
       <MenubarMenu><MenubarTrigger>View</MenubarTrigger><MenubarContent>
-        {supported("Zoom in", zoomIn)}{supported("Zoom out", zoomOut)}{supported("Reset zoom", () => setView(1))}{supported("Fit to window", fitTopology)}
-        <MenubarSeparator />{supported("Show / hide interface labels", () => {}, true)}{supported(gridVisible ? "Hide grid" : "Show grid", () => setGridVisible((value) => !value))}
+        {supported(`Zoom in · ${Math.round(zoom * 100)}%`, () => onZoom(0.1))}{supported("Zoom out", () => onZoom(-0.1))}{supported("Reset zoom", onResetZoom)}{supported("Fit to window", onFitTopology)}{supported("Zoom to selection", onZoomToSelection)}
+        <MenubarSeparator />{supported(showInterfaceLabels ? "Hide interface labels" : "Show interface labels", onToggleInterfaceLabels)}{supported(gridVisible ? "Hide grid" : "Show grid", () => setGridVisible((value) => !value))}
         {supported(snapToGrid ? "Snap to grid ✓" : "Snap to grid", () => setSnapToGrid((value) => !value))}{supported(projectLocked ? "Unlock project" : "Lock project", () => void toggleProjectLock())}
         <MenubarSeparator />{supported("Console dock", () => {}, true)}{supported("Topology summary", () => {}, true)}
       </MenubarContent></MenubarMenu>
@@ -69,7 +69,7 @@ export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, 
   </header>;
 }
 
-export function WorkspaceIconToolbar({ workspace, startDrawingTool, runAllLifecycle, selectedLink, setLinkPropertiesOpen, zoomIn, zoomOut, fitTopology }: { workspace: SimulatorWorkspaceProps; startDrawingTool: (tool: DrawingTool) => void; runAllLifecycle: (action: "start" | "stop" | "suspend" | "reload") => void; selectedLink: Link | null | undefined; setLinkPropertiesOpen: (open: boolean) => void; zoomIn: () => void; zoomOut: () => void; fitTopology: () => void }) {
+export function WorkspaceIconToolbar({ workspace, startDrawingTool, runAllLifecycle, selectedLink, setLinkPropertiesOpen, zoomIn, zoomOut, fitTopology, showInterfaceLabels, onToggleInterfaceLabels }: { workspace: SimulatorWorkspaceProps; startDrawingTool: (tool: DrawingTool) => void; runAllLifecycle: (action: "start" | "stop" | "suspend" | "reload") => void; selectedLink: Link | null | undefined; setLinkPropertiesOpen: (open: boolean) => void; zoomIn: () => void; zoomOut: () => void; fitTopology: () => void; showInterfaceLabels: boolean; onToggleInterfaceLabels: () => void }) {
   return <div className="sim-icon-toolbar" role="toolbar" aria-label="Workspace tools">
     <IconAction label="Start all" icon={<Play />} onClick={workspace.onStartAll} disabled={workspace.batchLifecycleRunning} />
     <IconAction label="Suspend all" icon={<Pause />} onClick={() => runAllLifecycle("suspend")} disabled={workspace.batchLifecycleRunning || !nodesForLifecycle(workspace.topology.nodes, "suspend").length} />
@@ -77,7 +77,7 @@ export function WorkspaceIconToolbar({ workspace, startDrawingTool, runAllLifecy
     <IconAction label="Reload all" icon={<Activity />} onClick={() => runAllLifecycle("reload")} disabled={workspace.batchLifecycleRunning || !nodesForLifecycle(workspace.topology.nodes, "reload").length} />
     <IconAction label="Console all" icon={<Terminal />} onClick={() => workspace.topology.nodes.filter((node) => node.status === "started").forEach((node) => workspace.onOpenConsole(node))} disabled={!workspace.topology.nodes.some((node) => node.status === "started")} />
     <span className="sim-toolbar-divider" />
-    <IconAction label="Show / hide interface labels" icon={<Network />} disabled />
+    <IconAction label={showInterfaceLabels ? "Hide interface labels" : "Show interface labels"} icon={<Network />} onClick={onToggleInterfaceLabels} pressed={showInterfaceLabels} />
     <span className="sim-toolbar-divider" />
     <IconAction label="Zoom in" icon={<ZoomIn />} onClick={zoomIn} /><IconAction label="Zoom out" icon={<ZoomOut />} onClick={zoomOut} /><IconAction label="Fit to window" icon={<Scan />} onClick={fitTopology} />
     <span className="sim-toolbar-divider" />

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import "./App.test-utils";
 import { api } from "./api";
 import { emptyTopology } from "./App.test-utils";
@@ -24,19 +24,19 @@ describe("map", () => {
       expect(await screen.findAllByRole("button", { name: "Packet capture" })).toHaveLength(2);
     });
 
-    it("zooms to a selected device and resets the map scale", async () => {
+    it("keeps zoom controls out of the canvas scene", async () => {
       vi.mocked(api.topology).mockResolvedValue({
         ...emptyTopology,
         nodes: [{ node_id: "n1", name: "Edge router", node_type: "qemu", x: 180, y: 90 }],
       });
       renderWorkspace();
-      fireEvent.click(await screen.findByRole("button", { name: "Node Edge router" }));
-      fireEvent.click(screen.getByRole("button", { name: "Zoom to selection" }));
-      expect(screen.getByText("300%")).toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
-      expect(screen.getByText("300%")).toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name: "Reset zoom" }));
-      expect(screen.getAllByText("100%")).toHaveLength(2);
+      await screen.findByRole("button", { name: "Node Edge router" });
+      const canvas = document.querySelector(".sim-canvas");
+      expect(canvas).not.toBeNull();
+      expect(within(canvas as HTMLElement).queryByRole("button", { name: "Zoom in" })).not.toBeInTheDocument();
+      expect(within(canvas as HTMLElement).queryByRole("button", { name: "Zoom to selection" })).not.toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "View" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Show interface labels" })).toBeEnabled();
     });
 
     it("shows live host metrics from the topology map resource control", async () => {

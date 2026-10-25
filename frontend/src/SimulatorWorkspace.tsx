@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Scan } from "lucide-react";
 import type { Link, LinkEndpoint, Node, Project, ResourceMonitor, RuntimeInfo, RuntimeTemplate, TopologySnapshot } from "./api";
 import { api } from "./api";
+import { ResourceMonitorPopover } from "./ResourceMonitorPopover";
 import { nodesForLifecycle } from "./lifecycle";
 import type { LifecycleAction } from "./lifecycle";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
   ContextMenu, ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { ResourceMonitorPopover } from "./ResourceMonitorPopover";
 import { NodeSettingsDialog } from "./NodeSettingsDialog";
 import { DrawingEditorDialog, HelpDialog, InfoDialog, LinkPropertiesDialog, LogConsoleDialog, ScreenshotDialog, SnapshotsDialog, SymbolPickerDialog } from "./map/MapDialogs";
 import type { ScreenshotRequest } from "./map/MapDialogs";
@@ -77,6 +75,7 @@ export type SimulatorWorkspaceProps = {
 
 export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [view, setView] = useState({ zoom: 1, centerX: 0, centerY: 0 });
+  const [showInterfaceLabels, setShowInterfaceLabels] = useState(false);
   const [topology, setTopology] = useState(props.topology);
   const [deviceQuery, setDeviceQuery] = useState("");
   const [topologyDockOpen, setTopologyDockOpen] = useState(true);
@@ -163,22 +162,12 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   function zoomToSelection() {
     const selectedIds = new Set(selectedNodeIds);
     if (props.selection?.kind === "node") selectedIds.add(props.selection.id);
-    if (props.selection?.kind === "link") {
-      const link = topology.links.find((item) => item.link_id === props.selection?.id);
-      link?.nodes.forEach((endpoint) => selectedIds.add(endpoint.node_id));
-    }
-    const selectedNodes = canvasNodes.filter((node) => selectedIds.has(node.node_id));
-    const boxes = selectedNodes.map((node) => ({ left: Number(node.x ?? 0) - 56, right: Number(node.x ?? 0) + 56, top: Number(node.y ?? 0) - 36, bottom: Number(node.y ?? 0) + 36 }));
-    if (selectedDrawing) {
-      const x = Number(selectedDrawing.x ?? 0);
-      const y = Number(selectedDrawing.y ?? 0);
-      boxes.push({ left: x, right: x + Number(selectedDrawing.width ?? 160), top: y, bottom: y + Number(selectedDrawing.height ?? 90) });
-    }
+    if (props.selection?.kind === "link") topology.links.find((item) => item.link_id === props.selection?.id)?.nodes.forEach((endpoint) => selectedIds.add(endpoint.node_id));
+    const boxes = canvasNodes.filter((node) => selectedIds.has(node.node_id)).map((node) => ({ left: Number(node.x ?? 0) - 56, right: Number(node.x ?? 0) + 56, top: Number(node.y ?? 0) - 36, bottom: Number(node.y ?? 0) + 36 }));
+    if (selectedDrawing) { const x = Number(selectedDrawing.x ?? 0); const y = Number(selectedDrawing.y ?? 0); boxes.push({ left: x, right: x + Number(selectedDrawing.width ?? 160), top: y, bottom: y + Number(selectedDrawing.height ?? 90) }); }
     if (!boxes.length) { setFeatureMessage("Select a device, link, or drawing to zoom to it."); return; }
-    const left = Math.min(...boxes.map((box) => box.left));
-    const right = Math.max(...boxes.map((box) => box.right));
-    const top = Math.min(...boxes.map((box) => box.top));
-    const bottom = Math.max(...boxes.map((box) => box.bottom));
+    const left = Math.min(...boxes.map((box) => box.left)); const right = Math.max(...boxes.map((box) => box.right));
+    const top = Math.min(...boxes.map((box) => box.top)); const bottom = Math.max(...boxes.map((box) => box.bottom));
     const zoom = Math.max(0.4, Math.min(maxZoom, Math.min(scene.width / (right - left + 80), scene.height / (bottom - top + 80))));
     setView({ zoom, centerX: (left + right) / 2, centerY: (top + bottom) / 2 });
   }
@@ -260,8 +249,8 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
 
   return (
     <section className="sim-workspace" aria-label={`Project ${props.project.name}`}>
-      <WorkspaceToolbar workspace={props} topology={topology} selectedNodeIds={selectedNodeIds} selectedLifecycleNodes={selectedLifecycleNodes} projectLocked={projectLocked} gridVisible={gridVisible} setGridVisible={setGridVisible} snapToGrid={snapToGrid} setSnapToGrid={setSnapToGrid} selectedDrawing={selectedDrawing} selectedLink={selectedLink} runBulkLifecycle={runBulkLifecycle} runAllLifecycle={runAllLifecycle} deleteSelectedNodes={deleteSelectedNodes} toggleProjectLock={toggleProjectLock} startDrawingTool={startDrawingTool} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} setSnapshotsOpen={setSnapshotsOpen} setLogOpen={setLogOpen} setScreenshotOpen={setScreenshotOpen} setLinkPropertiesOpen={setLinkPropertiesOpen} setHelpOpen={setHelpOpen} setInfoOpen={setInfoOpen} setView={(zoom) => setView((current) => ({ ...current, zoom }))} zoomIn={() => setView((current) => ({ ...current, zoom: Math.min(maxZoom, Number((current.zoom + 0.1).toFixed(1))) }))} zoomOut={() => setView((current) => ({ ...current, zoom: Math.max(0.4, Number((current.zoom - 0.1).toFixed(1))) }))} fitTopology={fitTopology} />
-      <WorkspaceIconToolbar workspace={props} selectedLink={selectedLink} setLinkPropertiesOpen={setLinkPropertiesOpen} startDrawingTool={startDrawingTool} runAllLifecycle={runAllLifecycle} zoomIn={() => setView((current) => ({ ...current, zoom: Math.min(maxZoom, Number((current.zoom + 0.1).toFixed(1))) }))} zoomOut={() => setView((current) => ({ ...current, zoom: Math.max(0.4, Number((current.zoom - 0.1).toFixed(1))) }))} fitTopology={fitTopology} />
+      <WorkspaceToolbar workspace={props} topology={topology} selectedNodeIds={selectedNodeIds} selectedLifecycleNodes={selectedLifecycleNodes} projectLocked={projectLocked} gridVisible={gridVisible} setGridVisible={setGridVisible} snapToGrid={snapToGrid} setSnapToGrid={setSnapToGrid} selectedDrawing={selectedDrawing} selectedLink={selectedLink} runBulkLifecycle={runBulkLifecycle} runAllLifecycle={runAllLifecycle} deleteSelectedNodes={deleteSelectedNodes} toggleProjectLock={toggleProjectLock} startDrawingTool={startDrawingTool} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} setSnapshotsOpen={setSnapshotsOpen} setLogOpen={setLogOpen} setScreenshotOpen={setScreenshotOpen} setLinkPropertiesOpen={setLinkPropertiesOpen} setHelpOpen={setHelpOpen} setInfoOpen={setInfoOpen} zoom={view.zoom} onZoom={(delta) => setView((current) => ({ ...current, zoom: Math.max(0.4, Math.min(maxZoom, Number((current.zoom + delta).toFixed(1)))) }))} onFitTopology={fitTopology} onZoomToSelection={zoomToSelection} onResetZoom={() => setView({ zoom: 1, centerX: 0, centerY: 0 })} showInterfaceLabels={showInterfaceLabels} onToggleInterfaceLabels={() => setShowInterfaceLabels((current) => !current)} />
+      <WorkspaceIconToolbar workspace={props} selectedLink={selectedLink} setLinkPropertiesOpen={setLinkPropertiesOpen} startDrawingTool={startDrawingTool} runAllLifecycle={runAllLifecycle} showInterfaceLabels={showInterfaceLabels} onToggleInterfaceLabels={() => setShowInterfaceLabels((current) => !current)} zoomIn={() => setView((current) => ({ ...current, zoom: Math.min(maxZoom, Number((current.zoom + 0.1).toFixed(1))) }))} zoomOut={() => setView((current) => ({ ...current, zoom: Math.max(0.4, Number((current.zoom - 0.1).toFixed(1))) }))} fitTopology={fitTopology} />
 
       <div className="sim-workspace-grid">
         <WorkspaceSidebar workspace={props} deviceQuery={deviceQuery} setDeviceQuery={setDeviceQuery} groupedTemplates={groupedTemplates} />
@@ -271,14 +260,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
             <ContextMenuTrigger asChild>
               <div className={`sim-canvas ${props.connecting ? "is-connecting" : ""} ${pendingDrawing ? "is-drawing" : ""}`}>
                 {featureMessage && <div className="sim-map-inline-notice" role="status">{featureMessage}</div>}
-                <div className="sim-canvas-controls">
-                  <div className="sim-map-actions">
-                    <span className="w-12 text-center font-mono text-xs text-muted-foreground">{Math.round(view.zoom * 100)}%</span>
-                    <Button variant="ghost" size="icon-sm" aria-label="Fit topology" title="Fit all devices" onClick={fitTopology}><Scan /></Button>
-                    <Button variant="ghost" size="icon-sm" aria-label="Zoom to selection" title="Zoom to selected devices, link, or drawing" onClick={zoomToSelection}><Scan /></Button>
-                    <Button variant="ghost" size="sm" aria-label="Reset zoom" title="Reset zoom to 100%" onClick={() => setView({ zoom: 1, centerX: 0, centerY: 0 })}>100%</Button>
-                  </div>
-                </div>
+
                 <TopologyCanvas
                   nodes={canvasNodes}
                   links={topology.links}
@@ -290,6 +272,8 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
                   centerY={view.centerY}
                   gridVisible={gridVisible}
                   snapToGrid={snapToGrid}
+                  showInterfaceLabels={showInterfaceLabels}
+                  onToggleInterfaceLabels={() => setShowInterfaceLabels((current) => !current)}
                   projectLocked={projectLocked}
                   selectedNodeIds={selectedNodeIds}
                   selectedDrawingId={selectedDrawingId}
