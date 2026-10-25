@@ -25,7 +25,7 @@ pub(super) async fn create_snapshot(
     let description = body["description"].as_str().unwrap_or("");
     sqlx::query("INSERT INTO project_snapshots(snapshot_id,project_id,name,description,topology_json) VALUES(?,?,?,?,?)").bind(&id).bind(&pid).bind(&name).bind(description).bind(serde_json::to_string(&snapshot).map_err(internal_json_error)?).execute(state.store.pool()).await?;
     let row=sqlx::query("SELECT strftime('%s',created_at) AS epoch, created_at FROM project_snapshots WHERE snapshot_id=?").bind(&id).fetch_one(state.store.pool()).await?;
-    let answer = json!({"snapshot_id":id,"project_id":pid,"name":name,"description":description,"filename":format!("{id}.snapshot"),"created_at":row.get::<String,_>("epoch").parse::<i64>().unwrap_or(0),"created":row.get::<String,_>("created_at")});
+    let answer = json!({"snapshot_id":id,"project_id":pid,"name":name,"description":description,"filename":format!("{id}.snapshot"),"created_at":row.get::<String,_>("epoch").parse::<i64>().unwrap_or(0),"created":date_time(row.get::<String,_>("created_at"))});
     Ok((StatusCode::CREATED, Json(answer)).into_response())
 }
 pub(super) async fn list_snapshots(
@@ -35,7 +35,11 @@ pub(super) async fn list_snapshots(
     let pid = project_id.to_string();
     ensure_project_exists_pool(state.store.pool(), &pid).await?;
     let rows=sqlx::query("SELECT snapshot_id,name,description,created_at,strftime('%s',created_at) AS epoch FROM project_snapshots WHERE project_id=? ORDER BY created_at,name").bind(&pid).fetch_all(state.store.pool()).await?;
-    Ok(Json(rows.into_iter().map(|r|{let id:String=r.get("snapshot_id");json!({"snapshot_id":id,"project_id":pid,"name":r.get::<String,_>("name"),"description":r.get::<String,_>("description"),"filename":format!("{id}.snapshot"),"created_at":r.get::<String,_>("epoch").parse::<i64>().unwrap_or(0),"created":r.get::<String,_>("created_at")})}).collect()))
+    Ok(Json(rows.into_iter().map(|r|{let id:String=r.get("snapshot_id");json!({"snapshot_id":id,"project_id":pid,"name":r.get::<String,_>("name"),"description":r.get::<String,_>("description"),"filename":format!("{id}.snapshot"),"created_at":r.get::<String,_>("epoch").parse::<i64>().unwrap_or(0),"created":date_time(r.get::<String,_>("created_at"))})}).collect()))
+}
+
+fn date_time(timestamp: String) -> String {
+    if timestamp.ends_with('Z') || timestamp.contains('+') { timestamp } else { format!("{}Z", timestamp.replace(' ', "T")) }
 }
 pub(super) async fn delete_snapshot(
     State(state): State<AppState>,

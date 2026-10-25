@@ -138,8 +138,23 @@ pub(super) async fn list_node_files(
     let rows=sqlx::query("SELECT file_path,length(contents) AS size,updated_at FROM node_files WHERE project_id=? AND node_id=? ORDER BY file_path").bind(project_id.to_string()).bind(node_id.to_string()).fetch_all(state.store.pool()).await?;
     let prefix = query.path.unwrap_or_default().trim_matches('/').to_owned();
     let recursive = query.recursive.unwrap_or(false);
-    let files=rows.into_iter().filter_map(|r|{let path:String=r.get("file_path");if !prefix.is_empty()&&!path.starts_with(&format!("{prefix}/")){return None;}if !recursive&&path.strip_prefix(&prefix).unwrap_or(&path).trim_start_matches('/').contains('/'){return None;}Some(json!({"path":path,"size":r.get::<i64,_>("size"),"created_at":r.get::<String,_>("updated_at"),"modified_at":r.get::<String,_>("updated_at"),"file_type":"file"}))}).collect();
+    let files=rows.into_iter().filter_map(|r|{let path:String=r.get("file_path");if !prefix.is_empty()&&!path.starts_with(&format!("{prefix}/")){return None;}if !recursive&&path.strip_prefix(&prefix).unwrap_or(&path).trim_start_matches('/').contains('/'){return None;}let timestamp=date_time(r.get::<String,_>("updated_at"));Some(json!({"path":path,"size":r.get::<i64,_>("size"),"created_at":timestamp,"modified_at":timestamp,"file_type":"file"}))}).collect();
     Ok(Json(files))
+}
+
+fn date_time(timestamp: String) -> String {
+    if timestamp.ends_with('Z') || timestamp.contains('+') { return timestamp; }
+    format!("{}Z", timestamp.replace(' ', "T"))
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::date_time;
+
+    #[test]
+    fn node_file_timestamps_use_rfc3339_shape() {
+        assert_eq!(date_time("2026-10-25 12:34:56".into()), "2026-10-25T12:34:56Z");
+    }
 }
 pub(super) async fn get_node_file(
     State(state): State<AppState>,
