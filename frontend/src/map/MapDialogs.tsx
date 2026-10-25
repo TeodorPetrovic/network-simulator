@@ -317,6 +317,7 @@ export function LogConsoleDialog({ projectId, cursor, open, onOpenChange, onCoun
   const [messages, setMessages] = useState<Array<{ sequence: number; action: string; text: string }>>([]);
   const [status, setStatus] = useState("Waiting for controller events");
   useEffect(() => {
+    if (typeof WebSocket === "undefined") return;
     let active = true;
     let socket: WebSocket | null = null;
     setStatus("Connecting to project event stream…");

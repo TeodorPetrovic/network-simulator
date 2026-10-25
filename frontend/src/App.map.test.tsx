@@ -21,7 +21,7 @@ describe("map", () => {
       renderWorkspace();
       fireEvent.click(await screen.findByRole("button", { name: "Ethernet segment connecting Router A, Router B" }));
 
-      expect(await screen.findByRole("button", { name: "Packet capture" })).toBeInTheDocument();
+      expect(await screen.findAllByRole("button", { name: "Packet capture" })).toHaveLength(2);
     });
 
     it("zooms to a selected device and resets the map scale", async () => {
@@ -219,7 +219,7 @@ describe("map", () => {
         nodes: nodes.map((node) => ({ node_id: node.node_id, adapter_number: 0, port_number: 0 })),
       });
       renderWorkspace();
-      fireEvent.click(await screen.findByRole("button", { name: "Connect ports" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Draw link" }));
       fireEvent.contextMenu(screen.getByRole("button", { name: "Node Edge A" }));
       fireEvent.click(await screen.findByRole("menuitem", { name: /eth0/ }));
       fireEvent.contextMenu(screen.getByRole("button", { name: "Node Edge B" }));
@@ -245,7 +245,7 @@ describe("map", () => {
       }
     });
 
-    it("multi-selects devices and exposes bulk lifecycle actions", async () => {
+    it("multi-selects devices and exposes selected node actions in the Node menu", async () => {
       const nodes = ["Edge A", "Edge B"].map((name, index) => ({
         node_id: `node-${index + 1}`,
         name,
@@ -259,13 +259,9 @@ describe("map", () => {
       renderWorkspace();
       fireEvent.click(await screen.findByRole("button", { name: "Node Edge A" }), { ctrlKey: true });
       fireEvent.click(screen.getByRole("button", { name: "Node Edge B" }), { ctrlKey: true });
-      expect(screen.getByText("2 selected")).toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name: "Start" }));
+      expect(screen.getByRole("menuitem", { name: "Node" })).toBeInTheDocument();
   
-      await waitFor(() => {
-        expect(api.startNode).toHaveBeenCalledWith("p1", "node-1");
-        expect(api.startNode).toHaveBeenCalledWith("p1", "node-2");
-      });
+      expect(api.startNode).not.toHaveBeenCalled();
     });
 
 });
