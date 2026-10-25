@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   createRootRoute,
   HeadContent,
@@ -22,9 +22,12 @@ export const Route = createRootRoute({
 });
 
 function RootComponent() {
+  const [clientReady, setClientReady] = useState(false);
+  useEffect(() => setClientReady(true), []);
+
   return (
     <RootDocument>
-      <Outlet />
+      {clientReady && <Outlet />}
     </RootDocument>
   );
 }

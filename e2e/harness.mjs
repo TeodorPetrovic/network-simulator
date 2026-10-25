@@ -83,7 +83,7 @@ export async function launchPage(server, { width = 1500, height = 900 } = {}) {
   const goto = page.goto.bind(page);
   page.goto = async (url, options) => { for (let i = 0; ; i++) { try { return await goto(url, options); } catch (error) { if (i >= 2) throw error; await new Promise((r) => setTimeout(r, 300)); } } };
   const errors = [];
-  page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
+  page.on("pageerror", (e) => errors.push(`pageerror at ${page.url()}: ${e.message}`));
   page.on("console", (m) => {
     if (m.type() !== "error" || /Failed to load resource/.test(m.text())) return;
     if (m.text().includes("downloadable font: download failed")) return;
