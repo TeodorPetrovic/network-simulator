@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) async fn list_projects(
     State(state): State<AppState>,
+    Query(query): Query<HashMap<String, String>>,
     axum::Extension(principal): axum::Extension<auth::Principal>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
     let rows =
@@ -12,7 +13,9 @@ pub(super) async fn list_projects(
     for row in rows {
         let project = decode_json(row.get::<String, _>("project_json"))?;
         let project_id: String = row.get("project_id");
-        if auth::can_audit_project(state.store.pool(), &principal, &project_id).await {
+        if auth::can_audit_project(state.store.pool(), &principal, &project_id).await
+            && query.get("name").is_none_or(|name| project["name"] == *name)
+        {
             projects.push(project);
         }
     }

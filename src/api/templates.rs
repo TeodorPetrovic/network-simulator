@@ -2,8 +2,13 @@ use super::*;
 
 pub(super) async fn list_templates(
     State(state): State<AppState>,
+    Query(query): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    Ok(Json(available_templates(&state).await?))
+    let mut templates = available_templates(&state).await?;
+    if let Some(name) = query.get("name") {
+        templates.retain(|template| template.get("name").and_then(Value::as_str) == Some(name));
+    }
+    Ok(Json(templates))
 }
 
 pub(super) async fn available_templates(state: &AppState) -> Result<Vec<Value>, ApiError> {
