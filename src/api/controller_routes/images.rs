@@ -108,7 +108,8 @@ pub(super) async fn upload_image(
             let _ = tokio::fs::remove_file(&tmp).await;
             return Err(runtime_api_error(error));
         }
-        Ok((StatusCode::CREATED, Json(json!({"filename":name,"path":dest.to_string_lossy(),"image_type":"qemu","image_size":size,"checksum":checksum,"checksum_algorithm":"md5","availability":"available"}))).into_response())
+        let can_create_template = can_create_template(&state, name, &checksum);
+        Ok((StatusCode::CREATED, Json(json!({"filename":name,"path":dest.to_string_lossy(),"image_type":"qemu","image_size":size,"checksum":checksum,"checksum_algorithm":"md5","availability":"available","can_create_template":can_create_template}))).into_response())
     } else {
         let (tmp, _) = state
             .dynamips
@@ -123,8 +124,16 @@ pub(super) async fn upload_image(
             let _ = tokio::fs::remove_file(&tmp).await;
             return Err(runtime_api_error(error));
         }
-        Ok((StatusCode::CREATED, Json(json!({"filename":name,"path":dest.to_string_lossy(),"image_type":"ios","image_size":size,"checksum":checksum,"checksum_algorithm":"md5","availability":"available"}))).into_response())
+        let can_create_template = can_create_template(&state, name, &checksum);
+        Ok((StatusCode::CREATED, Json(json!({"filename":name,"path":dest.to_string_lossy(),"image_type":"ios","image_size":size,"checksum":checksum,"checksum_algorithm":"md5","availability":"available","can_create_template":can_create_template}))).into_response())
     }
+}
+
+fn can_create_template(state: &AppState, filename: &str, md5: &str) -> bool {
+    state
+        .marketplace
+        .imported_appliances()
+        .is_ok_and(|appliances| appliance_image_matches(&appliances, filename, md5))
 }
 
 fn safe_upload_relative_path(value: &str) -> Result<PathBuf, ApiError> {
@@ -369,4 +378,90 @@ mod image_path_tests {
         assert_eq!(result.0[0]["path"], "vendor/router/disk.qcow2");
         assert_eq!(result.0[0]["filename"], "disk.qcow2");
     }
+
+    #[test]
+    fn upload_template_match_accepts_registered_filename_or_md5() {
+        use crate::marketplace::{
+            ApplianceFile, ApplianceImageRequirement, ApplianceRecord, ApplianceVersion,
+        };
+        let appliance = ApplianceRecord {
+            file_name: "router.gns3a".into(),
+            appliance_id: "id".into(),
+            name: "Router".into(),
+            origin: "test".into(),
+            category: None,
+            description: None,
+            status: None,
+            registry_version: None,
+            template_type: None,
+            imported: true,
+            source_url: String::new(),
+            required_files: vec![ApplianceFile {
+                filename: "disk.qcow2".into(),
+                version: None,
+                size: None,
+                md5sum: Some("abc123".into()),
+                download_url: None,
+            }],
+            versions: vec![ApplianceVersion {
+                name: "Default".into(),
+                settings: None,
+                template_type: Some("qemu".into()),
+                runtime_supported: true,
+                docker_image: None,
+                docker_image_id: None,
+                docker_image_available: false,
+                images: vec![ApplianceImageRequirement {
+                    key: "hda_disk_image".into(),
+                    filename: "disk.qcow2".into(),
+                    assignable: true,
+                    filesize: None,
+                    md5sum: Some("abc123".into()),
+                    assigned_image_id: None,
+                    assigned_image_name: None,
+                    suggested_image_id: None,
+                    suggested_image_name: None,
+                    image_path: None,
+                    actual_size: None,
+                    actual_md5sum: None,
+                    actual_sha1sum: None,
+                    status: "missing".into(),
+                    allow_checksum_mismatch: false,
+                }],
+            }],
+        };
+        assert!(appliance_image_matches(
+            std::slice::from_ref(&appliance),
+            "disk.qcow2",
+            "other"
+        ));
+        assert!(appliance_image_matches(
+            std::slice::from_ref(&appliance),
+            "renamed.qcow2",
+            "ABC123"
+        ));
+        assert!(!appliance_image_matches(
+            &[appliance],
+            "other.qcow2",
+            "other"
+        ));
+    }
+}
+
+fn appliance_image_matches(
+    appliances: &[crate::marketplace::ApplianceRecord],
+    filename: &str,
+    md5: &str,
+) -> bool {
+    appliances
+        .iter()
+        .flat_map(|appliance| &appliance.versions)
+        .flat_map(|version| &version.images)
+        .any(|image| {
+            image.filename == filename
+                || image
+                    .md5sum
+                    .as_deref()
+                    .is_some_and(|expected| expected.eq_ignore_ascii_case(md5))
+        })
 }
