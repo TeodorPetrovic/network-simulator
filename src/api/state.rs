@@ -1,6 +1,48 @@
 use super::*;
 
 impl super::AppState {
+    pub(super) fn start_auto_open_worker(&self) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!("auto open is configured but no Tokio runtime is active");
+            return;
+        };
+        let state = self.clone();
+        handle.spawn(async move {
+            let rows = match sqlx::query("SELECT project_id, project_json FROM projects ORDER BY project_id")
+                .fetch_all(state.store.pool())
+                .await
+            {
+                Ok(rows) => rows,
+                Err(error) => {
+                    tracing::error!(%error, "could not load projects for auto open");
+                    return;
+                }
+            };
+            for row in rows {
+                let project_id: String = row.get("project_id");
+                let project = match decode_json(row.get::<String, _>("project_json")) {
+                    Ok(project) => project,
+                    Err(error) => {
+                        tracing::warn!(error = %error.message, %project_id, "skipping invalid project during auto open");
+                        continue;
+                    }
+                };
+                if project.get("auto_open").and_then(Value::as_bool) != Some(true)
+                    || project.get("status").and_then(Value::as_str) == Some("opened")
+                {
+                    continue;
+                }
+                let Ok(id) = Uuid::parse_str(&project_id) else {
+                    tracing::warn!(%project_id, "skipping project with invalid ID during auto open");
+                    continue;
+                };
+                if let Err(error) = super::projects::set_project_status(state.clone(), id, "opened").await {
+                    tracing::error!(error = %error.message, %project_id, "could not auto open project");
+                }
+            }
+        });
+    }
+
     pub fn new(store: Store) -> Self {
         Self {
             store,

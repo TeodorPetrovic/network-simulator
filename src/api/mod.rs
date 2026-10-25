@@ -76,6 +76,7 @@ pub struct AppState {
 
 pub fn router(state: AppState) -> Router {
     state.start_idle_stop_worker();
+    state.start_auto_open_worker();
     let api = Router::new()
         .route("/healthz", get(system::health))
         .route(
