@@ -17,7 +17,6 @@ use axum::{
     routing::{any, get, post, put},
 };
 use futures_util::{SinkExt, StreamExt};
-use md5::Digest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sqlx::{Row, SqlitePool};
@@ -59,13 +58,16 @@ const MAX_QEMU_IMAGE_BYTES: usize = 64 * 1024 * 1024 * 1024;
 const EVENT_PAGE_SIZE: i64 = 512;
 
 pub(super) fn etag_for(value: &Value) -> String {
-    format!("\"{:x}\"", md5::Md5::digest(value.to_string()))
+    let digest = ring::digest::digest(&ring::digest::SHA256, value.to_string().as_bytes());
+    let hex = digest.as_ref()[..16].iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    format!("\"{hex}\"")
 }
 
 pub(super) fn check_if_match(headers: &axum::http::HeaderMap, value: &Value) -> Result<(), ApiError> {
     if let Some(expected) = headers.get(axum::http::header::IF_MATCH) {
         let expected = expected.to_str().map_err(|_| ApiError::bad_request("If-Match must be a valid ETag"))?;
-        if expected != etag_for(value) {
+        let expected = expected.split(',').map(str::trim).collect::<Vec<_>>();
+        if !expected.contains(&"*") && !expected.contains(&etag_for(value).as_str()) {
             return Err(ApiError::new(StatusCode::PRECONDITION_FAILED, "ETag does not match current resource"));
         }
     }
@@ -91,6 +93,8 @@ mod etag_tests {
         headers.insert(axum::http::header::IF_MATCH, "\"stale\"".parse().unwrap());
         assert_eq!(check_if_match(&headers, &value).unwrap_err().status, StatusCode::PRECONDITION_FAILED);
         headers.insert(axum::http::header::IF_MATCH, etag_for(&value).parse().unwrap());
+        assert!(check_if_match(&headers, &value).is_ok());
+        headers.insert(axum::http::header::IF_MATCH, "*".parse().unwrap());
         assert!(check_if_match(&headers, &value).is_ok());
     }
 }
