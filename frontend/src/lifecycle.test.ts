@@ -26,4 +26,17 @@ describe("node lifecycle actions", () => {
     expect(canApplyLifecycle(node("qemu", "suspended"), "stop")).toBe(true);
     expect(canApplyLifecycle(node("qemu", "suspended"), "start")).toBe(true);
   });
+
+  it("offers Dynamips controls according to the returned runtime status", () => {
+    const stopped = node("dynamips", "stopped");
+    expect(canApplyLifecycle(stopped, "start")).toBe(true);
+    expect(canApplyLifecycle(stopped, "stop")).toBe(false);
+    for (const status of ["started", "suspended"]) {
+      const item = node("dynamips", status);
+      expect(canApplyLifecycle(item, "start")).toBe(status === "suspended");
+      expect(canApplyLifecycle(item, "stop")).toBe(true);
+      expect(canApplyLifecycle(item, "suspend")).toBe(status === "started");
+      expect(canApplyLifecycle(item, "reload")).toBe(status === "started");
+    }
+  });
 });
