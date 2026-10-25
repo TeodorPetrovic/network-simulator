@@ -361,11 +361,14 @@ async fn node_batch_obeys_strict_names_and_continues_after_conflict() {
     let (status, results) = request(&app, Method::POST, format!("/v3/projects/{project_id}/nodes/batch"), Some(serde_json::json!([
         {"node_type":"ethernet_switch","name":"SW1"},
         {"node_type":"ethernet_switch","name":"SW1","strict_names":true},
-        {"node_type":"ethernet_switch","name":"SW2"}
+        {"node_type":"ethernet_switch","name":"SW2"},
+        {"node_type":"ethernet_switch","name":"SW1"}
     ]))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(results[0]["status_code"], 201);
     assert_eq!(results[1]["status_code"], 409);
     assert_eq!(results[2]["status_code"], 201);
+    assert_eq!(results[3]["status_code"], 201);
+    assert_eq!(results[3]["node"]["name"], "SW3");
     assert_eq!(results[1]["error"]["code"], "conflict");
 }
