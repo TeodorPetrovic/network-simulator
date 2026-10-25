@@ -89,7 +89,7 @@ static WARNED_FORWARDED_AUTH: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug)]
 pub(crate) struct Principal {
-    user_id: String,
+    pub(crate) user_id: String,
     is_superadmin: bool,
     must_change_password: bool,
 }
@@ -123,9 +123,17 @@ impl AuthError {
 
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
+        let code = match self.status {
+            StatusCode::UNPROCESSABLE_ENTITY | StatusCode::BAD_REQUEST => "invalid_request",
+            StatusCode::UNAUTHORIZED => "unauthorized",
+            StatusCode::FORBIDDEN => "forbidden",
+            StatusCode::NOT_FOUND => "not_found",
+            StatusCode::CONFLICT => "conflict",
+            _ => "auth_error",
+        };
         let mut response = (
             self.status,
-            Json(json!({"message": self.message, "detail": self.message})),
+            Json(json!({"code":code,"message": self.message, "detail": self.message})),
         )
             .into_response();
         if self.status == StatusCode::UNAUTHORIZED {

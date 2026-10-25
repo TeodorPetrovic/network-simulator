@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) async fn list_projects(
     State(state): State<AppState>,
+    Query(query): Query<HashMap<String, String>>,
     axum::Extension(principal): axum::Extension<auth::Principal>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
     let rows =
@@ -12,7 +13,9 @@ pub(super) async fn list_projects(
     for row in rows {
         let project = decode_json(row.get::<String, _>("project_json"))?;
         let project_id: String = row.get("project_id");
-        if auth::can_audit_project(state.store.pool(), &principal, &project_id).await {
+        if auth::can_audit_project(state.store.pool(), &principal, &project_id).await
+            && query.get("name").is_none_or(|name| project["name"] == *name)
+        {
             projects.push(project);
         }
     }
@@ -69,17 +72,16 @@ pub(super) async fn create_project(
 pub(super) async fn get_project(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
-) -> Result<Json<Value>, ApiError> {
-    Ok(Json(
-        fetch_project(state.store.pool(), &project_id.to_string()).await?,
-    ))
+) -> Result<Response, ApiError> {
+    Ok(etag_response(fetch_project(state.store.pool(), &project_id.to_string()).await?))
 }
 
 pub(super) async fn update_project(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
     Json(patch): Json<Value>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     let project_id = project_id.to_string();
     let mut tx = state.store.pool().begin().await?;
     let row = sqlx::query("SELECT project_json FROM projects WHERE project_id = ?")
@@ -88,6 +90,7 @@ pub(super) async fn update_project(
         .await?
         .ok_or_else(|| ApiError::not_found(format!("Project {project_id} does not exist")))?;
     let mut project = decode_json(row.get::<String, _>("project_json"))?;
+    check_if_match(&headers, &project)?;
     let patch_object = patch
         .as_object()
         .ok_or_else(|| ApiError::bad_request("project update body must be an object"))?;
@@ -128,7 +131,7 @@ pub(super) async fn update_project(
     let event = Store::append_event(&mut tx, &project_id, "project.updated", &project).await?;
     tx.commit().await?;
     state.store.publish(event);
-    Ok(Json(project))
+    Ok(etag_response(project))
 }
 
 pub(super) async fn delete_project(

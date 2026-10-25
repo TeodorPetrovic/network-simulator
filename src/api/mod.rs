@@ -57,6 +57,48 @@ const MAX_DYNAMIPS_IMAGE_BYTES: usize = 512 * 1024 * 1024;
 const MAX_QEMU_IMAGE_BYTES: usize = 64 * 1024 * 1024 * 1024;
 const EVENT_PAGE_SIZE: i64 = 512;
 
+pub(super) fn etag_for(value: &Value) -> String {
+    let digest = ring::digest::digest(&ring::digest::SHA256, value.to_string().as_bytes());
+    let hex = digest.as_ref()[..16].iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    format!("\"{hex}\"")
+}
+
+pub(super) fn check_if_match(headers: &axum::http::HeaderMap, value: &Value) -> Result<(), ApiError> {
+    if let Some(expected) = headers.get(axum::http::header::IF_MATCH) {
+        let expected = expected.to_str().map_err(|_| ApiError::bad_request("If-Match must be a valid ETag"))?;
+        let expected = expected.split(',').map(str::trim).collect::<Vec<_>>();
+        if !expected.contains(&"*") && !expected.contains(&etag_for(value).as_str()) {
+            return Err(ApiError::new(StatusCode::PRECONDITION_FAILED, "ETag does not match current resource"));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn etag_response(value: Value) -> Response {
+    let etag = etag_for(&value);
+    let mut response = Json(value).into_response();
+    response.headers_mut().insert(axum::http::header::ETAG, axum::http::HeaderValue::from_str(&etag).expect("ETag is valid header value"));
+    response
+}
+
+#[cfg(test)]
+mod etag_tests {
+    use super::*;
+
+    #[test]
+    fn if_match_is_optional_and_rejects_stale_tags() {
+        let value = json!({"name":"project"});
+        assert!(check_if_match(&axum::http::HeaderMap::new(), &value).is_ok());
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(axum::http::header::IF_MATCH, "\"stale\"".parse().unwrap());
+        assert_eq!(check_if_match(&headers, &value).unwrap_err().status, StatusCode::PRECONDITION_FAILED);
+        headers.insert(axum::http::header::IF_MATCH, etag_for(&value).parse().unwrap());
+        assert!(check_if_match(&headers, &value).is_ok());
+        headers.insert(axum::http::header::IF_MATCH, "*".parse().unwrap());
+        assert!(check_if_match(&headers, &value).is_ok());
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     store: Store,
@@ -152,6 +194,7 @@ pub fn router(state: AppState) -> Router {
             "/v3/projects/{project_id}/nodes",
             get(topology_listing::list_nodes).post(node_templates::create_node),
         )
+        .route("/v3/projects/{project_id}/nodes/batch", post(batch_create::create_nodes))
         .route(
             "/v3/projects/{project_id}/templates/{template_id}",
             post(node_templates::create_node_from_template),
@@ -179,6 +222,10 @@ pub fn router(state: AppState) -> Router {
             post(node_lifecycle::suspend_node),
         )
         .route(
+            "/v3/projects/{project_id}/nodes/{node_id}/pause",
+            post(node_lifecycle::suspend_node),
+        )
+        .route(
             "/v3/projects/{project_id}/nodes/{node_id}/reload",
             post(node_lifecycle::reload_node),
         )
@@ -186,6 +233,7 @@ pub fn router(state: AppState) -> Router {
             "/v3/projects/{project_id}/links",
             get(topology_listing::list_links).post(link_create::create_link),
         )
+        .route("/v3/projects/{project_id}/links/batch", post(batch_create::create_links))
         .route(
             "/v3/projects/{project_id}/links/{link_id}",
             get(link_details::get_link)
@@ -329,6 +377,7 @@ mod node_handlers;
 mod node_lifecycle;
 mod node_runtime;
 mod node_templates;
+mod batch_create;
 mod notifications;
 mod objects;
 mod project_store;
@@ -460,7 +509,7 @@ async fn validate_link_in_tx(
         .fetch_one(&mut **tx)
         .await?;
         if occupied != 0 {
-            return Err(ApiError::conflict(format!(
+            return Err(ApiError::port_in_use(format!(
                 "Port {adapter_number}/{port_number} on node {node_id} is already linked"
             )));
         }

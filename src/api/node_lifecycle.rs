@@ -1,5 +1,41 @@
 use super::*;
 
+#[derive(Default, Deserialize)]
+pub(super) struct LifecycleQuery {
+    wait: Option<bool>,
+    timeout: Option<u64>,
+}
+
+async fn lifecycle_with_wait(
+    state: AppState,
+    project_id: Uuid,
+    node_id: Uuid,
+    action: NodeAction,
+    options: LifecycleQuery,
+) -> Result<Json<Value>, ApiError> {
+    let response = change_node_runtime_state(state.clone(), project_id, node_id, action).await?.0;
+    if !options.wait.unwrap_or(false) { return Ok(Json(response)); }
+    let seconds = options.timeout.unwrap_or(240);
+    if !(1..=3600).contains(&seconds) {
+        return Err(ApiError::bad_request("timeout must be between 1 and 3600 seconds"));
+    }
+    let target = match action {
+        NodeAction::Start | NodeAction::Reload => "started",
+        NodeAction::Stop => "stopped",
+        NodeAction::Suspend => "suspended",
+    };
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    loop {
+        let nodes = refresh_node_statuses(&state, &project_id.to_string(), vec![response.clone()]).await;
+        let node = nodes.into_iter().next().expect("node provided for status wait");
+        if node.get("status").and_then(Value::as_str) == Some(target) { return Ok(Json(node)); }
+        if Instant::now() >= deadline {
+            return Err(ApiError::new(StatusCode::REQUEST_TIMEOUT, format!("Timeout waiting for node status '{target}'")));
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+}
+
 pub(super) async fn delete_node(
     State(state): State<AppState>,
     Path((project_id, node_id)): Path<(Uuid, Uuid)>,
@@ -10,20 +46,23 @@ pub(super) async fn delete_node(
 pub(super) async fn start_node(
     State(state): State<AppState>,
     Path((project_id, node_id)): Path<(Uuid, Uuid)>,
+    Query(options): Query<LifecycleQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    change_node_runtime_state(state, project_id, node_id, NodeAction::Start).await
+    lifecycle_with_wait(state, project_id, node_id, NodeAction::Start, options).await
 }
 
 pub(super) async fn stop_node(
     State(state): State<AppState>,
     Path((project_id, node_id)): Path<(Uuid, Uuid)>,
+    Query(options): Query<LifecycleQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    change_node_runtime_state(state, project_id, node_id, NodeAction::Stop).await
+    lifecycle_with_wait(state, project_id, node_id, NodeAction::Stop, options).await
 }
 
 pub(super) async fn suspend_node(
     State(state): State<AppState>,
     Path((project_id, node_id)): Path<(Uuid, Uuid)>,
+    Query(options): Query<LifecycleQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let node = get_topology_object(
         state.store.pool(),
@@ -39,14 +78,15 @@ pub(super) async fn suspend_node(
             "VPCS nodes do not support suspend",
         ));
     }
-    change_node_runtime_state(state, project_id, node_id, NodeAction::Suspend).await
+    lifecycle_with_wait(state, project_id, node_id, NodeAction::Suspend, options).await
 }
 
 pub(super) async fn reload_node(
     State(state): State<AppState>,
     Path((project_id, node_id)): Path<(Uuid, Uuid)>,
+    Query(options): Query<LifecycleQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    change_node_runtime_state(state, project_id, node_id, NodeAction::Reload).await
+    lifecycle_with_wait(state, project_id, node_id, NodeAction::Reload, options).await
 }
 
 pub(super) async fn change_node_runtime_state(

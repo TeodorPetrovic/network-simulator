@@ -60,7 +60,7 @@ pub(super) async fn create_topology_object(
     project_id: &str,
     kind: &str,
     id_field: &str,
-    value: Value,
+    mut value: Value,
 ) -> Result<Response, ApiError> {
     let object = value
         .as_object()
@@ -70,7 +70,7 @@ pub(super) async fn create_topology_object(
         .and_then(Value::as_str)
         .expect("create handlers fill generated IDs")
         .to_owned();
-    let name = object
+    let mut name = object
         .get("name")
         .and_then(Value::as_str)
         .map(str::to_owned);
@@ -89,6 +89,28 @@ pub(super) async fn create_topology_object(
         let value = decode_json(row.get::<String, _>("object_json"))?;
         tx.commit().await?;
         return Ok(Json(value).into_response());
+    }
+    if kind == "node" {
+        let strict_names = value.get("strict_names").and_then(Value::as_bool).unwrap_or(false);
+        if let Some(base_name) = name.clone() {
+            let duplicate: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM topology_objects WHERE project_id=? AND kind='node' AND name=?)")
+                .bind(project_id).bind(&base_name).fetch_one(&mut *tx).await?;
+            if duplicate != 0 && strict_names {
+                return Err(ApiError::conflict(format!("Node name '{base_name}' is already used")));
+            }
+            if duplicate != 0 {
+                let split = base_name.trim_end_matches(|ch: char| ch.is_ascii_digit()).len();
+                let prefix = &base_name[..split];
+                let initial = base_name[split..].parse::<u64>().unwrap_or(0) + 1;
+                for suffix in initial..=u64::MAX {
+                    let candidate = format!("{prefix}{suffix}");
+                    let used: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM topology_objects WHERE project_id=? AND kind='node' AND name=?)")
+                        .bind(project_id).bind(&candidate).fetch_one(&mut *tx).await?;
+                    if used == 0 { name = Some(candidate.clone()); if let Some(object) = value.as_object_mut() { object.insert("name".into(), json!(candidate)); } break; }
+                }
+            }
+        }
+        if let Some(object) = value.as_object_mut() { object.remove("strict_names"); }
     }
     if kind == "link" {
         validate_link_in_tx(&mut tx, project_id, &value).await?;

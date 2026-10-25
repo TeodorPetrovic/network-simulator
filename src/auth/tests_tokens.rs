@@ -19,6 +19,8 @@ async fn refresh_tokens_rotate_once_and_reuse_revokes_the_family() {
     assert_eq!(login.status(), StatusCode::OK);
     let login: Value =
         serde_json::from_slice(&to_bytes(login.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(login["expires_in"], ACCESS_TTL);
+    assert_eq!(login["refresh_expires_in"], REFRESH_TTL);
     let original = login["refresh_token"].as_str().unwrap().to_owned();
     let claims = decode_token(&original, "test-signing-key").unwrap();
     assert_eq!(claims.exp - claims.iat, REFRESH_TTL);
@@ -36,6 +38,8 @@ async fn refresh_tokens_rotate_once_and_reuse_revokes_the_family() {
     assert_eq!(rotated.status(), StatusCode::OK);
     let rotated: Value =
         serde_json::from_slice(&to_bytes(rotated.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(rotated["expires_in"], ACCESS_TTL);
+    assert_eq!(rotated["refresh_expires_in"], REFRESH_TTL);
     let replacement = rotated["refresh_token"].as_str().unwrap().to_owned();
     assert_ne!(replacement, original);
 

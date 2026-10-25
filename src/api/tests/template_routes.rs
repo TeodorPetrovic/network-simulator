@@ -9,6 +9,10 @@ async fn templates_create_nodes_with_real_runtime_lifecycle_routes() {
     assert!(templates.as_array().unwrap().iter().any(|template| {
         template["template_type"] == "vpcs" && template["name"] == "VPCS"
     }));
+    let (filtered_status, filtered) = request(&app, Method::GET, "/v3/templates?name=VPCS".into(), None).await;
+    assert_eq!(filtered_status, StatusCode::OK);
+    assert_eq!(filtered.as_array().unwrap().len(), 1);
+    assert_eq!(filtered[0]["name"], "VPCS");
     let template = templates
         .as_array()
         .unwrap()
@@ -351,4 +355,24 @@ async fn builtin_templates_create_persistent_nodes_with_gns3_ports() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(nodes.as_array().unwrap().len(), 1);
     assert_eq!(nodes[0]["node_id"], switch["node_id"]);
+}
+
+#[tokio::test]
+async fn node_batch_obeys_strict_names_and_continues_after_conflict() {
+    let (app, _directory) = test_router().await;
+    let (_, project) = request(&app, Method::POST, "/v3/projects".into(), Some(serde_json::json!({"name":"Batch lab"}))).await;
+    let project_id = project["project_id"].as_str().unwrap();
+    let (status, results) = request(&app, Method::POST, format!("/v3/projects/{project_id}/nodes/batch"), Some(serde_json::json!([
+        {"node_type":"ethernet_switch","name":"SW1"},
+        {"node_type":"ethernet_switch","name":"SW1","strict_names":true},
+        {"node_type":"ethernet_switch","name":"SW2"},
+        {"node_type":"ethernet_switch","name":"SW1"}
+    ]))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(results[0]["status_code"], 201);
+    assert_eq!(results[1]["status_code"], 409);
+    assert_eq!(results[2]["status_code"], 201);
+    assert_eq!(results[3]["status_code"], 201);
+    assert_eq!(results[3]["node"]["name"], "SW3");
+    assert_eq!(results[1]["error"]["code"], "conflict");
 }

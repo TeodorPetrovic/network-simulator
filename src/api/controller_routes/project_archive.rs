@@ -94,6 +94,7 @@ pub(super) async fn import_project(
     State(state): State<AppState>,
     AxumPath(project_id): AxumPath<Uuid>,
     Query(query): Query<HashMap<String, String>>,
+    principal: Option<axum::Extension<auth::Principal>>,
     request: Request,
 ) -> Result<Response, ApiError> {
     let bytes = to_bytes(request.into_body(), 64 * 1024 * 1024)
@@ -115,6 +116,13 @@ pub(super) async fn import_project(
     project["path"] = Value::Null;
     project["status"] = json!("opened");
     project["locked"] = json!(false);
+    if let Some(axum::Extension(principal)) = principal {
+        let username: String = sqlx::query_scalar("SELECT username FROM auth_users WHERE user_id=?")
+            .bind(principal.user_id)
+            .fetch_one(state.store.pool())
+            .await?;
+        project["created_by"] = json!(username);
+    }
     let image_map = install_imported_project_images(&images)?;
     remap_imported_project_images(&mut project, &image_map);
     regenerate_imported_project_ids(&mut project, &project_id.to_string());

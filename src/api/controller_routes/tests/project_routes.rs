@@ -257,6 +257,7 @@ async fn project_stats_lock_snapshots_files_export_import_and_duplicate_work_ove
         .await,
     )
     .await;
+    assert!(snapshot["created"].as_str().is_some_and(|value| value.contains('T')));
     let snapshot_id = snapshot["snapshot_id"].as_str().unwrap();
     assert_eq!(
         json_body(

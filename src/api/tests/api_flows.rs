@@ -1,4 +1,18 @@
 use super::*;
+use serde_json::json;
+
+#[tokio::test]
+async fn list_name_filters_match_exactly() {
+    let (app, _directory) = test_router().await;
+    for name in ["Exact", "Exact copy"] {
+        let (status, _) = request(&app, Method::POST, "/v3/projects".into(), Some(json!({"name":name}))).await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+    let (status, projects) = request(&app, Method::GET, "/v3/projects?name=Exact".into(), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(projects.as_array().unwrap().len(), 1);
+    assert_eq!(projects[0]["name"], "Exact");
+}
 
 #[tokio::test]
 async fn project_operation_locks_serialize_one_project_without_blocking_another() {
@@ -170,8 +184,8 @@ async fn v3_topology_flow_persists_snapshot_and_cascades_node_links() {
     assert_eq!(status, StatusCode::CREATED);
 
     let endpoints = serde_json::json!([
-        { "node_id": node_a["node_id"], "adapter_number": 0, "port_number": 0, "label": { "text": "A" } },
-        { "node_id": node_b["node_id"], "adapter_number": 0, "port_number": 0, "label": { "text": "B" } }
+        { "node_id": node_a["node_id"], "adapter_number": 0, "port_number": "auto", "label": { "text": "A" } },
+        { "node_id": node_b["node_id"], "adapter_number": 0, "port_number": "auto", "label": { "text": "B" } }
     ]);
     let (status, error) = request(
         &app,
@@ -231,15 +245,20 @@ async fn v3_topology_flow_persists_snapshot_and_cascades_node_links() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 
+    let occupied_endpoints = serde_json::json!([
+        {"node_id":node_a["node_id"],"adapter_number":0,"port_number":0},
+        {"node_id":node_b["node_id"],"adapter_number":0,"port_number":0}
+    ]);
     let (status, conflict) = request(
         &app,
         Method::POST,
         format!("/v3/projects/{project_id}/links"),
-        Some(serde_json::json!({ "nodes": endpoints })),
+        Some(serde_json::json!({ "nodes": occupied_endpoints })),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert!(conflict["message"].is_string());
+    assert_eq!(conflict["code"], "port_in_use");
 
     let (status, snapshot) = request(
         &app,
