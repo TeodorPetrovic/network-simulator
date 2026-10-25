@@ -3,7 +3,7 @@ use super::*;
 pub(super) async fn get_node(
     State(state): State<AppState>,
     Path((project_id, node_id)): Path<(Uuid, Uuid)>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     let project_id = project_id.to_string();
     let node = get_topology_object(
         state.store.pool(),
@@ -14,14 +14,17 @@ pub(super) async fn get_node(
     .await?
     .0;
     let mut nodes = refresh_node_statuses(&state, &project_id, vec![node]).await;
-    Ok(Json(nodes.pop().expect("the requested node was provided")))
+    Ok(etag_response(nodes.pop().expect("the requested node was provided")))
 }
 
 pub(super) async fn update_node(
     State(state): State<AppState>,
     Path((project_id, node_id)): Path<(Uuid, Uuid)>,
+    headers: axum::http::HeaderMap,
     Json(patch): Json<Value>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
+    let current = get_topology_object(state.store.pool(), &project_id.to_string(), "node", &node_id.to_string()).await?.0;
+    check_if_match(&headers, &current)?;
     if let Some(idle_pc) = patch.get("idlepc").and_then(Value::as_str) {
         let node = get_topology_object(
             state.store.pool(),
@@ -43,7 +46,7 @@ pub(super) async fn update_node(
                 .map_err(runtime_api_error)?;
         }
     }
-    update_topology_object(
+    let updated = update_topology_object(
         state,
         project_id.to_string(),
         node_id.to_string(),
@@ -51,7 +54,8 @@ pub(super) async fn update_node(
         "node_id",
         patch,
     )
-    .await
+    .await?;
+    Ok(etag_response(updated.0))
 }
 
 pub(super) async fn update_node_configuration(

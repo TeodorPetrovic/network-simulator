@@ -3,27 +3,30 @@ use super::*;
 pub(super) async fn get_link(
     State(state): State<AppState>,
     Path((project_id, link_id)): Path<(Uuid, Uuid)>,
-) -> Result<Json<Value>, ApiError> {
-    get_topology_object(
+) -> Result<Response, ApiError> {
+    let value = get_topology_object(
         state.store.pool(),
         &project_id.to_string(),
         "link",
         &link_id.to_string(),
     )
-    .await
+    .await?.0;
+    Ok(etag_response(value))
 }
 
 pub(super) async fn update_link(
     State(state): State<AppState>,
     Path((project_id, link_id)): Path<(Uuid, Uuid)>,
+    headers: axum::http::HeaderMap,
     Json(patch): Json<Value>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     let project_id = project_id.to_string();
     let link_id = link_id.to_string();
     let _project_lock = state.lock_project_operations(&project_id).await;
     let current = get_topology_object(state.store.pool(), &project_id, "link", &link_id)
         .await?
         .0;
+    check_if_match(&headers, &current)?;
     let patch = normalize_link_update(&current, patch)?;
     let mut candidate = current.clone();
     if let (Some(candidate), Some(patch)) = (candidate.as_object_mut(), patch.as_object()) {
@@ -54,7 +57,8 @@ pub(super) async fn update_link(
             .await?;
         }
     }
-    update_topology_object(state, project_id, link_id, "link", "link_id", patch).await
+    let updated = update_topology_object(state, project_id, link_id, "link", "link_id", patch).await?;
+    Ok(etag_response(updated.0))
 }
 
 pub(super) fn normalize_link_update(current: &Value, patch: Value) -> Result<Value, ApiError> {

@@ -17,6 +17,7 @@ use axum::{
     routing::{any, get, post, put},
 };
 use futures_util::{SinkExt, StreamExt};
+use md5::Digest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sqlx::{Row, SqlitePool};
@@ -56,6 +57,43 @@ const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_DYNAMIPS_IMAGE_BYTES: usize = 512 * 1024 * 1024;
 const MAX_QEMU_IMAGE_BYTES: usize = 64 * 1024 * 1024 * 1024;
 const EVENT_PAGE_SIZE: i64 = 512;
+
+pub(super) fn etag_for(value: &Value) -> String {
+    format!("\"{:x}\"", md5::Md5::digest(value.to_string()))
+}
+
+pub(super) fn check_if_match(headers: &axum::http::HeaderMap, value: &Value) -> Result<(), ApiError> {
+    if let Some(expected) = headers.get(axum::http::header::IF_MATCH) {
+        let expected = expected.to_str().map_err(|_| ApiError::bad_request("If-Match must be a valid ETag"))?;
+        if expected != etag_for(value) {
+            return Err(ApiError::new(StatusCode::PRECONDITION_FAILED, "ETag does not match current resource"));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn etag_response(value: Value) -> Response {
+    let etag = etag_for(&value);
+    let mut response = Json(value).into_response();
+    response.headers_mut().insert(axum::http::header::ETAG, axum::http::HeaderValue::from_str(&etag).expect("ETag is valid header value"));
+    response
+}
+
+#[cfg(test)]
+mod etag_tests {
+    use super::*;
+
+    #[test]
+    fn if_match_is_optional_and_rejects_stale_tags() {
+        let value = json!({"name":"project"});
+        assert!(check_if_match(&axum::http::HeaderMap::new(), &value).is_ok());
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(axum::http::header::IF_MATCH, "\"stale\"".parse().unwrap());
+        assert_eq!(check_if_match(&headers, &value).unwrap_err().status, StatusCode::PRECONDITION_FAILED);
+        headers.insert(axum::http::header::IF_MATCH, etag_for(&value).parse().unwrap());
+        assert!(check_if_match(&headers, &value).is_ok());
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
