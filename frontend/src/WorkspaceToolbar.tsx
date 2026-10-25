@@ -71,10 +71,10 @@ export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, 
               <DropdownMenuItem onSelect={() => setSnapshotsOpen(true)}>Project snapshots…</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setLogOpen(true)}>Log console…</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setScreenshotOpen(true)}><Camera />Take a screenshot…</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setHelpOpen(true)}><HelpCircle />Map shortcuts</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setInfoOpen(true)}>Project information…</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          <Button variant="outline" size="icon" aria-label="Map shortcuts" title="Map shortcuts" onClick={() => setHelpOpen(true)}><HelpCircle /></Button>
           <Button variant="outline" onClick={props.onOpenMarketplace}><Search />Image catalog</Button>
           <Button variant="outline" onClick={props.onOpenApplianceManager}><Settings2 />Appliances</Button>
         </div>
