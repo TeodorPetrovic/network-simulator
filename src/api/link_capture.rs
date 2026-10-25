@@ -28,6 +28,11 @@ pub(super) async fn start_link_capture(
     if link["capturing"].as_bool().unwrap_or(false) {
         return Err(ApiError::conflict("Link capture is already active"));
     }
+    let wireshark_subnet = if request.wireshark {
+        Some(configure_web_wireshark(&state).await?)
+    } else {
+        None
+    };
     let file_name = safe_capture_file_name(
         request
             .capture_file_name
@@ -71,20 +76,43 @@ pub(super) async fn start_link_capture(
         "wireshark": false
     });
     if request.wireshark {
+        let active = update_topology_object(
+            state.clone(),
+            project_id.clone(),
+            link_id.clone(),
+            "link",
+            "link_id",
+            patch.clone(),
+        )
+        .await?;
         let path = format!("/v3/projects/{project_id}/links/{link_id}/capture/stream");
         let ticket = crate::api::auth::mint_capture_ticket(state.store.pool(), &principal, &path)
             .await
             .map_err(|error| ApiError::new(StatusCode::FORBIDDEN, error))?;
-        let gateway = docker_gateway("172.31.0.0/22");
+        let gateway = docker_gateway(wireshark_subnet.as_deref().unwrap_or("172.31.0.0/22"));
         let stream_url = format!(
             "http://{gateway}:{}/v3/projects/{project_id}/links/{link_id}/capture/stream?ticket={ticket}",
             state.bind_address.port()
         );
-        let (_, _) = state
+        let session_result = state
             .web_wireshark
             .start_session(&project_id, &link_id, &stream_url)
-            .await
-            .map_err(|error| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+            .await;
+        if let Err(error) = session_result {
+            let _ = LinkEngine::new(state.ubridge.clone())
+                .stop_capture(&endpoint)
+                .await;
+            let _ = update_topology_object(
+                state.clone(),
+                project_id,
+                link_id,
+                "link",
+                "link_id",
+                json!({"capturing":false,"capture_endpoint_id":null}),
+            )
+            .await;
+            return Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, error));
+        }
         let ws_url = format!(
             "ws://{}/v3/projects/{project_id}/links/{link_id}/capture/web-wireshark",
             state.bind_address
@@ -96,7 +124,7 @@ pub(super) async fn start_link_capture(
             link_id.clone(),
             "link",
             "link_id",
-            patch,
+            json!({"wireshark":true}),
         )
         .await?;
         let mut tx = state.store.begin_write().await?;
@@ -109,6 +137,7 @@ pub(super) async fn start_link_capture(
         .await?;
         tx.commit().await?;
         state.store.publish(event);
+        let _ = active;
         return Ok((StatusCode::CREATED, updated).into_response());
     }
     let updated =
@@ -183,6 +212,7 @@ pub(super) async fn restart_web_wireshark(
     if !link["capturing"].as_bool().unwrap_or(false) {
         return Err(ApiError::conflict("This link has no active packet capture"));
     }
+    let subnet = configure_web_wireshark(&state).await?;
     let file = link["capture_file_name"]
         .as_str()
         .ok_or_else(|| ApiError::not_found("Link has no capture file name"))?;
@@ -194,7 +224,7 @@ pub(super) async fn restart_web_wireshark(
     let ticket = crate::api::auth::mint_capture_ticket(state.store.pool(), &principal, &stream)
         .await
         .map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e))?;
-    let gateway = docker_gateway("172.31.0.0/22");
+    let gateway = docker_gateway(&subnet);
     let stream_url = format!(
         "http://{gateway}:{}/v3/projects/{project_id}/links/{link_id}/capture/stream?ticket={ticket}",
         state.bind_address.port()
@@ -311,6 +341,51 @@ fn docker_gateway(cidr: &str) -> String {
         octets[2],
         octets[3].saturating_add(1)
     )
+}
+
+async fn configure_web_wireshark(state: &AppState) -> Result<String, ApiError> {
+    let stored: String =
+        sqlx::query_scalar("SELECT settings_json FROM controller_settings WHERE singleton = 1")
+            .fetch_one(state.store.pool())
+            .await?;
+    let settings = decode_json(stored)?;
+    let section = settings
+        .get("WebWireshark")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    if section.get("enabled").and_then(Value::as_bool) == Some(false) {
+        return Err(ApiError::new(
+            StatusCode::NOT_IMPLEMENTED,
+            "Web Wireshark is disabled in controller settings",
+        ));
+    }
+    let image = section
+        .get("image")
+        .and_then(Value::as_str)
+        .unwrap_or("gns3/web-wireshark:latest")
+        .to_owned();
+    let subnet = section
+        .get("network_subnet")
+        .and_then(Value::as_str)
+        .unwrap_or("172.31.0.0/22")
+        .to_owned();
+    let memory = section
+        .get("memory")
+        .and_then(Value::as_str)
+        .unwrap_or("2g")
+        .to_owned();
+    let cpus = section
+        .get("cpus")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "1.0".to_owned());
+    let pids_limit = section
+        .get("pids_limit")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "1000".to_owned());
+    state
+        .web_wireshark
+        .configure(image, subnet.clone(), memory, cpus, pids_limit);
+    Ok(subnet)
 }
 
 pub(super) async fn link_capture_response(

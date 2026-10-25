@@ -63,16 +63,29 @@ impl SessionAllocator {
 #[derive(Clone)]
 pub struct WebWiresharkManager {
     allocator: SessionAllocator,
+    config: std::sync::Arc<std::sync::RwLock<ManagerSettings>>,
+}
+
+#[derive(Clone)]
+struct ManagerSettings {
     image: String,
     subnet: String,
+    memory: String,
+    cpus: String,
+    pids_limit: String,
 }
 
 impl Default for WebWiresharkManager {
     fn default() -> Self {
         Self {
             allocator: SessionAllocator::default(),
-            image: "gns3/web-wireshark:latest".into(),
-            subnet: "172.31.0.0/22".into(),
+            config: std::sync::Arc::new(std::sync::RwLock::new(ManagerSettings {
+                image: "gns3/web-wireshark:latest".into(),
+                subnet: "172.31.0.0/22".into(),
+                memory: "2g".into(),
+                cpus: "1.0".into(),
+                pids_limit: "1000".into(),
+            })),
         }
     }
 }
@@ -81,8 +94,31 @@ impl WebWiresharkManager {
     pub fn container_name(project_id: &str) -> String {
         format!("gns3-wireshark-{project_id}")
     }
+    pub fn configure(
+        &self,
+        image: String,
+        subnet: String,
+        memory: String,
+        cpus: String,
+        pids_limit: String,
+    ) {
+        if let Ok(mut config) = self.config.write() {
+            *config = ManagerSettings {
+                image,
+                subnet,
+                memory,
+                cpus,
+                pids_limit,
+            };
+        }
+    }
     pub async fn ensure_image(&self) -> Result<(), String> {
-        if docker(&["pull", &self.image]).await.is_ok() {
+        let config = self
+            .config
+            .read()
+            .map_err(|_| "Web Wireshark settings unavailable")?
+            .clone();
+        if docker(&["pull", &config.image]).await.is_ok() {
             return Ok(());
         }
         let dockerfile =
@@ -90,7 +126,7 @@ impl WebWiresharkManager {
         docker(&[
             "build",
             "-t",
-            &self.image,
+            &config.image,
             "-f",
             dockerfile
                 .join("Dockerfile")
@@ -103,6 +139,11 @@ impl WebWiresharkManager {
     }
     pub async fn ensure_container(&self, project_id: &str) -> Result<(String, String), String> {
         self.ensure_image().await?;
+        let config = self
+            .config
+            .read()
+            .map_err(|_| "Web Wireshark settings unavailable")?
+            .clone();
         let name = Self::container_name(project_id);
         if let Ok(output) = docker(&[
             "inspect",
@@ -117,6 +158,17 @@ impl WebWiresharkManager {
             let ip = values.next().unwrap_or("").to_owned();
             if !running {
                 docker(&["start", &name]).await?;
+                let ip = docker(&[
+                    "inspect",
+                    "-f",
+                    "{{(index .NetworkSettings.Networks \"gns3-wireshark\").IPAddress}}",
+                    &name,
+                ])
+                .await?;
+                if !ip.is_empty() {
+                    self.rebuild_allocations(&name, project_id).await;
+                    return Ok((name, ip));
+                }
             }
             if !ip.is_empty() {
                 self.rebuild_allocations(&name, project_id).await;
@@ -129,7 +181,7 @@ impl WebWiresharkManager {
                 "create",
                 "--driver",
                 "bridge",
-                &format!("--subnet={}", self.subnet),
+                &format!("--subnet={}", config.subnet),
                 NETWORK,
             ])
             .await?;
@@ -145,12 +197,12 @@ impl WebWiresharkManager {
             "--network",
             NETWORK,
             "--memory",
-            "2g",
+            &config.memory,
             "--cpus",
-            "1.0",
+            &config.cpus,
             "--pids-limit",
-            "1000",
-            &self.image,
+            &config.pids_limit,
+            &config.image,
         ])
         .await?;
         let ip = docker(&[
@@ -186,6 +238,17 @@ impl WebWiresharkManager {
             args[index] = format!("--session-name=link-{link_id}");
         }
         docker(&args.iter().map(String::as_str).collect::<Vec<_>>()).await?;
+        docker(&[
+            "exec",
+            &container,
+            "sh",
+            "-lc",
+            &format!(
+                "mkdir -p /tmp/gns3-wireshark-sessions && printf '{} {} {}\\n' > /tmp/gns3-wireshark-sessions/{}",
+                link_id, session.display, session.port, session.display
+            ),
+        ])
+        .await?;
         let stream = format!(
             "curl -N '{}' | wireshark -i - -k --fullscreen -display :{} &",
             stream_url.replace('\'', "'\\''"),
@@ -220,6 +283,14 @@ impl WebWiresharkManager {
         for command in cleanup_commands(session.display) {
             let _ = docker(&["exec", &name, "sh", "-lc", &command]).await;
         }
+        let _ = docker(&[
+            "exec",
+            &name,
+            "rm",
+            "-f",
+            &format!("/tmp/gns3-wireshark-sessions/{}", session.display),
+        ])
+        .await;
         self.allocator.release(&key);
         let manager = self.clone();
         let project = project_id.to_owned();
@@ -270,11 +341,32 @@ impl WebWiresharkManager {
             // `xpra list` is authoritative for live displays. It does not expose the
             // custom session name consistently across xpra releases, so reserve the
             // display under a synthetic key to prevent allocator collisions.
+            let mapping = docker(&[
+                "exec",
+                container,
+                "cat",
+                &format!("/tmp/gns3-wireshark-sessions/{display}"),
+            ])
+            .await
+            .unwrap_or_default();
+            let mut fields = mapping.split_whitespace();
+            let link_id = fields
+                .next()
+                .unwrap_or(&format!("recovered-{display}"))
+                .to_owned();
+            let mapped_display = fields
+                .next()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(display);
+            let port = fields
+                .next()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(display);
             self.allocator.reserve(
-                &format!("{project_id}/recovered-{display}"),
+                &format!("{project_id}/{link_id}"),
                 XpraSession {
-                    display,
-                    port: display,
+                    display: mapped_display,
+                    port,
                 },
             );
         }
