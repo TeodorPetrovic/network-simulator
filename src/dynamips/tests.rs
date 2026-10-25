@@ -149,6 +149,34 @@ fn imported_dynamips_runtime_fields_must_match_controller_state() {
 }
 
 #[test]
+fn dynamips_runtime_accepts_canonical_paths_from_relative_state_dir() {
+    let relative_state = PathBuf::from(format!(".dynamips-relative-state-{}", Uuid::new_v4()));
+    let image_dir = std::env::temp_dir().join(format!("dynamips-images-{}", Uuid::new_v4()));
+    fs::create_dir_all(&image_dir).unwrap();
+    let image = image_dir.join("router.image");
+    fs::write(&image, [0x7f, b'E', b'L', b'F', 1, 2, 1, 0]).unwrap();
+    let project_id = Uuid::new_v4();
+    let node_id = Uuid::new_v4();
+    let runtime = DynamipsRuntime::with_paths("dynamips", &image_dir, &relative_state);
+    let working_dir = resolve_working_dir(&relative_state.join(project_id.to_string()).join(node_id.to_string())).unwrap();
+    let manifest = runtime_manifest_contents(&project_id, &node_id, 7200, 7201, None);
+    fs::write(working_dir.join(RUNTIME_MANIFEST_FILE), manifest).unwrap();
+    let node = json!({
+        "project_id": project_id, "node_id": node_id, "name": "R1", "platform": "c7200",
+        "slot0": "C7200-IO-FE", "image": image, "ram": 256, "nvram": 128,
+        "console": 7201, "aux": null, "runtime_hypervisor_port": 7200,
+        "runtime_working_dir": working_dir, "runtime_log_file": working_dir.join("dynamips_stdout.log"),
+        "runtime_ghost_file": null
+    });
+    assert!(runtime.vm_from_node(&node).is_ok());
+    let mut outside = node.clone();
+    outside["runtime_working_dir"] = json!(std::env::temp_dir().join("outside-runtime"));
+    assert!(runtime.vm_from_node(&outside).is_err());
+    fs::remove_dir_all(&relative_state).unwrap();
+    fs::remove_dir_all(&image_dir).unwrap();
+}
+
+#[test]
 fn upload_names_cannot_escape_or_overwrite_the_image_directory() {
     assert_eq!(safe_file_name("router.image").unwrap(), "router.image");
     assert!(safe_file_name("../router.image").is_err());
