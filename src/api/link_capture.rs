@@ -107,10 +107,7 @@ pub(super) async fn start_link_capture(
             .await;
             return Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, error));
         }
-        let ws_url = format!(
-            "ws://{}/v3/projects/{project_id}/links/{link_id}/capture/web-wireshark",
-            state.bind_address
-        );
+        let ws_path = format!("/v3/projects/{project_id}/links/{link_id}/capture/web-wireshark");
         patch["wireshark"] = json!(true);
         let updated = update_topology_object(
             state.clone(),
@@ -118,7 +115,7 @@ pub(super) async fn start_link_capture(
             link_id.clone(),
             "link",
             "link_id",
-            json!({"wireshark":true}),
+            json!({"wireshark":true,"ws_path":ws_path.clone()}),
         )
         .await?;
         let mut tx = state.store.begin_write().await?;
@@ -126,7 +123,7 @@ pub(super) async fn start_link_capture(
             &mut tx,
             &project_id,
             "link.web_wireshark_started",
-            &json!({"link_id":link_id,"ws_url":ws_url}),
+            &json!({"link_id":link_id,"ws_path":ws_path}),
         )
         .await?;
         tx.commit().await?;
@@ -172,7 +169,7 @@ pub(super) async fn stop_link_capture(
         link_id,
         "link",
         "link_id",
-        json!({ "capturing": false, "capture_endpoint_id": null, "wireshark": false }),
+        json!({ "capturing": false, "capture_endpoint_id": null, "wireshark": false, "ws_path": null }),
     )
     .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -223,11 +220,8 @@ pub(super) async fn restart_web_wireshark(
         )
         .await
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let ws_url = format!(
-        "ws://{}/v3/projects/{project_id}/links/{link_id}/capture/web-wireshark",
-        state.bind_address
-    );
-    Ok(Json(json!({"ws_url":ws_url})))
+    let ws_path = format!("/v3/projects/{project_id}/links/{link_id}/capture/web-wireshark");
+    Ok(Json(json!({"ws_path":ws_path})))
 }
 
 pub(super) async fn web_wireshark_websocket(
