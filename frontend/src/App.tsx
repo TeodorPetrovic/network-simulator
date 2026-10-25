@@ -227,9 +227,19 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
 
   function selectPort(endpoint: LinkEndpoint) {
     if (!connecting) return;
-    setLinkEndpoints((current) => current.some((item) => samePort(item, endpoint))
-      ? current.filter((item) => !samePort(item, endpoint))
-      : [...current, endpoint]);
+    const first = linkEndpoints[0];
+    if (first && !samePort(first, endpoint)) {
+      if (!projectId) return;
+      void api.createLink(projectId, [first, endpoint]).then((link) => {
+        setTopology((current) => current ? { ...current, links: upsertLink(current.links, link) } : current);
+        setSelection({ kind: "link", id: link.link_id });
+        setLinkEndpoints([]);
+        setConnecting(false);
+        setNotice(`Ethernet segment created with ${link.nodes.length} endpoints`);
+      }).catch((reason) => setError(errorMessage(reason)));
+    } else if (first && samePort(first, endpoint)) {
+      setLinkEndpoints([]);
+    } else setLinkEndpoints([endpoint]);
     setSelection({ kind: "node", id: endpoint.node_id });
   }
 

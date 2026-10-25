@@ -10,7 +10,7 @@ export function ProjectStatusBar({ topology, projectLocked, connecting, linkEndp
   return (
                   <div className="sim-map-status">
                     <div className="sim-map-count"><span className="sim-live-dot" />{topology.nodes.length} devices <span aria-hidden="true">·</span> {topology.links.length} links{projectLocked ? <><span aria-hidden="true">·</span><Lock size={12} />Locked</> : null}</div>
-                    {connecting && <div className="sim-link-hint"><Cable size={14} /><span>Select ports to build a link.</span><Badge variant="secondary">{linkEndpointCount} selected</Badge></div>}
+                    {connecting && <div className="sim-link-hint"><Cable size={14} /><span>{linkEndpointCount ? "First end selected. Right-click another device and choose a port. Press Escape to cancel." : "Right-click a device and choose a port. Press Escape to cancel."}</span><Badge variant="secondary">{linkEndpointCount ? "1 of 2" : "0 of 2"}</Badge></div>}
                     {pendingDrawing && <div className="sim-link-hint"><Pencil size={14} /><span>Click to place {pendingDrawing.tool}.</span><Button size="xs" variant="ghost" onClick={() => onCancelDrawing}>Cancel</Button></div>}
                   </div>
   );
