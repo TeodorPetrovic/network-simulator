@@ -134,6 +134,7 @@ entries are commented out in the template.
 | `NETWORK_SIMULATOR_TEST_DOCKER` | Test-only Docker CLI override for ignored runtime tests. |
 | `NETWORK_SIMULATOR_TEST_DOCKER_IMAGE` | Test-only Docker image used by ignored integration tests. |
 | `NETWORK_SIMULATOR_TEST_DYNAMIPS` | Test-only Dynamips executable for ignored integration tests. |
+| `NETWORK_SIMULATOR_TEST_PLATFORMS` | Comma-separated Dynamips families to boot in the ignored live lab (for example, `c3725,c7200`). |
 | `NETWORK_SIMULATOR_TEST_QEMU` | Test-only QEMU executable for ignored integration tests. |
 | `NETWORK_SIMULATOR_TEST_QEMU_IMG` | Test-only `qemu-img` executable for ignored integration tests. |
 | `NETWORK_SIMULATOR_TEST_QMP_PIDFILE` | Test fixture path used by the QMP subprocess test. |

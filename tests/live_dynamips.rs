@@ -60,6 +60,16 @@ fn root_dynamips_logs(root: &std::path::Path) -> HashSet<String> {
 #[test]
 #[ignore = "boots licensed IOS images and requires Dynamips, VPCS, Docker, ubridge, and Node.js"]
 fn imported_ios_appliances_boot_and_route_a_live_lab() {
+    let platforms = std::env::var("NETWORK_SIMULATOR_TEST_PLATFORMS")
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|platform| !platform.is_empty())
+                .map(str::to_ascii_lowercase)
+                .collect::<HashSet<_>>()
+        });
     let data = tempfile::tempdir().expect("create isolated live-test state");
     let state = data.path().join("state");
     let ubridge_socket = state.join("ubridge/ubridge.sock");
@@ -87,6 +97,13 @@ fn imported_ios_appliances_boot_and_route_a_live_lab() {
         .env("NETWORK_SIMULATOR_UBRIDGE_STATE", state.join("ubridge"))
         .env("NETWORK_SIMULATOR_QEMU_STATE", state.join("qemu"))
         .env("NETWORK_SIMULATOR_CAPTURE_HOME", state.join("captures"))
+        .env(
+            "NETWORK_SIMULATOR_TEST_PLATFORMS",
+            platforms
+                .as_ref()
+                .map(|items| items.iter().cloned().collect::<Vec<_>>().join(","))
+                .unwrap_or_default(),
+        )
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(error_log))
         .spawn()
@@ -175,10 +192,16 @@ fn imported_ios_appliances_boot_and_route_a_live_lab() {
         result,
         "live IOS lab script failed; controller log:\n{log_contents}"
     );
-    assert!(
-        ubridge_was_running,
-        "live link lab did not start its isolated uBridge daemon"
-    );
+    if platforms.as_ref().is_none_or(|selected| {
+        ["c3725", "c7200", "c3620"]
+            .iter()
+            .all(|family| selected.contains(*family))
+    }) {
+        assert!(
+            ubridge_was_running,
+            "live link lab did not start its isolated uBridge daemon"
+        );
+    }
     assert!(
         controller_exited,
         "isolated controller did not complete graceful shutdown"

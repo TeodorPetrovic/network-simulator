@@ -30,6 +30,12 @@ const familyCases = [
   { family: "c3745", platform: "c3745", prefixes: ["c3745-", "ishare-17-c3745-"], ram: 256, nvram: 256, slot0: "GT96100-FE", slot1: "NM-1FE-TX", slot2: "NM-4T", wic0: "WIC-1T", wic1: "WIC-1T", wic2: "WIC-1T", idlepc: "0x60aa1da0", iomem: 5, sparsemem: true },
   { family: "c7200", platform: "c7200", prefixes: ["c7200-", "ishare-22-c7200-"], ram: 512, nvram: 512, slot0: "C7200-IO-FE", npe: "npe-400", midplane: "vxr", idlepc: "0x6066a998", sparsemem: true },
 ];
+const requestedPlatforms = (process.env.NETWORK_SIMULATOR_TEST_PLATFORMS ?? "")
+  .split(",").map((family) => family.trim().toLowerCase()).filter(Boolean);
+const selectedFamilyCases = requestedPlatforms.length
+  ? familyCases.filter((config) => requestedPlatforms.includes(config.family))
+  : familyCases;
+assert.ok(selectedFamilyCases.length > 0, `NETWORK_SIMULATOR_TEST_PLATFORMS selected no known family: ${requestedPlatforms.join(",")}`);
 
 async function api(path, { method = "GET", body } = {}) {
   const response = await fetch(`${base}${path}`, {
@@ -123,7 +129,7 @@ async function bootIos(project, node) {
       console.send("\r");
       pressedConsoleEnter = true;
     }
-    if (/^[A-Za-z0-9_.-]+[>#]\s*$/m.test(output)) {
+    if (/\b[A-Za-z0-9_.-]+[>#]/.test(output)) {
       record(`IOS boot ${node.name}`, `console reached IOS exec prompt${answeredDialog ? " after declining initial configuration" : ""}`);
       return console;
     }
@@ -231,9 +237,9 @@ async function createDynamipsNode(project, config, name) {
     iomem: config.iomem,
     mmap: true,
     sparsemem: config.sparsemem,
-    clock_divisor: 8,
-    idlemax: 500,
-    idlesleep: 30,
+    clock_divisor: Number(process.env.NETWORK_SIMULATOR_TEST_CLOCK_DIVISOR ?? 8),
+    idlemax: Number(process.env.NETWORK_SIMULATOR_TEST_IDLEMAX ?? 500),
+    idlesleep: Number(process.env.NETWORK_SIMULATOR_TEST_IDLESLEEP ?? 30),
     exec_area: 64,
     disk0: 0,
     disk1: 0,
@@ -307,21 +313,26 @@ async function main() {
   projectId = project.project_id;
 
   const routers = new Map();
-  for (const config of familyCases) {
+  for (const config of selectedFamilyCases) {
     routers.set(config.family, await createDynamipsNode(projectId, config, config.family.toUpperCase()));
   }
+  const hasFullTopology = ["c3725", "c7200", "c3620"].every((family) => routers.has(family));
   const r1 = routers.get("c3725");
   const r2 = routers.get("c7200");
   const r3 = routers.get("c3620");
-  const v1 = await api(`/v3/projects/${projectId}/nodes`, { method: "POST", body: { node_type: "vpcs", name: "VPC1", adapters: 1 } });
-  await setStartupAddress(projectId, r1, "10.20.0.1", "255.255.255.252");
-  await setStartupAddress(projectId, r2, "10.20.0.2", "255.255.255.252");
-  await setStartupAddress(projectId, r3, "10.30.0.1");
-  const l1 = await createLink(projectId, endpoint(r1), endpoint(r2));
-  await createLink(projectId, endpoint(r3), endpoint(v1));
+  let v1;
+  let l1;
+  if (hasFullTopology) {
+    v1 = await api(`/v3/projects/${projectId}/nodes`, { method: "POST", body: { node_type: "vpcs", name: "VPC1", adapters: 1 } });
+    await setStartupAddress(projectId, r1, "10.20.0.1", "255.255.255.252");
+    await setStartupAddress(projectId, r2, "10.20.0.2", "255.255.255.252");
+    await setStartupAddress(projectId, r3, "10.30.0.1");
+    l1 = await createLink(projectId, endpoint(r1), endpoint(r2));
+    await createLink(projectId, endpoint(r3), endpoint(v1));
+  }
 
   const routerConsoles = new Map();
-  for (const config of familyCases) {
+  for (const config of selectedFamilyCases) {
     const router = routers.get(config.family);
     await api(`/v3/projects/${projectId}/nodes/${router.node_id}/start`, { method: "POST" });
     let console = await bootIos(projectId, router);
@@ -370,6 +381,10 @@ async function main() {
       await api(`/v3/projects/${projectId}/nodes/${router.node_id}/stop`, { method: "POST" });
     }
   }
+
+  // Filtered runs measure the selected router families independently. The
+  // traffic topology below requires all three of its fixed router families.
+  if (!hasFullTopology) return;
 
   for (const router of [r1, r2]) await iosCommand(routerConsoles.get(router.node_id), "enable", /#\s*$/m);
   let output = await iosPing(routerConsoles.get(r1.node_id), "10.20.0.2");

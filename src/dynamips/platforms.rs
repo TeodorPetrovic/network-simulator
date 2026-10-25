@@ -292,11 +292,6 @@ pub(super) fn router_initialization_commands(vm: &DynamipsVm) -> Vec<String> {
         format!("vm set_ram {} {}", quote(&vm.name), vm.ram_mb),
         format!("vm set_nvram {} {}", quote(&vm.name), vm.nvram),
         format!(
-            "vm set_clock_divisor {} {}",
-            quote(&vm.name),
-            vm.options.clock_divisor
-        ),
-        format!(
             "vm set_ram_mmap {} {}",
             quote(&vm.name),
             u8::from(vm.options.mmap)
@@ -310,6 +305,11 @@ pub(super) fn router_initialization_commands(vm: &DynamipsVm) -> Vec<String> {
             "vm set_exec_area {} {}",
             quote(&vm.name),
             vm.options.exec_area
+        ),
+        format!(
+            "vm set_clock_divisor {} {}",
+            quote(&vm.name),
+            vm.options.clock_divisor
         ),
         format!("vm set_disk0 {} {}", quote(&vm.name), vm.options.disk0),
         format!("vm set_disk1 {} {}", quote(&vm.name), vm.options.disk1),
@@ -366,6 +366,9 @@ pub(super) fn router_initialization_commands(vm: &DynamipsVm) -> Vec<String> {
             quote(&vm.name)
         ));
     }
+    if let Some(idle_pc) = &vm.idle_pc {
+        commands.push(format!("vm set_idle_pc {} {idle_pc}", quote(&vm.name)));
+    }
     let max_slots = match vm.platform.as_str() {
         "c1700" => 2,
         "c2600" | "c2691" => 2,
@@ -416,9 +419,6 @@ pub(super) fn router_initialization_commands(vm: &DynamipsVm) -> Vec<String> {
             quote(&vm.name),
             quote(&ghost_file.display().to_string())
         ));
-    }
-    if let Some(idle_pc) = &vm.idle_pc {
-        commands.push(format!("vm set_idle_pc {} {idle_pc}", quote(&vm.name)));
     }
     commands
 }
