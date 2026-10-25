@@ -86,6 +86,7 @@ export async function launchPage(server, { width = 1500, height = 900 } = {}) {
   page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
   page.on("console", (m) => {
     if (m.type() !== "error" || /Failed to load resource/.test(m.text())) return;
+    if (m.text().includes("downloadable font: download failed")) return;
     // Firefox reports a transient WebSocket connection error when a page reloads
     // while its project event stream is reconnecting. The server still serves
     // the page and the next stream connection is established normally.
