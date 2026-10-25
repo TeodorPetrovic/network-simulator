@@ -2,13 +2,12 @@ import type { Node } from "./api";
 
 export type LifecycleAction = "start" | "stop" | "suspend" | "reload";
 
-const runtimeNodeTypes = new Set(["docker", "qemu", "vpcs", "dynamips"]);
+const runtimeNodeTypes = new Set(["docker", "qemu", "vpcs", "dynamips", "ethernet_switch", "ethernet_hub", "hub"]);
 
 export function canApplyLifecycle(node: Node, action: LifecycleAction): boolean {
   const nodeType = node.node_type ?? "";
   const status = node.status ?? "stopped";
 
-  if (nodeType === "ethernet_switch" || nodeType === "ethernet_hub") return false;
   if ((nodeType === "cloud" || nodeType === "nat") && action !== "start") return false;
   if (nodeType === "vpcs" && action === "suspend") return false;
   if (!runtimeNodeTypes.has(nodeType) && nodeType !== "cloud" && nodeType !== "nat") return false;

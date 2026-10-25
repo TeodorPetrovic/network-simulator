@@ -235,6 +235,10 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
 
   async function deleteSelection() {
     if (!projectId || !selection) return;
+    const selected = selection.kind === "node"
+      ? topology?.nodes.find((node) => node.node_id === selection.id)?.name ?? "device"
+      : "selected link";
+    if (!window.confirm(`Delete ${selected}?`)) return;
     try {
       if (selection.kind === "node") await api.deleteNode(projectId, selection.id);
       else await api.deleteLink(projectId, selection.id);

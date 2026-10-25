@@ -20,7 +20,7 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const kind = node?.node_type;
-  const supported = ["qemu", "docker", "vpcs", "dynamips"].includes(kind ?? "");
+  const supported = ["qemu", "docker", "vpcs", "dynamips", "ethernet_switch", "ethernet_hub", "hub", "cloud", "nat"].includes(kind ?? "");
 
   useEffect(() => {
     if (!node) return;
@@ -48,6 +48,11 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
       } : {}),
       ...(kind === "vpcs" ? { startup_script: String(node.startup_script ?? "") } : {}),
       ...(kind === "dynamips" ? { startup_config: String(node.startup_config ?? "") } : {}),
+      ...(["ethernet_switch", "ethernet_hub", "hub"].includes(kind ?? "") ? {
+        adapters: String(Array.isArray(node.ports_mapping) ? node.ports_mapping.length : node.ports ?? node.number_of_ports ?? 8),
+        port_names: (Array.isArray(node.ports_mapping) ? node.ports_mapping : []).map((item) => String((item as Record<string, unknown>).name ?? "")).join("\n"),
+      } : {}),
+      ...(kind === "cloud" ? { interfaces: (Array.isArray(node.ports_mapping) ? node.ports_mapping : []).map((item) => String((item as Record<string, unknown>).interface ?? "")).join("\n") } : {}),
     });
     setError("");
   }, [kind, node, open]);
@@ -101,6 +106,12 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
       patch.startup_script = draft.startup_script ?? "";
     } else if (kind === "dynamips") {
       patch.startup_config = draft.startup_config ?? "";
+    } else if (["ethernet_switch", "ethernet_hub", "hub"].includes(kind ?? "")) {
+      const count = Math.max(1, Math.min(64, Number(draft.adapters) || 1));
+      const names = (draft.port_names ?? "").split("\n");
+      patch.ports_mapping = Array.from({ length: count }, (_, index) => ({ port_number: index, name: names[index]?.trim() || `Ethernet${index + 1}`, vlan: 1, type: "access", ethertype: "0x8100" }));
+    } else if (kind === "cloud") {
+      patch.ports_mapping = (draft.interfaces ?? "").split("\n").map((name, index) => name.trim() ? ({ port_number: index, name: name.trim(), type: "ethernet", interface: name.trim() }) : null).filter(Boolean);
     }
     try {
       await onSave(node.node_id, patch);
@@ -132,6 +143,11 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
       <div className="template-settings-grid">
         {field("name", "Device name")}
         {(kind === "qemu" || kind === "docker") && field("adapters", "Network adapters", "number", node.status !== "stopped" ? "Stop the device to change the number of adapters" : "The count cannot be reduced below ports already used by links.", undefined, node.status !== "stopped")}
+        {(["ethernet_switch", "ethernet_hub", "hub"].includes(kind ?? "")) && <>
+          {field("adapters", "Port count", "number")}
+          {textArea("port_names", "Port names", "One name per port. Empty lines use the default port name.")}
+        </>}
+        {kind === "cloud" && <div className="template-settings-wide">{textArea("interfaces", "Ethernet interfaces", "One host interface per line.")}</div>}
         {(kind === "qemu" || kind === "docker") && field("memory", kind === "qemu" ? "RAM (MB)" : "Memory limit (MB)", "number", kind === "docker" ? "0 means no Docker memory limit." : undefined)}
         {(kind === "qemu" || kind === "docker") && field("cpus", kind === "qemu" ? "vCPUs" : "CPU limit", "number", kind === "docker" ? "0 means no Docker CPU limit." : undefined, kind === "docker" ? "0.25" : "1")}
         {kind === "qemu" && <>
