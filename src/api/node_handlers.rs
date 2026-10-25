@@ -24,6 +24,7 @@ pub(super) async fn update_node(
     Json(patch): Json<Value>,
 ) -> Result<Response, ApiError> {
     let current = get_topology_object(state.store.pool(), &project_id.to_string(), "node", &node_id.to_string()).await?.0;
+    let current = refresh_node_statuses(&state, &project_id.to_string(), vec![current]).await.pop().expect("one requested node was supplied");
     check_if_match(&headers, &current)?;
     if let Some(idle_pc) = patch.get("idlepc").and_then(Value::as_str) {
         let node = get_topology_object(
