@@ -7,27 +7,26 @@ pub(super) async fn create_link(
 ) -> Result<impl IntoResponse, ApiError> {
     let project_id = project_id.to_string();
     let _project_lock = state.lock_project_operations(&project_id).await;
-    let object = as_object_mut(&mut link, "link body must be an object")?;
-    let link_id = parse_or_generate_uuid(object.get("link_id"), "link_id")?;
-    let endpoints = object
-        .get("nodes")
-        .and_then(Value::as_array)
-        .ok_or_else(|| ApiError::bad_request("link must contain a nodes array"))?;
-    if endpoints.len() != 2 {
+    let (link_id, link_type) = {
+        let object = as_object_mut(&mut link, "link body must be an object")?;
+        let link_id = parse_or_generate_uuid(object.get("link_id"), "link_id")?;
+        let endpoints = object.get("nodes").and_then(Value::as_array)
+            .ok_or_else(|| ApiError::bad_request("link must contain a nodes array"))?;
+        if endpoints.len() != 2 {
         return Err(ApiError::bad_request(
             "GNS3 links connect exactly two endpoints; use a switch or hub for shared media",
         ));
-    }
-    validate_link_shape(endpoints)?;
-    let link_type = object
-        .get("link_type")
-        .and_then(Value::as_str)
-        .unwrap_or("ethernet");
+        }
+        (link_id, object.get("link_type").and_then(Value::as_str).unwrap_or("ethernet").to_owned())
+    };
+    resolve_link_port_names(&state, &project_id, &mut link).await?;
+    validate_link_shape(link["nodes"].as_array().expect("validated node list"))?;
     if link_type != "ethernet" {
         return Err(ApiError::bad_request(
             "Only Ethernet links are supported by the active runtime",
         ));
     }
+    let object = as_object_mut(&mut link, "link body must be an object")?;
     object.insert("link_id".into(), json!(link_id));
     object.insert("project_id".into(), json!(project_id));
     set_default(object, "link_type", json!("ethernet"));
@@ -158,4 +157,37 @@ pub(super) async fn create_link(
             Err(error)
         }
     }
+}
+
+async fn resolve_link_port_names(
+    state: &AppState,
+    project_id: &str,
+    link: &mut Value,
+) -> Result<(), ApiError> {
+    let endpoints = link["nodes"].as_array_mut().ok_or_else(|| ApiError::bad_request("link must contain a nodes array"))?;
+    for endpoint in endpoints {
+        let Some(port) = endpoint.get("port_number").cloned() else { continue };
+        let Some(name) = port.as_str() else { continue };
+        let node_id = endpoint.get("node_id").and_then(Value::as_str).ok_or_else(|| ApiError::bad_request("each link endpoint requires node_id"))?;
+        let row = sqlx::query("SELECT object_json FROM topology_objects WHERE project_id=? AND kind='node' AND object_id=?")
+            .bind(project_id).bind(node_id).fetch_optional(state.store.pool()).await?
+            .ok_or_else(|| ApiError::bad_request(format!("Node {node_id} does not exist in this project")))?;
+        let node = decode_json(row.get("object_json"))?;
+        let ports = node["ports_mapping"].as_array().cloned().unwrap_or_default();
+        let adapter = endpoint.get("adapter_number").and_then(Value::as_u64).unwrap_or(0);
+        let mut available = Vec::new();
+        for (index, mapping) in ports.iter().enumerate() {
+            let port_adapter = mapping.get("adapter_number").and_then(Value::as_u64).unwrap_or(0);
+            let port_number = mapping.get("port_number").and_then(Value::as_u64).unwrap_or(index as u64);
+            if port_adapter != adapter { continue; }
+            let used: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM link_endpoints WHERE project_id=? AND node_id=? AND adapter_number=? AND port_number=?)")
+                .bind(project_id).bind(node_id).bind(port_adapter as i64).bind(port_number as i64).fetch_one(state.store.pool()).await?;
+            if used == 0 { available.push((port_number, mapping.get("name").and_then(Value::as_str).unwrap_or_default())); }
+        }
+        let selected = if name == "auto" { available.first().map(|entry| entry.0) }
+            else { available.iter().find(|entry| entry.1 == name).map(|entry| entry.0) };
+        let selected = selected.ok_or_else(|| ApiError::conflict(format!("No free port named '{name}' on node {node_id}")))?;
+        endpoint["port_number"] = json!(selected);
+    }
+    Ok(())
 }
