@@ -347,7 +347,13 @@ button, input, textarea, select { font: inherit; }
 .sim-loading { display: flex; min-height: 0; flex: 1; align-items: center; justify-content: center; gap: 9px; color: var(--muted-foreground); font-size: 13px; }
 
 .sim-workspace { display: flex; min-height: 0; flex: 1; flex-direction: column; }
-.sim-toolbar { z-index: 5; display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 12px; border-bottom: 1px solid var(--border); background: var(--background); }
+.sim-toolbar { z-index: 5; display: flex; min-height: 36px; align-items: center; gap: 12px; padding: 3px 8px; border-bottom: 1px solid var(--border); background: var(--background); }
+.sim-toolbar-brand { display: flex; min-width: 120px; align-items: center; gap: 7px; overflow: hidden; font-size: 12px; }
+.sim-toolbar-brand strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sim-toolbar-brand .sim-project-mark { width: 24px; height: 24px; flex-basis: 24px; border-radius: 5px; }
+.sim-icon-toolbar { display: flex; min-height: 36px; align-items: center; gap: 2px; padding: 3px 8px; border-bottom: 1px solid var(--border); background: var(--muted); }
+.sim-icon-action { width: 28px; height: 28px; }
+.sim-toolbar-divider { height: 22px; width: 1px; margin: 0 5px; background: var(--border); }
 .sim-project-title { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .sim-project-mark { display: grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; border: 1px solid var(--border); border-radius: 8px; color: var(--primary); background: var(--muted); }
 .sim-project-title h1 { overflow: hidden; max-width: 340px; font-size: 14px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }

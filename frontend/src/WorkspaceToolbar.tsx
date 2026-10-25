@@ -1,13 +1,12 @@
-import { Activity, Camera, Cable, ChevronDown, Circle, HelpCircle, Image, Layers, Link2, Lock, Minus, MoreHorizontal, Network, Pause, Play, RectangleHorizontal, Search, Settings2, Square, Terminal, Trash2, Type, Unlock } from "lucide-react";
+import { Activity, Camera, Circle, Image, Layers, Minus, Network, Pause, Play, RectangleHorizontal, Scan, Square, Terminal, Type, ZoomIn, ZoomOut } from "lucide-react";
 import type { Node, TopologySnapshot } from "./api";
 import type { SimulatorWorkspaceProps } from "./SimulatorWorkspace";
 import type { DrawingTool } from "./map/helpers";
 import type { DrawingValues } from "./useWorkspaceActions";
 import { nodesForLifecycle } from "./lifecycle";
+import { Menubar, MenubarContent, MenubarItem, MenubarMenu, MenubarSeparator, MenubarTrigger } from "@/components/ui/menubar";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import type { ReactNode } from "react";
 
 type Props = {
   workspace: SimulatorWorkspaceProps; topology: TopologySnapshot; selectedNodeIds: string[]; selectedLifecycleNodes: Node[];
@@ -20,64 +19,73 @@ type Props = {
   changeDrawingOrder: (direction: "front" | "back") => void; removeDrawing: () => void;
   setSnapshotsOpen: (open: boolean) => void; setLogOpen: (open: boolean) => void; setScreenshotOpen: (open: boolean) => void;
   setHelpOpen: (open: boolean) => void; setInfoOpen: (open: boolean) => void;
+  setView: (zoom: number) => void; zoomIn: () => void; zoomOut: () => void; fitTopology: () => void;
 };
 
-export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, selectedLifecycleNodes, projectLocked, gridVisible, setGridVisible, snapToGrid, setSnapToGrid, selectedDrawing, runBulkLifecycle, deleteSelectedNodes, toggleProjectLock, startDrawingTool, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, setSnapshotsOpen, setLogOpen, setScreenshotOpen, setHelpOpen, setInfoOpen }: Props) {
-  return (
-      <header className="sim-toolbar">
-        <div className="sim-project-title">
-          <Button variant="ghost" size="icon" onClick={props.onBack} aria-label="Back to projects"><ChevronDown className="rotate-90" /></Button>
-          <div className="sim-project-mark"><Network size={17} /></div>
-          <div className="min-w-0">
-            <h1 title={props.project.name}>{props.project.name}</h1>
-          </div>
-          <Badge variant="outline" className="capitalize">{props.project.status ?? "opened"}</Badge>
-        </div>
-        <div className="sim-toolbar-actions">
-          <Badge variant={props.connection === "connected" ? "secondary" : props.connection === "disconnected" ? "destructive" : "outline"} className="gap-1.5">
-            <span className={`sim-connection-dot ${props.connection}`} />{props.connection === "connected" ? "Controller connected" : props.connection === "reconnecting" ? "Reconnecting" : props.connection === "checking" ? "Connecting" : "Controller unavailable"}
-          </Badge>
-          <Button variant="outline" onClick={props.onStartAll} disabled={props.batchLifecycleRunning || !nodesForLifecycle(topology.nodes, "start").length} title="Start every stopped device"><Play />{props.batchLifecycleRunning ? "Working…" : "Start all"}</Button>
-          <Button variant="outline" onClick={props.onStopAll} disabled={props.batchLifecycleRunning || !nodesForLifecycle(topology.nodes, "stop").length} title="Stop every running device"><Square />Stop all</Button>
-          <Separator orientation="vertical" className="h-7" />
-          <Button variant={props.connecting ? "default" : "outline"} aria-label={props.connecting ? "Cancel link" : "Connect ports"} aria-pressed={props.connecting} onClick={props.onToggleConnect}><Cable />{props.connecting ? "Cancel link" : "Draw link"}</Button>
-          {props.connecting && <Button onClick={props.onCreateLink} disabled={props.linkEndpoints.length < 2}><Link2 />Create link{props.linkEndpoints.length > 0 ? ` · ${props.linkEndpoints.length}` : ""}</Button>}
-          {selectedNodeIds.length > 1 && <>
-            <Badge variant="secondary">{selectedNodeIds.length} selected</Badge>
-            {nodesForLifecycle(selectedLifecycleNodes, "start").length > 0 && <Button size="sm" variant="outline" onClick={() => runBulkLifecycle("start")}><Play />Start</Button>}
-            {nodesForLifecycle(selectedLifecycleNodes, "stop").length > 0 && <Button size="sm" variant="outline" onClick={() => runBulkLifecycle("stop")}><Square />Stop</Button>}
-            {nodesForLifecycle(selectedLifecycleNodes, "suspend").length > 0 && <Button size="sm" variant="outline" onClick={() => runBulkLifecycle("suspend")}><Pause />Suspend</Button>}
-            {nodesForLifecycle(selectedLifecycleNodes, "reload").length > 0 && <Button size="sm" variant="outline" onClick={() => runBulkLifecycle("reload")}><Activity />Reload</Button>}
-              <Button size="sm" variant="outline" onClick={() => topology.nodes.filter((node) => selectedNodeIds.includes(node.node_id) && node.status === "started").forEach((node) => props.onOpenConsole(node))}><Terminal />Consoles</Button>
-            <Button size="sm" variant="destructive" onClick={deleteSelectedNodes}><Trash2 />Delete</Button>
-          </>}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild><Button variant="outline" size="icon" aria-label="Project map menu" title="Project map menu"><MoreHorizontal /></Button></DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-60">
-              <DropdownMenuLabel>Project map</DropdownMenuLabel>
-              <DropdownMenuItem onSelect={props.onOpenPreferences}><Settings2 />Preferences</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => void toggleProjectLock()}>{projectLocked ? <Unlock /> : <Lock />}{projectLocked ? "Unlock project" : "Lock project"}</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setGridVisible((value) => !value)}>{gridVisible ? "Hide grid" : "Show grid"}</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setSnapToGrid((value) => !value)}>{snapToGrid ? "Disable snap to grid" : "Snap to grid"}</DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel>Add drawing</DropdownMenuLabel>
-              <DropdownMenuItem onSelect={() => startDrawingTool("rectangle")}><RectangleHorizontal />Rectangle</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => startDrawingTool("ellipse")}><Circle />Ellipse</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => startDrawingTool("line")}><Minus />Line</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => startDrawingTool("text")}><Type />Text</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => startDrawingTool("image")}><Image />Image</DropdownMenuItem>
-              {selectedDrawing && <><DropdownMenuSeparator /><DropdownMenuItem onSelect={() => { setDrawingEditTool((selectedDrawing.drawing_kind as DrawingTool) ?? "rectangle"); setDrawingEditValues(valuesFromDrawing(selectedDrawing)); setDrawingEditOpen(true); }}>Edit selected drawing</DropdownMenuItem><DropdownMenuItem onSelect={() => void changeDrawingOrder("front")}><Layers />Bring drawing forward</DropdownMenuItem><DropdownMenuItem onSelect={() => void changeDrawingOrder("back")}><Layers />Send drawing backward</DropdownMenuItem><DropdownMenuItem onSelect={() => void removeDrawing()}><Trash2 />Delete drawing</DropdownMenuItem></>}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => setSnapshotsOpen(true)}>Project snapshots…</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setLogOpen(true)}>Log console…</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setScreenshotOpen(true)}><Camera />Take a screenshot…</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setInfoOpen(true)}>Project information…</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Button variant="outline" size="icon" aria-label="Map shortcuts" title="Map shortcuts" onClick={() => setHelpOpen(true)}><HelpCircle /></Button>
-          <Button variant="outline" onClick={props.onOpenMarketplace}><Search />Image catalog</Button>
-          <Button variant="outline" onClick={props.onOpenApplianceManager}><Settings2 />Appliances</Button>
-        </div>
-      </header>
-  );
+export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, selectedLifecycleNodes, projectLocked, gridVisible, setGridVisible, snapToGrid, setSnapToGrid, selectedDrawing, runBulkLifecycle, deleteSelectedNodes, toggleProjectLock, startDrawingTool, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, setSnapshotsOpen, setLogOpen, setScreenshotOpen, setHelpOpen, setInfoOpen, setView, zoomIn, zoomOut, fitTopology }: Props) {
+  const supported = (label: string, action: () => void, disabled = false) => <MenubarItem disabled={disabled} onSelect={action}>{label}</MenubarItem>;
+  const draw = (tool: DrawingTool, label: string) => supported(label, () => startDrawingTool(tool));
+  const selected = selectedLifecycleNodes.length > 0;
+  return <header className="sim-toolbar" aria-label="Project workspace menu">
+    <div className="sim-toolbar-brand"><span className="sim-project-mark"><Network size={16} /></span><strong>{props.project.name}</strong></div>
+    <Menubar>
+      <MenubarMenu><MenubarTrigger>File</MenubarTrigger><MenubarContent>
+        {supported("New blank project", () => {}, true)}{supported("Open project…", () => {}, true)}
+        <MenubarSeparator />{supported("Save project as…", () => {}, true)}{supported("Export portable project…", () => {}, true)}{supported("Import portable project…", () => {}, true)}
+        <MenubarSeparator />{supported("Snapshots…", () => setSnapshotsOpen(true))}{supported("Close project / Back to projects", props.onBack)}
+      </MenubarContent></MenubarMenu>
+      <MenubarMenu><MenubarTrigger>Edit</MenubarTrigger><MenubarContent>
+        {supported("Select all", () => {}, true)}{supported("Select none", () => {}, true)}<MenubarSeparator />{supported("Preferences…", props.onOpenPreferences)}
+      </MenubarContent></MenubarMenu>
+      <MenubarMenu><MenubarTrigger>View</MenubarTrigger><MenubarContent>
+        {supported("Zoom in", zoomIn)}{supported("Zoom out", zoomOut)}{supported("Reset zoom", () => setView(1))}{supported("Fit to window", fitTopology)}
+        <MenubarSeparator />{supported("Show / hide interface labels", () => {}, true)}{supported(gridVisible ? "Hide grid" : "Show grid", () => setGridVisible((value) => !value))}
+        {supported(snapToGrid ? "Snap to grid ✓" : "Snap to grid", () => setSnapToGrid((value) => !value))}{supported(projectLocked ? "Unlock project" : "Lock project", () => void toggleProjectLock())}
+        <MenubarSeparator />{supported("Console dock", () => {}, true)}{supported("Topology summary", () => {}, true)}
+      </MenubarContent></MenubarMenu>
+      <MenubarMenu><MenubarTrigger>Control</MenubarTrigger><MenubarContent>
+        {supported("Start all", props.onStartAll, props.batchLifecycleRunning || !nodesForLifecycle(topology.nodes, "start").length)}
+        {supported("Suspend all", () => runBulkLifecycle("suspend"), props.batchLifecycleRunning || !nodesForLifecycle(topology.nodes, "suspend").length)}
+        {supported("Stop all", props.onStopAll, props.batchLifecycleRunning || !nodesForLifecycle(topology.nodes, "stop").length)}
+        {supported("Reload all", () => runBulkLifecycle("reload"), props.batchLifecycleRunning || !nodesForLifecycle(topology.nodes, "reload").length)}
+        {supported("Console to all devices", () => {}, true)}
+      </MenubarContent></MenubarMenu>
+      <MenubarMenu><MenubarTrigger>Node</MenubarTrigger><MenubarContent>
+        {supported("Start selected", () => runBulkLifecycle("start"), !selected || !nodesForLifecycle(selectedLifecycleNodes, "start").length)}
+        {supported("Suspend selected", () => runBulkLifecycle("suspend"), !selected || !nodesForLifecycle(selectedLifecycleNodes, "suspend").length)}
+        {supported("Stop selected", () => runBulkLifecycle("stop"), !selected || !nodesForLifecycle(selectedLifecycleNodes, "stop").length)}
+        {supported("Reload selected", () => runBulkLifecycle("reload"), !selected || !nodesForLifecycle(selectedLifecycleNodes, "reload").length)}
+        {supported("Console selected", () => topology.nodes.filter((node) => selectedNodeIds.includes(node.node_id) && node.status === "started").forEach((node) => props.onOpenConsole(node)), !topology.nodes.some((node) => selectedNodeIds.includes(node.node_id) && node.status === "started"))}
+        <MenubarSeparator />{supported("Delete selected", deleteSelectedNodes, !selectedNodeIds.length)}
+      </MenubarContent></MenubarMenu>
+      <MenubarMenu><MenubarTrigger>Annotate</MenubarTrigger><MenubarContent>
+        {draw("text", "Add a note / text")}{draw("image", "Add image")}{draw("rectangle", "Rectangle")}{draw("ellipse", "Ellipse")}{draw("line", "Line")}
+        {selectedDrawing && <><MenubarSeparator />{supported("Edit selected drawing…", () => { setDrawingEditTool((selectedDrawing.drawing_kind as DrawingTool) ?? "rectangle"); setDrawingEditValues(valuesFromDrawing(selectedDrawing)); setDrawingEditOpen(true); })}{supported("Bring drawing forward", () => void changeDrawingOrder("front"))}{supported("Send drawing backward", () => void changeDrawingOrder("back"))}{supported("Delete drawing", () => void removeDrawing())}</>}
+      </MenubarContent></MenubarMenu>
+      <MenubarMenu><MenubarTrigger>Tools</MenubarTrigger><MenubarContent>{supported("Packet capture", () => {}, true)}{supported("Image catalog…", props.onOpenMarketplace)}{supported("Appliances…", props.onOpenApplianceManager)}{supported("Project screenshot…", () => setScreenshotOpen(true))}{supported("Project log…", () => setLogOpen(true))}</MenubarContent></MenubarMenu>
+      <MenubarMenu><MenubarTrigger>Help</MenubarTrigger><MenubarContent>{supported("Keyboard shortcuts", () => setHelpOpen(true))}{supported("About…", () => setInfoOpen(true))}</MenubarContent></MenubarMenu>
+    </Menubar>
+  </header>;
+}
+
+export function WorkspaceIconToolbar({ workspace, startDrawingTool, zoomIn, zoomOut, fitTopology }: { workspace: SimulatorWorkspaceProps; startDrawingTool: (tool: DrawingTool) => void; zoomIn: () => void; zoomOut: () => void; fitTopology: () => void }) {
+  return <div className="sim-icon-toolbar" role="toolbar" aria-label="Workspace tools">
+    <IconAction label="Start all" icon={<Play />} onClick={workspace.onStartAll} />
+    <IconAction label="Suspend all" icon={<Pause />} disabled />
+    <IconAction label="Stop all" icon={<Square />} onClick={workspace.onStopAll} />
+    <IconAction label="Reload all" icon={<Activity />} disabled />
+    <IconAction label="Console all" icon={<Terminal />} disabled />
+    <span className="sim-toolbar-divider" />
+    <IconAction label="Show / hide interface labels" icon={<Network />} disabled />
+    <span className="sim-toolbar-divider" />
+    <IconAction label="Zoom in" icon={<ZoomIn />} onClick={zoomIn} /><IconAction label="Zoom out" icon={<ZoomOut />} onClick={zoomOut} /><IconAction label="Fit to window" icon={<Scan />} onClick={fitTopology} />
+    <span className="sim-toolbar-divider" />
+    <IconAction label="Add note" icon={<Type />} onClick={() => startDrawingTool("text")} /><IconAction label="Add image" icon={<Image />} onClick={() => startDrawingTool("image")} /><IconAction label="Rectangle" icon={<RectangleHorizontal />} onClick={() => startDrawingTool("rectangle")} /><IconAction label="Ellipse" icon={<Circle />} onClick={() => startDrawingTool("ellipse")} /><IconAction label="Line" icon={<Minus />} onClick={() => startDrawingTool("line")} />
+    <span className="sim-toolbar-divider" />
+    <IconAction label="Packet capture" icon={<Camera />} disabled /><IconAction label={workspace.connecting ? "Cancel link" : "Draw link"} icon={<Layers />} onClick={workspace.onToggleConnect} pressed={workspace.connecting} />
+  </div>;
+}
+
+function IconAction({ label, icon, onClick, disabled = false, pressed = false }: { label: string; icon: ReactNode; onClick?: () => void; disabled?: boolean; pressed?: boolean }) {
+  return <Button variant={pressed ? "secondary" : "ghost"} size="icon-sm" className="sim-icon-action" title={label} aria-label={label} aria-pressed={pressed} disabled={disabled} onClick={onClick}>{icon}</Button>;
 }
