@@ -290,6 +290,11 @@ pub const ROUTE_RULES: &[RouteRule] = rules![
         "/computes/{compute_id}",
         RouteClass::Privilege("Compute.Audit")
     ),
+    (
+        "POST",
+        "/computes/{compute_id}/disconnect",
+        RouteClass::Privilege("Compute.Modify")
+    ),
     ("GET", "/templates", RouteClass::Privilege("Template.Audit")),
     (
         "POST",
