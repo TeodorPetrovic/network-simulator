@@ -385,10 +385,10 @@ fn validates_only_runtime_settings_supported_by_each_runtime() {
             .is_ok()
         );
     }
-    assert!(
+    let error =
         validate_node_configuration_patch("vpcs", serde_json::json!({"console_type": "vnc"}))
-            .is_err()
-    );
+            .expect_err("VPCS does not support VNC consoles");
+    assert!(error.message.contains("expected telnet, ssh, or none"));
     let dynamips = validate_node_configuration_patch(
         "dynamips",
         serde_json::json!({ "startup_config": "hostname R1\n" }),

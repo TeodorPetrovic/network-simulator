@@ -65,7 +65,7 @@ pub(super) async fn create_vpcs_node(
         .is_some_and(|value| !matches!(value, "telnet" | "ssh" | "none"))
     {
         return Err(ApiError::bad_request(
-            "VPCS console_type must be telnet, ssh, or none",
+            "Unsupported VPCS console_type; expected telnet, ssh, or none",
         ));
     }
     if object.get("adapters").and_then(Value::as_u64) != Some(1) {
