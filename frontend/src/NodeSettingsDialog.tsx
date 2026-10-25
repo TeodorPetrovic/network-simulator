@@ -52,9 +52,9 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
     setError("");
   }, [kind, node, open]);
 
-  const field = (name: string, label: string, type = "text", helper?: string, step?: string) => <label className="grid gap-1.5" key={name}>
+  const field = (name: string, label: string, type = "text", helper?: string, step?: string, disabled = false) => <label className="grid gap-1.5" key={name}>
     <Label htmlFor={`node-${node?.node_id}-${name}`}>{label}</Label>
-    <Input id={`node-${node?.node_id}-${name}`} type={type} step={step} min={type === "number" ? "0" : undefined} value={draft[name] ?? ""} onChange={(event) => setDraft((current) => ({ ...current, [name]: event.target.value }))} />
+    <Input id={`node-${node?.node_id}-${name}`} type={type} step={step} min={type === "number" ? "0" : undefined} disabled={disabled} value={draft[name] ?? ""} onChange={(event) => setDraft((current) => ({ ...current, [name]: event.target.value }))} />
     {helper && <span className="text-xs text-muted-foreground">{helper}</span>}
   </label>;
   const selectField = (name: string, label: string, values: string[]) => <label className="grid gap-1.5" key={name}>
@@ -131,7 +131,7 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
     <form className="template-settings-form" onSubmit={(event) => void save(event)}>
       <div className="template-settings-grid">
         {field("name", "Device name")}
-        {(kind === "qemu" || kind === "docker") && field("adapters", "Network adapters", "number", "The count cannot be reduced below ports already used by links.")}
+        {(kind === "qemu" || kind === "docker") && field("adapters", "Network adapters", "number", node.status !== "stopped" ? "Stop the device to change the number of adapters" : "The count cannot be reduced below ports already used by links.", undefined, node.status !== "stopped")}
         {(kind === "qemu" || kind === "docker") && field("memory", kind === "qemu" ? "RAM (MB)" : "Memory limit (MB)", "number", kind === "docker" ? "0 means no Docker memory limit." : undefined)}
         {(kind === "qemu" || kind === "docker") && field("cpus", kind === "qemu" ? "vCPUs" : "CPU limit", "number", kind === "docker" ? "0 means no Docker CPU limit." : undefined, kind === "docker" ? "0.25" : "1")}
         {kind === "qemu" && <>
