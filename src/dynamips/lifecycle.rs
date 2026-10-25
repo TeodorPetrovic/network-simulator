@@ -166,9 +166,6 @@ impl DynamipsRuntime {
                 ))
             })?;
         }
-        if let Some(command) = router_start_idlepc_command(vm) {
-            self.send(vm.hypervisor_port, &command).await?;
-        }
         self.send(
             vm.hypervisor_port,
             &format!(
@@ -191,6 +188,8 @@ impl DynamipsRuntime {
         .await?;
         self.send(vm.hypervisor_port, &format!("vm start {}", quote(&vm.name)))
             .await?;
+        // Dynamips 0.2.25 rejects these commands before the CPU exists
+        // (`Bad CPU specified`); apply them as soon as the VM has started.
         for command in router_start_settings_commands(vm) {
             self.send(vm.hypervisor_port, &command).await?;
         }

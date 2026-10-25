@@ -129,7 +129,7 @@ async function bootIos(project, node) {
       console.send("\r");
       pressedConsoleEnter = true;
     }
-    if (/^[A-Za-z0-9_.-]+[>#]\s*$/m.test(output)) {
+    if (/\b[A-Za-z0-9_.-]+[>#]/.test(output)) {
       record(`IOS boot ${node.name}`, `console reached IOS exec prompt${answeredDialog ? " after declining initial configuration" : ""}`);
       return console;
     }
@@ -237,9 +237,9 @@ async function createDynamipsNode(project, config, name) {
     iomem: config.iomem,
     mmap: true,
     sparsemem: config.sparsemem,
-    clock_divisor: 8,
-    idlemax: 500,
-    idlesleep: 30,
+    clock_divisor: Number(process.env.NETWORK_SIMULATOR_TEST_CLOCK_DIVISOR ?? 8),
+    idlemax: Number(process.env.NETWORK_SIMULATOR_TEST_IDLEMAX ?? 500),
+    idlesleep: Number(process.env.NETWORK_SIMULATOR_TEST_IDLESLEEP ?? 30),
     exec_area: 64,
     disk0: 0,
     disk1: 0,
