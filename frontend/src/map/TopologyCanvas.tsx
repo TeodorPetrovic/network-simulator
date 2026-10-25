@@ -414,7 +414,45 @@ export function TopologyCanvas(props: CanvasProps) {
         const label = node.label && typeof node.label === "object" ? node.label as Record<string, unknown> : {};
         const labelPosition = labelPositions[node.node_id] ?? { x: Number(label.x ?? 0), y: Number(label.y ?? 56) };
         const suspended = node.status === "suspended" || node.status === "suspending";
-        return <g key={node.node_id} transform={`translate(${x},${y})`} className={`sim-node ${selected ? "is-selected" : ""} ${props.connecting ? "is-connecting" : ""} ${node.locked || props.projectLocked ? "is-locked" : ""}`} style={{ pointerEvents: "all" }} onPointerDown={(event) => startMove(event, node)} onClick={(event) => { event.stopPropagation(); if (props.connecting) { event.currentTarget.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: event.clientX, clientY: event.clientY })); } else if (event.metaKey || event.ctrlKey) props.onMultiSelectNode(node.node_id); else if (!movedRef.current) props.onNodeClick(node.node_id); movedRef.current = false; }} onContextMenu={() => props.onNodeContext(node.node_id)} onDoubleClick={(event) => { event.stopPropagation(); if (!draggedNodeRef.current) props.onNodeDoubleClick(node.node_id); draggedNodeRef.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onNodeClick(node.node_id); } }} role="button" aria-label={`Node ${node.name}`} tabIndex={0}>
+        return <g
+          key={node.node_id}
+          transform={`translate(${x},${y})`}
+          className={`sim-node ${selected ? "is-selected" : ""} ${props.connecting ? "is-connecting" : ""} ${node.locked || props.projectLocked ? "is-locked" : ""}`}
+          style={{ pointerEvents: "all" }}
+          onPointerDown={(event) => startMove(event, node)}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (props.connecting) {
+              event.currentTarget.dispatchEvent(new MouseEvent("contextmenu", {
+                bubbles: true,
+                cancelable: true,
+                button: 2,
+                clientX: event.clientX,
+                clientY: event.clientY,
+              }));
+            } else if (event.metaKey || event.ctrlKey) {
+              props.onMultiSelectNode(node.node_id);
+            } else if (!movedRef.current) {
+              props.onNodeClick(node.node_id);
+            }
+            movedRef.current = false;
+          }}
+          onContextMenu={() => props.onNodeContext(node.node_id)}
+          onDoubleClick={(event) => {
+            event.stopPropagation();
+            if (!draggedNodeRef.current) props.onNodeDoubleClick(node.node_id);
+            draggedNodeRef.current = false;
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              props.onNodeClick(node.node_id);
+            }
+          }}
+          role="button"
+          aria-label={`Node ${node.name}`}
+          tabIndex={0}
+        >
           <rect className="sim-node-hit-area" x="-48" y="-36" width="96" height="104" fill="transparent" pointerEvents="all" />
           {selected && <rect className="sim-node-selection" x="-48" y="-36" width="96" height="101" rx="6" />}
           {symbol.kind === "custom" ? <AuthenticatedSymbolImage symbolId={symbol.symbolId} fallback={null} /> : <>
