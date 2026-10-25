@@ -94,6 +94,16 @@ pub(crate) struct Principal {
     must_change_password: bool,
 }
 
+pub(crate) async fn mint_capture_ticket(
+    pool: &SqlitePool,
+    principal: &Principal,
+    path: &str,
+) -> Result<String, String> {
+    session::mint_capture_ticket(pool, principal, path)
+        .await
+        .map_err(|error| error.message)
+}
+
 #[derive(Debug)]
 struct AuthError {
     status: StatusCode,

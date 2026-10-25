@@ -11,14 +11,9 @@ pub(super) struct LinkCaptureRequest {
 pub(super) async fn start_link_capture(
     State(state): State<AppState>,
     Path((project_id, link_id)): Path<(Uuid, Uuid)>,
+    axum::Extension(principal): axum::Extension<crate::api::auth::Principal>,
     Json(request): Json<LinkCaptureRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if request.wireshark {
-        return Err(ApiError::new(
-            StatusCode::NOT_IMPLEMENTED,
-            "Web Wireshark is not available",
-        ));
-    }
     if request.data_link_type.as_deref().unwrap_or("DLT_EN10MB") != "DLT_EN10MB" {
         return Err(ApiError::bad_request(
             "Ethernet link capture requires DLT_EN10MB",
@@ -33,6 +28,11 @@ pub(super) async fn start_link_capture(
     if link["capturing"].as_bool().unwrap_or(false) {
         return Err(ApiError::conflict("Link capture is already active"));
     }
+    let wireshark_subnet = if request.wireshark {
+        Some(configure_web_wireshark(&state).await?)
+    } else {
+        None
+    };
     let file_name = safe_capture_file_name(
         request
             .capture_file_name
@@ -68,22 +68,81 @@ pub(super) async fn start_link_capture(
         .start_capture(&endpoint, &path_text)
         .await
         .map_err(runtime_api_error)?;
-    let updated = update_topology_object(
-        state,
-        project_id,
-        link_id,
-        "link",
-        "link_id",
-        json!({
-            "capturing": true,
-            "capture_file_name": file_name,
-            "capture_file_path": path_text,
-            "capture_endpoint_id": endpoint["runtime_endpoint_id"],
-            "wireshark": false
-        }),
-    )
-    .await?;
-    Ok((StatusCode::CREATED, updated))
+    let mut patch = json!({
+        "capturing": true,
+        "capture_file_name": file_name,
+        "capture_file_path": path_text,
+        "capture_endpoint_id": endpoint["runtime_endpoint_id"],
+        "wireshark": false
+    });
+    if request.wireshark {
+        let active = update_topology_object(
+            state.clone(),
+            project_id.clone(),
+            link_id.clone(),
+            "link",
+            "link_id",
+            patch.clone(),
+        )
+        .await?;
+        let path = format!("/v3/projects/{project_id}/links/{link_id}/capture/stream");
+        let ticket = crate::api::auth::mint_capture_ticket(state.store.pool(), &principal, &path)
+            .await
+            .map_err(|error| ApiError::new(StatusCode::FORBIDDEN, error))?;
+        let gateway = docker_gateway(wireshark_subnet.as_deref().unwrap_or("172.31.0.0/22"));
+        let stream_url = format!(
+            "http://{gateway}:{}/v3/projects/{project_id}/links/{link_id}/capture/stream?ticket={ticket}",
+            state.bind_address.port()
+        );
+        let session_result = state
+            .web_wireshark
+            .start_session(&project_id, &link_id, &stream_url)
+            .await;
+        if let Err(error) = session_result {
+            let _ = LinkEngine::new(state.ubridge.clone())
+                .stop_capture(&endpoint)
+                .await;
+            let _ = update_topology_object(
+                state.clone(),
+                project_id,
+                link_id,
+                "link",
+                "link_id",
+                json!({"capturing":false,"capture_endpoint_id":null}),
+            )
+            .await;
+            return Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, error));
+        }
+        let ws_url = format!(
+            "ws://{}/v3/projects/{project_id}/links/{link_id}/capture/web-wireshark",
+            state.bind_address
+        );
+        patch["wireshark"] = json!(true);
+        let updated = update_topology_object(
+            state.clone(),
+            project_id.clone(),
+            link_id.clone(),
+            "link",
+            "link_id",
+            json!({"wireshark":true}),
+        )
+        .await?;
+        let mut tx = state.store.begin_write().await?;
+        let event = crate::storage::Store::append_event(
+            &mut tx,
+            &project_id,
+            "link.web_wireshark_started",
+            &json!({"link_id":link_id,"ws_url":ws_url}),
+        )
+        .await?;
+        tx.commit().await?;
+        state.store.publish(event);
+        let _ = active;
+        return Ok((StatusCode::CREATED, updated).into_response());
+    }
+    let updated =
+        update_topology_object(state, project_id, link_id, "link", "link_id", patch).await?;
+    Ok((StatusCode::CREATED, updated).into_response())
 }
 
 pub(super) async fn stop_link_capture(
@@ -107,6 +166,12 @@ pub(super) async fn stop_link_capture(
             .stop_capture(endpoint)
             .await
             .map_err(runtime_api_error)?;
+    }
+    if link["wireshark"].as_bool().unwrap_or(false) {
+        let _ = state
+            .web_wireshark
+            .stop_session(&project_id, &link_id)
+            .await;
     }
     let _ = update_topology_object(
         state,
@@ -132,6 +197,195 @@ pub(super) async fn download_link_capture(
     Path((project_id, link_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
     link_capture_response(&state, &project_id.to_string(), &link_id.to_string(), false).await
+}
+
+pub(super) async fn restart_web_wireshark(
+    State(state): State<AppState>,
+    Path((project_id, link_id)): Path<(Uuid, Uuid)>,
+    axum::Extension(principal): axum::Extension<crate::api::auth::Principal>,
+) -> Result<Json<Value>, ApiError> {
+    let project_id = project_id.to_string();
+    let link_id = link_id.to_string();
+    let link = get_topology_object(state.store.pool(), &project_id, "link", &link_id)
+        .await?
+        .0;
+    if !link["capturing"].as_bool().unwrap_or(false) {
+        return Err(ApiError::conflict("This link has no active packet capture"));
+    }
+    let subnet = configure_web_wireshark(&state).await?;
+    let file = link["capture_file_name"]
+        .as_str()
+        .ok_or_else(|| ApiError::not_found("Link has no capture file name"))?;
+    let path = link["capture_file_path"]
+        .as_str()
+        .ok_or_else(|| ApiError::not_found("Link has no capture file"))?;
+    let capture_path = canonical_capture_file_path(&project_id, file, Some(path), false)?;
+    let stream = format!("/v3/projects/{project_id}/links/{link_id}/capture/stream");
+    let ticket = crate::api::auth::mint_capture_ticket(state.store.pool(), &principal, &stream)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e))?;
+    let gateway = docker_gateway(&subnet);
+    let stream_url = format!(
+        "http://{gateway}:{}/v3/projects/{project_id}/links/{link_id}/capture/stream?ticket={ticket}",
+        state.bind_address.port()
+    );
+    let (_, _) = state
+        .web_wireshark
+        .start_session(&project_id, &link_id, &stream_url)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let ws_url = format!(
+        "ws://{}/v3/projects/{project_id}/links/{link_id}/capture/web-wireshark",
+        state.bind_address
+    );
+    let _ = capture_path;
+    Ok(Json(json!({"ws_url":ws_url})))
+}
+
+pub(super) async fn web_wireshark_websocket(
+    State(state): State<AppState>,
+    Path((project_id, link_id)): Path<(Uuid, Uuid)>,
+    websocket: WebSocketUpgrade,
+) -> Result<Response, ApiError> {
+    let project_id = project_id.to_string();
+    let link_id = link_id.to_string();
+    let link = get_topology_object(state.store.pool(), &project_id, "link", &link_id)
+        .await?
+        .0;
+    if !link["wireshark"].as_bool().unwrap_or(false) {
+        return Err(ApiError::not_found(
+            "Web Wireshark is not active for this link",
+        ));
+    }
+    let session = state
+        .web_wireshark
+        .session(&project_id, &link_id)
+        .ok_or_else(|| ApiError::not_found("Web Wireshark session does not exist"))?;
+    let ip = state
+        .web_wireshark
+        .container_ip(&project_id)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e))?;
+    let url = format!("ws://{ip}:{}", session.port);
+    Ok(websocket
+        .protocols(["binary"])
+        .on_upgrade(move |client| async move { proxy_websocket(client, url).await }))
+}
+
+async fn proxy_websocket(client: WebSocket, url: String) {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let Ok(mut request) = url.into_client_request() else {
+        return;
+    };
+    request
+        .headers_mut()
+        .insert("sec-websocket-protocol", "binary".parse().unwrap());
+    let Ok((target, _)) = tokio_tungstenite::connect_async(request).await else {
+        return;
+    };
+    let (mut tx, mut rx) = client.split();
+    let (mut target_tx, mut target_rx) = target.split();
+    let a = async {
+        while let Some(Ok(message)) = rx.next().await {
+            match message {
+                Message::Binary(bytes) => {
+                    if target_tx
+                        .send(tokio_tungstenite::tungstenite::Message::Binary(bytes))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Message::Close(_) => {
+                    let _ = target_tx
+                        .send(tokio_tungstenite::tungstenite::Message::Close(None))
+                        .await;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    };
+    let b = async {
+        while let Some(Ok(message)) = target_rx.next().await {
+            match message {
+                tokio_tungstenite::tungstenite::Message::Binary(bytes) => {
+                    if tx.send(Message::Binary(bytes)).await.is_err() {
+                        break;
+                    }
+                }
+                tokio_tungstenite::tungstenite::Message::Close(_) => {
+                    let _ = tx.send(Message::Close(None)).await;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    };
+    tokio::select! { _ = a => {}, _ = b => {} }
+}
+
+fn docker_gateway(cidr: &str) -> String {
+    let ip = cidr
+        .split('/')
+        .next()
+        .unwrap_or("172.31.0.0")
+        .parse::<std::net::Ipv4Addr>()
+        .unwrap_or(std::net::Ipv4Addr::new(172, 31, 0, 0));
+    let octets = ip.octets();
+    format!(
+        "{}.{}.{}.{}",
+        octets[0],
+        octets[1],
+        octets[2],
+        octets[3].saturating_add(1)
+    )
+}
+
+async fn configure_web_wireshark(state: &AppState) -> Result<String, ApiError> {
+    let stored: String =
+        sqlx::query_scalar("SELECT settings_json FROM controller_settings WHERE singleton = 1")
+            .fetch_one(state.store.pool())
+            .await?;
+    let settings = decode_json(stored)?;
+    let section = settings
+        .get("WebWireshark")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    if section.get("enabled").and_then(Value::as_bool) == Some(false) {
+        return Err(ApiError::new(
+            StatusCode::NOT_IMPLEMENTED,
+            "Web Wireshark is disabled in controller settings",
+        ));
+    }
+    let image = section
+        .get("image")
+        .and_then(Value::as_str)
+        .unwrap_or("gns3/web-wireshark:latest")
+        .to_owned();
+    let subnet = section
+        .get("network_subnet")
+        .and_then(Value::as_str)
+        .unwrap_or("172.31.0.0/22")
+        .to_owned();
+    let memory = section
+        .get("memory")
+        .and_then(Value::as_str)
+        .unwrap_or("2g")
+        .to_owned();
+    let cpus = section
+        .get("cpus")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "1.0".to_owned());
+    let pids_limit = section
+        .get("pids_limit")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "1000".to_owned());
+    state
+        .web_wireshark
+        .configure(image, subnet.clone(), memory, cpus, pids_limit);
+    Ok(subnet)
 }
 
 pub(super) async fn link_capture_response(

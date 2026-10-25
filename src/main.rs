@@ -11,6 +11,7 @@ mod runtime;
 mod storage;
 mod ubridge;
 mod vpcs;
+mod web_wireshark;
 
 use std::{env, net::SocketAddr, path::Path};
 
@@ -59,7 +60,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     state.open_auto_open_projects().await;
     state.reattach_running_links().await;
     let monitor_state = state.clone();
-    tokio::spawn(async move { monitor_state.monitor_node_liveness().await; });
+    tokio::spawn(async move {
+        monitor_state.monitor_node_liveness().await;
+    });
     let listener = tokio::net::TcpListener::bind(bind_address).await?;
     let bind_address = listener.local_addr()?;
     let state = state.with_bind_address(bind_address);

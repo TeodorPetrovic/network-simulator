@@ -59,16 +59,27 @@ const EVENT_PAGE_SIZE: i64 = 512;
 
 pub(super) fn etag_for(value: &Value) -> String {
     let digest = ring::digest::digest(&ring::digest::SHA256, value.to_string().as_bytes());
-    let hex = digest.as_ref()[..16].iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    let hex = digest.as_ref()[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     format!("\"{hex}\"")
 }
 
-pub(super) fn check_if_match(headers: &axum::http::HeaderMap, value: &Value) -> Result<(), ApiError> {
+pub(super) fn check_if_match(
+    headers: &axum::http::HeaderMap,
+    value: &Value,
+) -> Result<(), ApiError> {
     if let Some(expected) = headers.get(axum::http::header::IF_MATCH) {
-        let expected = expected.to_str().map_err(|_| ApiError::bad_request("If-Match must be a valid ETag"))?;
+        let expected = expected
+            .to_str()
+            .map_err(|_| ApiError::bad_request("If-Match must be a valid ETag"))?;
         let expected = expected.split(',').map(str::trim).collect::<Vec<_>>();
         if !expected.contains(&"*") && !expected.contains(&etag_for(value).as_str()) {
-            return Err(ApiError::new(StatusCode::PRECONDITION_FAILED, "ETag does not match current resource"));
+            return Err(ApiError::new(
+                StatusCode::PRECONDITION_FAILED,
+                "ETag does not match current resource",
+            ));
         }
     }
     Ok(())
@@ -77,7 +88,10 @@ pub(super) fn check_if_match(headers: &axum::http::HeaderMap, value: &Value) -> 
 pub(super) fn etag_response(value: Value) -> Response {
     let etag = etag_for(&value);
     let mut response = Json(value).into_response();
-    response.headers_mut().insert(axum::http::header::ETAG, axum::http::HeaderValue::from_str(&etag).expect("ETag is valid header value"));
+    response.headers_mut().insert(
+        axum::http::header::ETAG,
+        axum::http::HeaderValue::from_str(&etag).expect("ETag is valid header value"),
+    );
     response
 }
 
@@ -91,8 +105,14 @@ mod etag_tests {
         assert!(check_if_match(&axum::http::HeaderMap::new(), &value).is_ok());
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(axum::http::header::IF_MATCH, "\"stale\"".parse().unwrap());
-        assert_eq!(check_if_match(&headers, &value).unwrap_err().status, StatusCode::PRECONDITION_FAILED);
-        headers.insert(axum::http::header::IF_MATCH, etag_for(&value).parse().unwrap());
+        assert_eq!(
+            check_if_match(&headers, &value).unwrap_err().status,
+            StatusCode::PRECONDITION_FAILED
+        );
+        headers.insert(
+            axum::http::header::IF_MATCH,
+            etag_for(&value).parse().unwrap(),
+        );
         assert!(check_if_match(&headers, &value).is_ok());
         headers.insert(axum::http::header::IF_MATCH, "*".parse().unwrap());
         assert!(check_if_match(&headers, &value).is_ok());
@@ -115,6 +135,7 @@ pub struct AppState {
     project_activity: ProjectActivityTracker,
     idle_stop_minutes: Option<u64>,
     auto_close_delay: Duration,
+    web_wireshark: Arc<crate::web_wireshark::WebWiresharkManager>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -194,7 +215,10 @@ pub fn router(state: AppState) -> Router {
             "/v3/projects/{project_id}/nodes",
             get(topology_listing::list_nodes).post(node_templates::create_node),
         )
-        .route("/v3/projects/{project_id}/nodes/batch", post(batch_create::create_nodes))
+        .route(
+            "/v3/projects/{project_id}/nodes/batch",
+            post(batch_create::create_nodes),
+        )
         .route(
             "/v3/projects/{project_id}/templates/{template_id}",
             post(node_templates::create_node_from_template),
@@ -233,7 +257,10 @@ pub fn router(state: AppState) -> Router {
             "/v3/projects/{project_id}/links",
             get(topology_listing::list_links).post(link_create::create_link),
         )
-        .route("/v3/projects/{project_id}/links/batch", post(batch_create::create_links))
+        .route(
+            "/v3/projects/{project_id}/links/batch",
+            post(batch_create::create_links),
+        )
         .route(
             "/v3/projects/{project_id}/links/{link_id}",
             get(link_details::get_link)
@@ -259,6 +286,14 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v3/projects/{project_id}/links/{link_id}/capture/file",
             get(link_capture::download_link_capture),
+        )
+        .route(
+            "/v3/projects/{project_id}/links/{link_id}/capture/wireshark/restart",
+            post(link_capture::restart_web_wireshark),
+        )
+        .route(
+            "/v3/projects/{project_id}/links/{link_id}/capture/web-wireshark",
+            get(link_capture::web_wireshark_websocket),
         )
         .route(
             "/v3/projects/{project_id}/drawings",
@@ -364,6 +399,7 @@ use activity::{
     track_project_activity,
 };
 
+mod batch_create;
 mod consoles;
 mod docker_node;
 mod dynamips_node;
@@ -377,7 +413,6 @@ mod node_handlers;
 mod node_lifecycle;
 mod node_runtime;
 mod node_templates;
-mod batch_create;
 mod notifications;
 mod objects;
 mod project_store;

@@ -274,6 +274,46 @@ pub(super) async fn create_ws_ticket(
     Ok(Json(json!({"ticket":ticket,"expires_in":WS_TICKET_TTL})))
 }
 
+pub(super) async fn mint_capture_ticket(
+    pool: &SqlitePool,
+    principal: &Principal,
+    path: &str,
+) -> Result<String, AuthError> {
+    if !has_privilege(
+        pool,
+        principal,
+        path.strip_prefix("/v3").unwrap_or(path),
+        "Link.Capture",
+    )
+    .await
+    {
+        return Err(AuthError::forbidden(
+            "Permission denied (privilege Link.Capture is required)",
+        ));
+    }
+    let row = sqlx::query("SELECT token_version, is_active FROM auth_users WHERE user_id = ?")
+        .bind(&principal.user_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(db_error)?
+        .ok_or_else(AuthError::unauthorized)?;
+    if !row.get::<bool, _>("is_active") {
+        return Err(AuthError::unauthorized());
+    }
+    let mut random = [0_u8; 32];
+    SystemRandom::new().fill(&mut random).map_err(|_| {
+        AuthError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Could not create access ticket.",
+        )
+    })?;
+    let ticket = URL_SAFE_NO_PAD.encode(random);
+    sqlx::query("INSERT INTO auth_ws_tickets (ticket_hash, user_id, token_version, path, expires_at) VALUES (?, ?, ?, ?, ?)")
+        .bind(hash_ticket(&ticket)).bind(&principal.user_id).bind(row.get::<i64, _>("token_version"))
+        .bind(path).bind((now_epoch() + WS_TICKET_TTL) as i64).execute(pool).await.map_err(db_error)?;
+    Ok(ticket)
+}
+
 fn hash_ticket(ticket: &str) -> String {
     URL_SAFE_NO_PAD.encode(digest::digest(&digest::SHA256, ticket.as_bytes()).as_ref())
 }

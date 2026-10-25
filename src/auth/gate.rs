@@ -113,7 +113,7 @@ pub(super) async fn auth_gate(
             .and_then(|value| value.strip_prefix("Bearer "))
             .map(str::to_owned)
             .or_else(|| {
-                if path.ends_with("/ws") {
+                if path.ends_with("/ws") || path.ends_with("/capture/web-wireshark") {
                     request
                         .uri()
                         .query()
@@ -181,7 +181,9 @@ pub(super) fn trust_proxy_headers_unauthenticated() -> bool {
 }
 
 pub(super) fn is_ticket_endpoint(path: &str) -> bool {
-    path.ends_with("/ws") || path.ends_with("/capture/stream")
+    path.ends_with("/ws")
+        || path.ends_with("/capture/stream")
+        || path.ends_with("/capture/web-wireshark")
 }
 
 pub(super) async fn has_privilege(
