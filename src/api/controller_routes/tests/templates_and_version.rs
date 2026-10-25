@@ -25,6 +25,92 @@ async fn app() -> (axum::Router, TempDir, Store) {
     (router(state), dir, store)
 }
 
+#[tokio::test]
+async fn templates_api_syncs_registered_images_and_flags_removed_images() {
+    let directory = TempDir::new().unwrap();
+    let store = Store::connect(directory.path().join("api.sqlite").to_str().unwrap())
+        .await
+        .unwrap();
+    let qemu_images = directory.path().join("qemu");
+    let ios_images = directory.path().join("ios");
+    std::fs::create_dir_all(&qemu_images).unwrap();
+    std::fs::create_dir_all(&ios_images).unwrap();
+    let chr = qemu_images.join("mikrotik-chr-7.23.8.qcow2");
+    let ios = ios_images.join("c2691-adventerprisek9.image");
+    std::fs::write(&chr, b"chr").unwrap();
+    std::fs::write(&ios, b"ios").unwrap();
+    let mut state = AppState::new(store);
+    state.qemu = crate::qemu::QemuRuntime::with_paths(
+        "qemu",
+        "qemu-img",
+        &qemu_images,
+        directory.path().join("state"),
+        directory.path().join("qmp"),
+    );
+    state.dynamips = crate::dynamips::DynamipsRuntime::with_paths(
+        "dynamips",
+        &ios_images,
+        directory.path().join("dynamips-state"),
+    );
+    let app = router(state);
+    let response = send(&app, Method::GET, "/v3/templates", Body::empty(), None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let templates = json_body(response).await;
+    let chr_template = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|template| template["hda_disk_image"] == chr.to_string_lossy().as_ref())
+        .unwrap();
+    assert_eq!(chr_template["name"], "MikroTik CHR 7.23.8");
+    assert_eq!(chr_template["adapters"], 4);
+    assert_eq!(chr_template["linked_clone"], true);
+    let chr_template_id = chr_template["template_id"].clone();
+    let ios_template = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|template| template["image"] == ios.to_string_lossy().as_ref())
+        .unwrap();
+    assert_eq!(ios_template["platform"], "c2691");
+    assert_eq!(ios_template["slot0"], "GT96100-FE");
+    assert_eq!(ios_template["image_missing"], false);
+    let response = send(&app, Method::GET, "/v3/templates", Body::empty(), None).await;
+    let repeated_templates = json_body(response).await;
+    assert_eq!(
+        repeated_templates
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|template| template["hda_disk_image"] == chr.to_string_lossy().as_ref())
+            .count(),
+        1,
+        "repeated template listing must not duplicate generated image templates"
+    );
+    std::fs::remove_file(&chr).unwrap();
+    let response = send(&app, Method::GET, "/v3/templates", Body::empty(), None).await;
+    let templates = json_body(response).await;
+    assert_eq!(
+        templates
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|template| template["hda_disk_image"] == chr.to_string_lossy().as_ref())
+            .count(),
+        1,
+        "repeated template listing must not duplicate generated image templates"
+    );
+    assert_eq!(
+        templates
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|template| template["template_id"] == chr_template_id)
+            .unwrap()["image_missing"],
+        true
+    );
+}
+
 async fn mock_dynamips(commands: Vec<(&'static str, &'static str)>) -> u16 {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();

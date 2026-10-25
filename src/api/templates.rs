@@ -62,7 +62,17 @@ fn same_image_reference(left: &Value, right: &Value) -> bool {
     let (Some(left), Some(right)) = (left[key].as_str(), right[key].as_str()) else {
         return false;
     };
-    std::path::Path::new(left).file_name() == std::path::Path::new(right).file_name()
+    image_references_match(left, right)
+}
+
+fn image_references_match(left: &str, right: &str) -> bool {
+    let left = std::path::Path::new(left);
+    let right = std::path::Path::new(right);
+    match (left.is_absolute(), right.is_absolute()) {
+        (true, true) => left == right,
+        (false, false) => left == right,
+        _ => left.file_name() == right.file_name(),
+    }
 }
 
 /// Create missing palette templates for image files in the runtime image
@@ -164,8 +174,7 @@ fn image_ref_matches(template: &Value, kind: &str, path: &std::path::Path) -> bo
     let Some(reference) = template.get(key).and_then(Value::as_str) else {
         return false;
     };
-    let reference_path = std::path::Path::new(reference);
-    reference == path.to_string_lossy() || reference_path.file_name() == path.file_name()
+    image_references_match(reference, &path.to_string_lossy())
 }
 
 fn generated_image_template(kind: &str, filename: &str, path: &std::path::Path) -> Value {
@@ -238,6 +247,7 @@ pub(super) async fn update_template_profile(
     for (key, value) in profile.as_object().expect("profile is an object") {
         updated[key] = value.clone();
     }
+    mark_missing_images(std::slice::from_mut(&mut updated));
     Ok(Json(updated))
 }
 
@@ -255,5 +265,60 @@ pub(super) async fn reset_template_profile(
         .into_iter()
         .find(|template| template["template_id"].as_str() == Some(template_id.as_str()))
         .ok_or_else(|| ApiError::not_found(format!("Template {template_id} does not exist")))?;
+    let mut template = template;
+    mark_missing_images(std::slice::from_mut(&mut template));
     Ok(Json(template))
+}
+
+#[cfg(test)]
+mod image_template_tests {
+    use super::*;
+
+    #[test]
+    fn generated_image_templates_use_usable_chr_and_ios_defaults() {
+        let chr = generated_image_template(
+            "qemu",
+            "mikrotik-chr-7.23.8.qcow2",
+            std::path::Path::new("/images/mikrotik-chr-7.23.8.qcow2"),
+        );
+        assert_eq!(chr["name"], "MikroTik CHR 7.23.8");
+        assert_eq!(chr["memory"], 256);
+        assert_eq!(chr["adapters"], 4);
+        assert_eq!(chr["console_type"], "telnet");
+        assert_eq!(chr["adapter_type"], "e1000");
+        assert_eq!(chr["hda_disk_interface"], "ide");
+        assert_eq!(chr["linked_clone"], true);
+
+        let c2600 = generated_image_template(
+            "dynamips",
+            "c2600-adventerprisek9.image",
+            std::path::Path::new("/images/c2600-adventerprisek9.image"),
+        );
+        assert_eq!(c2600["platform"], "c2600");
+        assert_eq!(c2600["slot0"], "C2600-MB-1FE");
+        let c3660 = generated_image_template(
+            "dynamips",
+            "c3660-adventerprisek9.image",
+            std::path::Path::new("/images/c3660-adventerprisek9.image"),
+        );
+        assert_eq!(c3660["platform"], "c3600");
+        assert_eq!(c3660["chassis"], "3660");
+        assert_eq!(c3660["slot0"], "Leopard-2FE");
+    }
+
+    #[test]
+    fn duplicate_checks_distinguish_images_with_the_same_name_in_different_directories() {
+        assert!(!image_references_match(
+            "/images/vendor-a/router.qcow2",
+            "/images/vendor-b/router.qcow2"
+        ));
+        assert!(image_references_match(
+            "/images/vendor-a/router.qcow2",
+            "/images/vendor-a/router.qcow2"
+        ));
+        assert!(image_references_match(
+            "router.qcow2",
+            "/images/vendor-a/router.qcow2"
+        ));
+    }
 }

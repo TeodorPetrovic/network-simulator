@@ -280,14 +280,10 @@ async fn qemu_image_upload_is_installed_in_the_shared_runtime_library() {
 
     let (status, templates) = request(&app, Method::GET, "/v3/templates".into(), None).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        templates
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|template| template["template_type"] != "qemu"),
-        "an uploaded disk image must not create a palette template: {templates:#}"
-    );
+    assert!(templates.as_array().unwrap().iter().any(|template| {
+        template["hda_disk_image"] == uploaded["image"]
+            && template["name"] == "custom-router.qcow2"
+    }));
     let (_, manager) = request(
         &app,
         Method::GET,
@@ -316,12 +312,15 @@ async fn qemu_image_upload_is_installed_in_the_shared_runtime_library() {
     assert_eq!(status, StatusCode::OK);
     let (status, templates) = request(&app, Method::GET, "/v3/templates".into(), None).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(
+    assert_eq!(
         templates
             .as_array()
             .unwrap()
             .iter()
-            .any(|template| template["hda_disk_image"] == uploaded["image"])
+            .filter(|template| template["hda_disk_image"] == uploaded["image"])
+            .count(),
+        1,
+        "importing an appliance for an already registered image must not duplicate its template"
     );
 }
 

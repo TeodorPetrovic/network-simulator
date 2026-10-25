@@ -43,6 +43,7 @@ pub(super) async fn create_template(
     obj.insert("template_id".into(), json!(template_id));
     obj.insert("name".into(), json!(name));
     obj.insert("template_type".into(), json!(template_type));
+    obj.remove("image_missing");
     obj.entry("compute_id").or_insert(json!("local"));
     obj.entry("builtin").or_insert(json!(false));
     sqlx::query("INSERT INTO controller_templates (template_id, template_json) VALUES (?, ?)")
@@ -50,6 +51,7 @@ pub(super) async fn create_template(
         .bind(serde_json::to_string(&template).map_err(internal_json_error)?)
         .execute(state.store.pool())
         .await?;
+    super::super::templates::mark_missing_images(std::slice::from_mut(&mut template));
     Ok((StatusCode::CREATED, Json(template)).into_response())
 }
 
@@ -106,12 +108,14 @@ pub(super) async fn update_template(
             target.insert(key.clone(), value.clone());
         }
     }
+    target.remove("image_missing");
     let serialized = serde_json::to_string(&template).map_err(internal_json_error)?;
     sqlx::query("UPDATE controller_templates SET template_json = ?, updated_at = CURRENT_TIMESTAMP WHERE template_id = ?")
         .bind(serialized)
         .bind(&template_id)
         .execute(state.store.pool())
         .await?;
+    super::super::templates::mark_missing_images(std::slice::from_mut(&mut template));
     Ok(Json(template))
 }
 
@@ -144,10 +148,12 @@ pub(super) async fn duplicate_template(
     duplicate["template_id"] = json!(id);
     duplicate["name"] = json!(format!("{name} copy"));
     duplicate["builtin"] = json!(false);
+    duplicate.as_object_mut().unwrap().remove("image_missing");
     sqlx::query("INSERT INTO controller_templates (template_id, template_json) VALUES (?, ?)")
         .bind(&id)
         .bind(serde_json::to_string(&duplicate).map_err(internal_json_error)?)
         .execute(state.store.pool())
         .await?;
+    super::super::templates::mark_missing_images(std::slice::from_mut(&mut duplicate));
     Ok((StatusCode::CREATED, Json(duplicate)).into_response())
 }
