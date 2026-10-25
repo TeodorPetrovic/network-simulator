@@ -100,9 +100,9 @@ export function DrawingEditorDialog({ open, onOpenChange, onSave, tool, mode, in
 }) {
   const [width, setWidth] = useState("180");
   const [height, setHeight] = useState("100");
-  const [stroke, setStroke] = useState("#2563eb");
-  const [fill, setFill] = useState("#dbeafe");
-  const [strokeWidth, setStrokeWidth] = useState("2");
+  const [stroke, setStroke] = useState("#111111");
+  const [fill, setFill] = useState("none");
+  const [strokeWidth, setStrokeWidth] = useState("1");
   const [text, setText] = useState("Text");
   const [imageDataUrl, setImageDataUrl] = useState("");
   const [error, setError] = useState("");
@@ -110,8 +110,8 @@ export function DrawingEditorDialog({ open, onOpenChange, onSave, tool, mode, in
     if (!open) return;
     setError("");
     setWidth(String(initial?.width ?? 180)); setHeight(String(initial?.height ?? 100));
-    setStroke(initial?.stroke ?? "#2563eb"); setFill(initial?.fill ?? "#dbeafe");
-    setStrokeWidth(String(initial?.strokeWidth ?? 2)); setText(initial?.text ?? "Text"); setImageDataUrl(initial?.imageDataUrl ?? "");
+    setStroke(initial?.stroke ?? "#111111"); setFill(initial?.fill ?? "none");
+    setStrokeWidth(String(initial?.strokeWidth ?? 1)); setText(initial?.text ?? "Text"); setImageDataUrl(initial?.imageDataUrl ?? "");
   }, [open, tool, initial]);
   if (!tool) return null;
   const title: Record<DrawingTool, string> = { rectangle: "Rectangle", ellipse: "Ellipse", line: "Line", text: "Text", image: "Image" };

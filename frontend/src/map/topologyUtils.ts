@@ -100,7 +100,7 @@ export function valuesFromDrawing(drawing: Drawing): DrawingValues {
   return {
     width: getNumber("width", 180), height: getNumber("height", 100),
     stroke: shape?.getAttribute("stroke") ?? "#2563eb",
-    fill: fill === "none" ? "#ffffff" : fill,
+    fill,
     strokeWidth: Number(shape?.getAttribute("stroke-width") ?? 2) || 2,
     text: shape?.textContent ?? "Text",
     ...(shape?.localName === "image" && shape.getAttribute("href") ? { imageDataUrl: shape.getAttribute("href")! } : {}),

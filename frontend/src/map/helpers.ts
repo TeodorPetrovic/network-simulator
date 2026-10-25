@@ -51,16 +51,16 @@ export function drawingSvg(tool: DrawingTool, options: {
 }): string {
   const width = Math.max(1, Math.round(options.width));
   const height = Math.max(1, Math.round(options.height));
-  const stroke = escapeXml(options.stroke ?? "#2563eb");
+  const stroke = escapeXml(options.stroke ?? "#111111");
   const fill = escapeXml(options.fill ?? "none");
-  const strokeWidth = Math.max(1, Number(options.strokeWidth ?? 2));
+  const strokeWidth = Math.max(1, Number(options.strokeWidth ?? 1));
   const start = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`;
   let shape: string;
   switch (tool) {
     case "rectangle": shape = `<rect x="1" y="1" width="${Math.max(0, width - 2)}" height="${Math.max(0, height - 2)}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`; break;
     case "ellipse": shape = `<ellipse cx="${width / 2}" cy="${height / 2}" rx="${Math.max(0, (width - strokeWidth) / 2)}" ry="${Math.max(0, (height - strokeWidth) / 2)}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`; break;
     case "line": shape = `<line x1="1" y1="1" x2="${Math.max(1, width - 1)}" y2="${Math.max(1, height - 1)}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`; break;
-    case "text": shape = `<text x="2" y="${Math.min(height - 2, 20)}" fill="${stroke}" font-size="16">${escapeXml(options.text ?? "Text")}</text>`; break;
+    case "text": shape = `<text x="2" y="${Math.min(height - 2, 16)}" fill="${stroke}" font-family="sans-serif" font-size="12">${escapeXml(options.text ?? "Text")}</text>`; break;
     case "image": {
       const dataUrl = options.imageDataUrl ?? "";
       if (!/^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/=]+$/i.test(dataUrl)) throw new Error("Choose a PNG, JPEG, GIF, or WebP image.");
