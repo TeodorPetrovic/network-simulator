@@ -331,7 +331,7 @@ button, input, textarea, select { font: inherit; }
 .app-shell { display: flex; width: 100%; height: 100dvh; min-height: 0; flex-direction: column; overflow: hidden; background: var(--background); }
 .main-area { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; margin: 0; }
 .sim-app-header { z-index: 5; display: flex; height: 52px; min-height: 52px; align-items: center; gap: 20px; padding: 0 14px; border-bottom: 1px solid var(--border); background: var(--background); }
-.sim-brand { gap: 9px; padding-inline: 4px; font-weight: 650; }
+.sim-brand { display: inline-flex; align-items: center; gap: 9px; padding-inline: 4px; font-weight: 650; line-height: 1; }
 .sim-brand-mark { display: grid; width: 29px; height: 29px; place-items: center; border: 1px solid oklch(0.81 0.08 255); border-radius: 7px; color: var(--primary); background: oklch(0.96 0.02 255); }
 .sim-header-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 .sim-connection-dot { width: 6px; height: 6px; border-radius: 50%; background: oklch(0.72 0 0); }
