@@ -5,6 +5,7 @@ use super::parsing::{
     validate_appliance_file_name,
 };
 use super::templates::appliance_runtime_templates;
+use super::templates::detect_dynamips_platform;
 use serde_json::json;
 use sha1::Digest;
 use tokio::{
@@ -24,6 +25,23 @@ fn ishare_search_matches_image_manifest_filenames_as_well_as_titles() {
     ));
     assert!(ishare_row_matches_query(&row, "alpine"));
     assert!(!ishare_row_matches_query(&row, "c7200"));
+}
+
+#[test]
+fn detects_dynamips_platforms_from_registered_ios_filenames() {
+    assert_eq!(
+        detect_dynamips_platform("c2600-adventerprisek9.image"),
+        Some(("c2600", ""))
+    );
+    assert_eq!(
+        detect_dynamips_platform("nested/c2691.bin"),
+        Some(("c2691", ""))
+    );
+    assert_eq!(
+        detect_dynamips_platform("c3660-jk9o3s-mz.bin"),
+        Some(("c3600", "3660"))
+    );
+    assert_eq!(detect_dynamips_platform("unknown-ios.bin"), None);
 }
 
 #[test]
