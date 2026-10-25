@@ -134,7 +134,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
       const raw = localStorage.getItem(`ns.view.${props.project.project_id}`);
       const saved = raw ? JSON.parse(raw) as { zoom?: number; centerX?: number; centerY?: number } : null;
       if (saved && Number.isFinite(saved.zoom) && Number.isFinite(saved.centerX) && Number.isFinite(saved.centerY)) {
-        setView({ zoom: Math.max(0.4, Math.min(maxZoom, saved.zoom!)), centerX: saved.centerX!, centerY: saved.centerY! });
+        setView({ zoom: Math.max(0.1, Math.min(maxZoom, saved.zoom!)), centerX: saved.centerX!, centerY: saved.centerY! });
       }
     } catch { /* Ignore invalid or unavailable local storage. */ }
     setSavedViewLoaded(true);
@@ -224,7 +224,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
     const maxX = Math.max(...xValues);
     const minY = Math.min(...yValues);
     const maxY = Math.max(...yValues);
-    const zoom = Math.max(0.4, Math.min(maxZoom, Math.min(scene.width / (maxX - minX + 244), scene.height / (maxY - minY + 166))));
+    const zoom = Math.max(0.1, Math.min(maxZoom, Math.min(scene.width / (maxX - minX + 244), scene.height / (maxY - minY + 166))));
     setView({ zoom, centerX: (minX + maxX) / 2, centerY: (minY + maxY) / 2 });
   }
 
@@ -237,7 +237,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
     if (!boxes.length) { setFeatureMessage("Select a device, link, or drawing to zoom to it."); return; }
     const left = Math.min(...boxes.map((box) => box.left)); const right = Math.max(...boxes.map((box) => box.right));
     const top = Math.min(...boxes.map((box) => box.top)); const bottom = Math.max(...boxes.map((box) => box.bottom));
-    const zoom = Math.max(0.4, Math.min(maxZoom, Math.min(scene.width / (right - left + 80), scene.height / (bottom - top + 80))));
+    const zoom = Math.max(0.1, Math.min(maxZoom, Math.min(scene.width / (right - left + 80), scene.height / (bottom - top + 80))));
     setView({ zoom, centerX: (left + right) / 2, centerY: (top + bottom) / 2 });
   }
 
@@ -319,8 +319,8 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
 
   return (
     <section className="sim-workspace" aria-label={`Project ${props.project.name}`}>
-      <WorkspaceToolbar workspace={props} topology={topology} selectedNodeIds={selectedNodeIds} selectedLifecycleNodes={selectedLifecycleNodes} projectLocked={projectLocked} gridVisible={gridVisible} setGridVisible={setGridVisible} snapToGrid={snapToGrid} setSnapToGrid={setSnapToGrid} selectedDrawing={selectedDrawing} selectedLink={selectedLink} runBulkLifecycle={runBulkLifecycle} runAllLifecycle={runAllLifecycle} deleteSelectedNodes={deleteSelectedNodes} toggleProjectLock={toggleProjectLock} startDrawingTool={startDrawingTool} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} setSnapshotsOpen={setSnapshotsOpen} setLogOpen={setLogOpen} setScreenshotOpen={setScreenshotOpen} setLinkPropertiesOpen={setLinkPropertiesOpen} setHelpOpen={setHelpOpen} setInfoOpen={setInfoOpen} onToggleConsoleDock={props.onToggleConsoleDock ?? (() => props.onOpenConsoleDock?.())} consoleDockOpen={props.consoleOpen ?? false} topologyDockOpen={topologyDockOpen} serversDockOpen={serversDockOpen} onToggleTopologyDock={() => setTopologyDockOpen(!topologyDockOpen)} onToggleServersDock={() => setServersDockOpen(!serversDockOpen)} zoom={view.zoom} onZoom={(delta) => setView((current) => ({ ...current, zoom: Math.max(0.4, Math.min(maxZoom, Number((current.zoom + delta).toFixed(1)))) }))} onFitTopology={fitTopology} onZoomToSelection={zoomToSelection} onResetZoom={() => setView({ zoom: 1, centerX: 0, centerY: 0 })} showInterfaceLabels={showInterfaceLabels} onToggleInterfaceLabels={() => setShowInterfaceLabels((current) => !current)} />
-      <WorkspaceIconToolbar workspace={props} selectedLink={selectedLink} setLinkPropertiesOpen={setLinkPropertiesOpen} startDrawingTool={startDrawingTool} runAllLifecycle={runAllLifecycle} showInterfaceLabels={showInterfaceLabels} onToggleInterfaceLabels={() => setShowInterfaceLabels((current) => !current)} zoomIn={() => setView((current) => ({ ...current, zoom: Math.min(maxZoom, Number((current.zoom + 0.1).toFixed(1))) }))} zoomOut={() => setView((current) => ({ ...current, zoom: Math.max(0.4, Number((current.zoom - 0.1).toFixed(1))) }))} fitTopology={fitTopology} />
+      <WorkspaceToolbar workspace={props} topology={topology} selectedNodeIds={selectedNodeIds} selectedLifecycleNodes={selectedLifecycleNodes} projectLocked={projectLocked} gridVisible={gridVisible} setGridVisible={setGridVisible} snapToGrid={snapToGrid} setSnapToGrid={setSnapToGrid} selectedDrawing={selectedDrawing} selectedLink={selectedLink} runBulkLifecycle={runBulkLifecycle} runAllLifecycle={runAllLifecycle} deleteSelectedNodes={deleteSelectedNodes} toggleProjectLock={toggleProjectLock} startDrawingTool={startDrawingTool} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} setSnapshotsOpen={setSnapshotsOpen} setLogOpen={setLogOpen} setScreenshotOpen={setScreenshotOpen} setLinkPropertiesOpen={setLinkPropertiesOpen} setHelpOpen={setHelpOpen} setInfoOpen={setInfoOpen} onToggleConsoleDock={props.onToggleConsoleDock ?? (() => props.onOpenConsoleDock?.())} consoleDockOpen={props.consoleOpen ?? false} topologyDockOpen={topologyDockOpen} serversDockOpen={serversDockOpen} onToggleTopologyDock={() => setTopologyDockOpen(!topologyDockOpen)} onToggleServersDock={() => setServersDockOpen(!serversDockOpen)} zoom={view.zoom} onZoom={(delta) => setView((current) => ({ ...current, zoom: Math.max(0.1, Math.min(maxZoom, Number((current.zoom + delta).toFixed(1)))) }))} onFitTopology={fitTopology} onZoomToSelection={zoomToSelection} onResetZoom={() => setView({ zoom: 1, centerX: 0, centerY: 0 })} showInterfaceLabels={showInterfaceLabels} onToggleInterfaceLabels={() => setShowInterfaceLabels((current) => !current)} />
+      <WorkspaceIconToolbar workspace={props} selectedLink={selectedLink} setLinkPropertiesOpen={setLinkPropertiesOpen} startDrawingTool={startDrawingTool} runAllLifecycle={runAllLifecycle} showInterfaceLabels={showInterfaceLabels} onToggleInterfaceLabels={() => setShowInterfaceLabels((current) => !current)} zoomIn={() => setView((current) => ({ ...current, zoom: Math.min(maxZoom, Number((current.zoom + 0.1).toFixed(1))) }))} zoomOut={() => setView((current) => ({ ...current, zoom: Math.max(0.1, Number((current.zoom - 0.1).toFixed(1))) }))} fitTopology={fitTopology} />
 
       <div className={`sim-workspace-grid ${!topologyDockOpen && !serversDockOpen ? "is-docks-closed" : ""}`}>
         <WorkspaceSidebar workspace={props} deviceQuery={deviceQuery} setDeviceQuery={setDeviceQuery} groupedTemplates={groupedTemplates} />
@@ -375,7 +375,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
                   onDrawingMove={(id, x, y) => void moveDrawing(id, x, y)}
                   onDeleteSelected={() => { if (selectedDrawing) void removeDrawing(); else if (selectedLink) props.onDeleteSelection(); else deleteSelectedNodes(); }}
                   onClearSelection={() => { setSelectedNodeIds([]); setSelectedDrawingId(null); props.onSelectCanvas(); }}
-                  onZoom={(delta) => setView((current) => ({ ...current, zoom: Math.max(0.4, Math.min(maxZoom, Number((current.zoom + delta).toFixed(1)))) }))}
+                  onZoom={(delta) => setView((current) => ({ ...current, zoom: Math.max(0.1, Math.min(maxZoom, current.zoom + delta)) }))}
                   onNodeLabelMove={(id, x, y) => void saveNodeLabelPosition(id, x, y)}
                   onLinkEndpointLabelMove={(linkId, nodeId, x, y) => void saveLinkEndpointLabelPosition(linkId, nodeId, x, y)}
                   onDropTemplate={(templateId, x, y) => props.onAddTemplate(templateId, x, y)}

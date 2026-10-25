@@ -19,7 +19,7 @@ import { iconForSymbolName, iconForType, localPortPoint, portCount, portIndex, p
 export { deviceGroupLabel, endpointLabel, iconForSymbolName, iconForType, imageName, kindLabel, localPortPoint, messageFor, nodeHasAuxConsole, nodePorts, portCount, portIndex, portLabel, portPoint, safeFileName, sameEndpoint, templateDescription, valuesFromDrawing } from "./topologyUtils";
 
 export const scene = { width: 1440, height: 920 };
-export const maxZoom = 3;
+export const maxZoom = 4;
 const defaultSymbolUrls: Record<string, string> = { "cloud.svg": cloudSymbolUrl, "docker_guest.svg": dockerSymbolUrl, "ethernet_switch.svg": switchSymbolUrl, "hub.svg": hubSymbolUrl, "nat.svg": natSymbolUrl, "qemu_guest.svg": qemuSymbolUrl, "router.svg": routerSymbolUrl, "vpcs_guest.svg": vpcsSymbolUrl };
 
 export type Selection = { kind: "node" | "link"; id: string } | null;
