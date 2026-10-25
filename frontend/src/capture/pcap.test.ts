@@ -62,6 +62,36 @@ function pcapngCapture(): Uint8Array {
   return bytes.slice(0, offset);
 }
 
+function bigEndianPcapngCapture(): Uint8Array {
+  const bytes = new Uint8Array(80);
+  const data = new DataView(bytes.buffer);
+  let offset = 0;
+  const block = (type: number, length: number, write: (view: DataView) => void) => {
+    data.setUint32(offset, type, false);
+    data.setUint32(offset + 4, length, false);
+    write(new DataView(bytes.buffer, offset, length));
+    data.setUint32(offset + length - 4, length, false);
+    offset += length;
+  };
+  block(0x0a0d0d0a, 28, (view) => {
+    view.setUint32(8, 0x1a2b3c4d, false);
+    view.setUint16(12, 1, false);
+    view.setUint32(16, 0xffffffff, false);
+  });
+  block(1, 20, (view) => {
+    view.setUint16(8, 1, false);
+    view.setUint32(12, 65535, false);
+  });
+  block(6, 32, (view) => {
+    view.setUint32(8, 0, false);
+    view.setUint32(12, 0, false);
+    view.setUint32(16, 1000, false);
+    view.setUint32(20, 0, false);
+    view.setUint32(24, 0, false);
+  });
+  return bytes.slice(0, offset);
+}
+
 function stream(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
   return new ReadableStream({
     start(controller) {
@@ -98,6 +128,11 @@ describe("capture reader", () => {
       value: { timestamp: 0, linkType: 1, data: new Uint8Array([7, 8, 9]) },
     });
     expect((await packets.next()).done).toBe(true);
+  });
+
+  it("reads big-endian pcapng sections and packets", async () => {
+    const packets = readPcap(stream([bigEndianPcapngCapture()]));
+    expect(await packets.next()).toMatchObject({ value: { timestamp: 0.001, linkType: 1, data: new Uint8Array() } });
   });
 
   it("reports malformed and truncated captures", async () => {
