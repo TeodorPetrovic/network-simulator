@@ -8,6 +8,23 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
+const DYNAMIPS_PLATFORMS = ["c1700", "c2600", "c2691", "c3600", "c3725", "c3745", "c7200"];
+const CHASSIS: Record<string, string[]> = {
+  c1700: ["1720", "1721", "1750", "1751", "1760"],
+  c2600: ["2610", "2611", "2620", "2610XM", "2620XM", "2650XM", "2621", "2611XM", "2621XM", "2651XM"],
+  c3600: ["3620", "3640", "3660"],
+};
+const chassisDefault: Record<string, string> = { c1700: "1760", c2600: "2610", c3600: "3640" };
+const ramDefault: Record<string, number> = { c1700: 160, c2600: 160, c2691: 192, c3600: 192, c3725: 128, c3745: 256, c7200: 512 };
+const nvramDefault: Record<string, number> = { c1700: 128, c2600: 128, c2691: 256, c3600: 128, c3725: 256, c3745: 256, c7200: 512 };
+function defaultSlot0(platform: string, chassis: string) {
+  if (platform === "c1700") return "C1700-MB-1FE";
+  if (platform === "c2600") return chassis === "2611" ? "C2600-MB-2E" : ["2620", "2610XM", "2620XM", "2650XM"].includes(chassis) ? "C2600-MB-1FE" : ["2621", "2611XM", "2621XM", "2651XM"].includes(chassis) ? "C2600-MB-2FE" : "C2600-MB-1E";
+  if (platform === "c3600") return chassis === "3660" ? "Leopard-2FE" : "NM-1FE-TX";
+  if (["c2691", "c3725", "c3745"].includes(platform)) return "GT96100-FE";
+  return "C7200-IO-FE";
+}
+
 export function TemplateSettingsDialog({ template, open, onOpenChange, onSave }: {
   template: RuntimeTemplate;
   open: boolean;
@@ -36,8 +53,9 @@ export function TemplateSettingsDialog({ template, open, onOpenChange, onSave }:
       } : {}),
       ...(template.template_type === "dynamips" ? {
         platform: template.platform,
-        chassis: template.chassis ?? "",
-        slot0: template.slot0 ?? "C7200-IO-FE",
+        chassis: template.chassis || chassisDefault[template.platform] || "",
+        slot0: template.slot0 ?? defaultSlot0(template.platform, template.chassis ?? chassisDefault[template.platform] ?? ""),
+        memory: String(template.memory ?? ramDefault[template.platform] ?? 512),
         nvram: String(template.nvram),
         idlepc: template.idlepc,
       } : {}),
@@ -64,6 +82,11 @@ export function TemplateSettingsDialog({ template, open, onOpenChange, onSave }:
     <span className="text-xs text-muted-foreground">{helper}</span>
   </label>;
 
+  const changeDynamipsPlatform = (platform: string) => {
+    const chassis = chassisDefault[platform] ?? "";
+    setDraft((current) => ({ ...current, platform, chassis, slot0: defaultSlot0(platform, chassis), memory: String(ramDefault[platform] ?? 512), nvram: String(nvramDefault[platform] ?? 128) }));
+  };
+
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true);
@@ -84,7 +107,7 @@ export function TemplateSettingsDialog({ template, open, onOpenChange, onSave }:
       patch.extra_volumes = (draft.extra_volumes ?? "").split("\n").map((path) => path.trim()).filter(Boolean);
     } else if (template.template_type === "dynamips") {
       patch.platform = draft.platform;
-      patch.chassis = draft.chassis;
+      patch.chassis = draft.chassis ?? "";
       patch.slot0 = draft.slot0;
       patch.nvram = Number(draft.nvram);
       patch.idlepc = draft.idlepc;
@@ -121,8 +144,8 @@ export function TemplateSettingsDialog({ template, open, onOpenChange, onSave }:
           {textArea("extra_volumes", "Persistent container paths", "One absolute path inside the container per line. Data is stored under the project runtime directory.")}
         </div>}
         {template.template_type === "dynamips" && <>
-          {selectField("platform", "Dynamips platform", ["c1700", "c2600", "c2691", "c3600", "c3725", "c3745", "c7200"])}
-          {field("chassis", "Chassis", "text", "For c3600, choose a supported chassis such as 3620.")}
+          <label className="grid gap-1.5" key="platform"><Label>Dynamips platform</Label><Select value={draft.platform ?? template.platform} onValueChange={changeDynamipsPlatform}><SelectTrigger aria-label="Dynamips platform"><SelectValue /></SelectTrigger><SelectContent position="popper" align="start">{DYNAMIPS_PLATFORMS.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></label>
+          {CHASSIS[draft.platform ?? template.platform] && selectField("chassis", "Chassis", CHASSIS[draft.platform ?? template.platform])}
           {field("slot0", "Slot 0 adapter")}
           {field("nvram", "NVRAM (KB)", "number")}
           {field("idlepc", "Idle-PC value", "text", "Leave blank to let the router use its normal idle behavior.")}

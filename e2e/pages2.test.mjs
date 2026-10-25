@@ -48,7 +48,7 @@ test("Preferences creates templates for each supported runtime and exposes its f
   assert.ok(created.some((x) => x.name === "E2E Dynamips (IOS routers)"));
 });
 
-test("Dynamips platform selector shows stored value and all supported choices; save persists", { todo: "Preferences template editor only offers c7200 and c3600, so it cannot satisfy the required seven platform choices yet." }, async (t) => {
+test("Dynamips platform selector shows stored value and all supported choices; save persists", async (t) => {
   const { page, server } = await fixture(t);
   const templates = (await server.api("GET", "/templates")).json;
   let dynamips = templates.find((x) => x.template_type === "dynamips");
@@ -70,6 +70,8 @@ test("Dynamips platform selector shows stored value and all supported choices; s
   for (const value of ["c1700", "c2600", "c2691", "c3600", "c3725", "c3745", "c7200"]) await page.getByRole("option", { name: value, exact: true }).waitFor();
   await page.getByRole("option", { name: "c3725", exact: true }).click();
   await dialog.getByRole("button", { name: "Save template" }).click();
+  await waitFor(async () => (await dialog.getByRole("alert").count()) > 0 || (await server.api("GET", "/templates")).json.find((x) => x.template_id === dynamips.template_id)?.platform === "c3725", { label: "Dynamips platform save response" });
+  assert.equal(await dialog.getByRole("alert").count(), 0);
   await waitFor(async () => (await server.api("GET", "/templates")).json.find((x) => x.template_id === dynamips.template_id)?.platform === "c3725", { label: "Dynamips platform persistence" });
 });
 
