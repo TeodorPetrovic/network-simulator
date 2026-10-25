@@ -552,6 +552,7 @@ fn sparse_dynamips_template_options_use_platform_defaults() {
     assert!(options.mmap);
     assert!(options.sparsemem);
     assert_eq!(options.clock_divisor, 8);
+    assert!(options.l1_keepalives);
     assert!(options.private_config.is_empty());
     assert_eq!(options.console_type, "telnet");
 }

@@ -270,6 +270,7 @@ pub(super) async fn create_node_from_template(
             "midplane": template["midplane"],
             "iomem": template["iomem"],
             "ghost_ios": template["ghost_ios"],
+            "l1_keepalives": template.get("l1_keepalives").cloned().unwrap_or(json!(true)),
             "console_type": template["console_type"],
             "aux_type": template["aux_type"],
             "x": usage.get("x").cloned().unwrap_or(json!(0)),

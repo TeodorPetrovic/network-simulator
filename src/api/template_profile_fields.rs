@@ -90,6 +90,7 @@ pub(super) fn template_profile_fields(kind: &str) -> Result<&'static [&'static s
             "midplane",
             "iomem",
             "ghost_ios",
+            "l1_keepalives",
             "console_type",
             "aux_type",
         ],
