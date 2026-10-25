@@ -332,11 +332,13 @@ export function TopologyCanvas(props: CanvasProps) {
         const symbol = resolveCanvasSymbol(node.node_type ?? "", node.symbol, props.symbolDefaults, props.customSymbolIds);
         const Icon = symbol.kind === "default" ? iconForSymbolName(symbol.name, node.node_type ?? "") : iconForType(node.node_type ?? "");
         const label = node.label && typeof node.label === "object" ? node.label as Record<string, unknown> : {};
-        const labelPosition = labelPositions[node.node_id] ?? { x: Number(label.x ?? 0), y: Number(label.y ?? 38) };
+        const labelPosition = labelPositions[node.node_id] ?? { x: Number(label.x ?? 0), y: Number(label.y ?? 36) };
+        const suspended = node.status === "suspended" || node.status === "suspending";
         return <g key={node.node_id} transform={`translate(${x},${y})`} className={`sim-node ${selected ? "is-selected" : ""} ${props.connecting ? "is-connecting" : ""} ${node.locked || props.projectLocked ? "is-locked" : ""}`} onPointerDown={(event) => startMove(event, node)} onClick={(event) => { event.stopPropagation(); if (event.metaKey || event.ctrlKey) props.onMultiSelectNode(node.node_id); else if (!movedRef.current) props.onNodeClick(node.node_id); movedRef.current = false; }} onContextMenu={() => props.onNodeContext(node.node_id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onNodeClick(node.node_id); } }} role="button" aria-label={`Node ${node.name}`} tabIndex={0}>
-          <Icon className="sim-node-icon" x={-17} y={-17} width={34} height={34} strokeWidth={1.7} />
-          {symbol.kind === "custom" && <AuthenticatedSymbolImage symbolId={symbol.symbolId} />}
-          <circle className={`sim-node-status ${node.status === "started" ? "running" : "stopped"}`} cx="19" cy="-17" r="3" />
+          {selected && <rect className="sim-node-selection" x="-33" y="-33" width="66" height="74" rx="6" />}
+          {symbol.kind === "custom" ? <AuthenticatedSymbolImage symbolId={symbol.symbolId} /> : <Icon className="sim-node-icon" x={-24} y={-24} width={48} height={48} strokeWidth={1.5} />}
+          <circle className={`sim-node-status ${node.status === "started" ? "running" : suspended ? "suspended" : "stopped"}`} cx="22" cy="-21" r="4" />
+          {(node.locked || props.projectLocked) && <text className="sim-node-lock" x="-22" y="-17" aria-label="Locked">🔒</text>}
           <text className="sim-node-name" data-node-label="true" x={labelPosition.x} y={labelPosition.y} onPointerDown={(event) => startLabelMove(event, node)} onClick={(event) => event.stopPropagation()}>{node.name}</text>
         </g>;
         })}
