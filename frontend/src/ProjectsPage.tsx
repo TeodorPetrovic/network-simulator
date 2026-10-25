@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowDown, ArrowUp, BarChart3, Copy, Download, FileUp, FolderOpen, Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, BarChart3, Copy, Download, FileUp, FolderOpen, Pencil, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import type { Project, ProjectStatistics } from "./api";
 import { api } from "./api";
 import { PagesShell, PageTitle } from "./PagesShell";
@@ -178,7 +178,7 @@ export function ProjectsPage() {
   const field = (key: "name" | "scene_width" | "scene_height" | "grid_size" | "drawing_grid_size", label: string, type = "text") => <label key={key} className="grid gap-1.5"><Label htmlFor={`project-${key}`}>{label}</Label><Input id={`project-${key}`} type={type} min={type === "number" ? 1 : undefined} value={draft[key]} onChange={(event) => setDraft((current) => ({ ...current, [key]: event.target.value }))} /></label>;
 
   return <PagesShell active="Projects"><div className="pages-content">
-    <PageTitle eyebrow="LAB MANAGEMENT" title="Projects" description="Create, organize, import, and inspect network labs." actions={<Button variant="outline" onClick={() => void navigate({ to: "/appliances" as never })}>Appliance manager</Button>} />
+    <PageTitle eyebrow="LAB MANAGEMENT" title="Projects" description="Create, organize, import, and inspect network labs." actions={<><Button variant="outline" onClick={() => void refresh()} disabled={busy}><RefreshCw size={15} />Refresh projects</Button><Button variant="outline" onClick={() => void navigate({ to: "/appliances" as never })}>Appliance manager</Button></>} />
     {error && <div role="alert" className="pages-alert">{error}<Button size="sm" variant="ghost" onClick={() => setError("")}>Dismiss</Button></div>}
     {notice && <div role="status" className="pages-notice">{notice}</div>}
 

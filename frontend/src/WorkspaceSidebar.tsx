@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
-import { ChevronDown, Filter, ListTree, Plus, Search, Server, Settings2, Trash2 } from "lucide-react";
+import { Activity, ChevronDown, Filter, ListTree, Plus, Search, Server, Settings2, Trash2 } from "lucide-react";
 import type { Link, Node, RuntimeTemplate, TopologySnapshot } from "./api";
 import type { SimulatorWorkspaceProps } from "./SimulatorWorkspace";
 import { portLabel, deviceGroupLabel } from "./map/TopologyCanvas";
@@ -83,7 +83,7 @@ export function WorkspaceSidebar({ workspace: props, topology, rightPanel, setRi
                 />}
                 {selectedLink && <Card className="mx-3 mb-3 p-3">
                   <div className="flex items-center justify-between"><div><p className="text-sm font-medium">Ethernet segment</p><p className="mt-1 text-xs text-muted-foreground">{selectedLink.nodes.length} connected interfaces</p></div><Button variant="ghost" size="icon-sm" onClick={props.onDeleteSelection} aria-label="Delete selected link"><Trash2 /></Button></div>
-                  <div className="mt-2 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => setLinkPropertiesOpen(true)}><Settings2 />Link properties</Button><Button size="sm" variant="outline" onClick={() => void toggleLinkSuspend(selectedLink)}>{selectedLink.suspend ? "Resume link" : "Suspend link"}</Button></div>
+                  <div className="mt-2 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => setLinkPropertiesOpen(true)}><Settings2 />Link properties</Button><Button size="sm" variant="outline" onClick={() => setLinkPropertiesOpen(true)}><Activity />Packet capture</Button><Button size="sm" variant="outline" onClick={() => void toggleLinkSuspend(selectedLink)}>{selectedLink.suspend ? "Resume link" : "Suspend link"}</Button></div>
                   <Separator className="my-3" />
                   <div className="space-y-2">{selectedLink.nodes.map((endpoint) => { const node = topology.nodes.find((item) => item.node_id === endpoint.node_id); return <div key={`${endpoint.node_id}:${endpoint.adapter_number}:${endpoint.port_number}`} className="flex justify-between gap-3 text-xs"><span className="truncate">{node?.name ?? endpoint.node_id}</span><span className="font-mono text-muted-foreground">{portLabel(node, endpoint)}</span></div>; })}</div>
                 </Card>}

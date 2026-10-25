@@ -10,6 +10,19 @@ import { renderWorkspace } from "./App.test-utils";
 import { ProjectNavigationHost } from "./App.test-utils";
 
 describe("projects", () => {
+    it("removes a deleted project from the list immediately after the controller confirms deletion", async () => {
+      vi.mocked(api.listProjects).mockResolvedValue([project]);
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      renderWorkspace(null);
+
+      expect(await screen.findByText("Core lab")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Delete Core lab" }));
+
+      await waitFor(() => expect(api.deleteProject).toHaveBeenCalledWith("p1"));
+      expect(screen.queryByText("Core lab")).not.toBeInTheDocument();
+      confirm.mockRestore();
+    });
+
     it("creates a project, opens it, and loads a snapshot-backed canvas", async () => {
       render(<ProjectNavigationHost />);
       await screen.findByRole("textbox", { name: "New project name" }, { timeout: 10_000 });
