@@ -44,5 +44,5 @@ async fn batch_result(response: Response, key: &str) -> Result<Value, ApiError> 
 
 fn batch_error(error: ApiError) -> Value {
     let status_code = error.status.as_u16();
-    json!({"status_code":status_code,"error":{"message":error.message}})
+    json!({"status_code":status_code,"error":{"code":error.code,"message":error.message}})
 }

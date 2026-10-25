@@ -186,7 +186,7 @@ async fn resolve_link_port_names(
         }
         let selected = if name == "auto" { available.first().map(|entry| entry.0) }
             else { available.iter().find(|entry| entry.1 == name).map(|entry| entry.0) };
-        let selected = selected.ok_or_else(|| ApiError::conflict(format!("No free port named '{name}' on node {node_id}")))?;
+        let selected = selected.ok_or_else(|| ApiError::port_in_use(format!("No free port named '{name}' on node {node_id}")))?;
         endpoint["port_number"] = json!(selected);
     }
     Ok(())

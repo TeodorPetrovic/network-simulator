@@ -467,7 +467,7 @@ async fn validate_link_in_tx(
         .fetch_one(&mut **tx)
         .await?;
         if occupied != 0 {
-            return Err(ApiError::conflict(format!(
+            return Err(ApiError::port_in_use(format!(
                 "Port {adapter_number}/{port_number} on node {node_id} is already linked"
             )));
         }
