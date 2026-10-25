@@ -257,7 +257,11 @@ async fn get_settings(State(state): State<AppState>) -> Result<Json<Value>, ApiE
         sqlx::query_scalar("SELECT settings_json FROM controller_settings WHERE singleton = 1")
             .fetch_one(state.store.pool())
             .await?;
-    Ok(Json(decode_json(json)?))
+    let mut settings = decode_json(json)?;
+    if settings.get("WebWireshark").is_none() {
+        settings["WebWireshark"] = json!({"enabled":true,"image":"gns3/web-wireshark:latest","network_subnet":"172.31.0.0/22","memory":"2g","cpus":1.0,"pids_limit":1000});
+    }
+    Ok(Json(settings))
 }
 
 async fn update_settings(

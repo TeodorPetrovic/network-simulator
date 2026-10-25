@@ -115,6 +115,7 @@ pub struct AppState {
     project_activity: ProjectActivityTracker,
     idle_stop_minutes: Option<u64>,
     auto_close_delay: Duration,
+    web_wireshark: Arc<crate::web_wireshark::WebWiresharkManager>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -259,6 +260,14 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v3/projects/{project_id}/links/{link_id}/capture/file",
             get(link_capture::download_link_capture),
+        )
+        .route(
+            "/v3/projects/{project_id}/links/{link_id}/capture/wireshark/restart",
+            post(link_capture::restart_web_wireshark),
+        )
+        .route(
+            "/v3/projects/{project_id}/links/{link_id}/capture/web-wireshark",
+            get(link_capture::web_wireshark_websocket),
         )
         .route(
             "/v3/projects/{project_id}/drawings",

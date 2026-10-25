@@ -153,6 +153,7 @@ pub(super) async fn delete_project(
     for link in &links {
         cleanup_link_runtime(&state, &project_id, link).await?;
     }
+    state.web_wireshark.delete_project(&project_id).await;
     for node in &nodes {
         cleanup_node_runtime(&state, node).await?;
     }
@@ -299,6 +300,7 @@ pub(super) async fn set_project_status(
     let object = as_object_mut(&mut project, "stored project is invalid")?;
     if object.get("status").and_then(Value::as_str) == Some(status) {
         tx.commit().await?;
+        if status == "closed" { cleanup_project_web_wireshark(&state, &project_id).await; }
         return Ok(Json(project));
     }
     object.insert("status".into(), json!(status));
@@ -310,9 +312,20 @@ pub(super) async fn set_project_status(
         .await?;
     let event = Store::append_event(&mut tx, &project_id, "project.updated", &project).await?;
     tx.commit().await?;
+    if status == "closed" { cleanup_project_web_wireshark(&state, &project_id).await; }
     for event in node_events {
         state.store.publish(event);
     }
     state.store.publish(event);
     Ok(Json(project))
+}
+
+async fn cleanup_project_web_wireshark(state: &AppState, project_id: &str) {
+    let rows = sqlx::query("SELECT object_id FROM topology_objects WHERE project_id = ? AND kind = 'link' AND json_extract(object_json, '$.wireshark') = 1")
+        .bind(project_id).fetch_all(state.store.pool()).await.unwrap_or_default();
+    for row in rows {
+        let link_id: String = row.get("object_id");
+        let _ = state.web_wireshark.stop_session(project_id, &link_id).await;
+    }
+    state.web_wireshark.delete_project(project_id).await;
 }

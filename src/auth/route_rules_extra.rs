@@ -324,6 +324,16 @@ pub const ROUTE_RULES_EXTRA: &[RouteRule] = rules![
         RouteClass::Privilege("Link.Capture")
     ),
     (
+        "POST",
+        "/projects/{project_id}/links/{link_id}/capture/wireshark/restart",
+        RouteClass::Privilege("Link.Capture")
+    ),
+    (
+        "GET",
+        "/projects/{project_id}/links/{link_id}/capture/web-wireshark",
+        RouteClass::Privilege("Link.Capture")
+    ),
+    (
         "GET",
         "/projects/{project_id}/links/{link_id}/capture/stream",
         RouteClass::Privilege("Link.Capture")
