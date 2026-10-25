@@ -59,6 +59,7 @@ impl BuiltinRuntime {
         let hub_id = builtin_template_id("ethernet_hub");
         let cloud_id = builtin_template_id("cloud");
         let nat_id = builtin_template_id("nat");
+        let vpcs_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"network-simulator/vpcs").to_string();
         vec![
             json!({
                 "template_id": switch_id,
@@ -113,6 +114,22 @@ impl BuiltinRuntime {
                 }],
                 "nat_interface": default_nat_interface(),
                 "usage": "Linux NAT requires an active libvirt default network on virbr0."
+            }),
+            json!({
+                "template_id": vpcs_id,
+                "name": "VPCS",
+                "template_type": "vpcs",
+                "compute_id": "local",
+                "category": "guest",
+                "symbol": "vpcs_guest",
+                "builtin": true,
+                "adapters": 1,
+                "memory": 0,
+                "cpus": 0,
+                "startup_script": "",
+                "base_script_file": "vpcs_base_config.txt",
+                "console_type": "telnet",
+                "console_auto_start": false
             }),
         ]
     }

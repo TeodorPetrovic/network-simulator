@@ -6,6 +6,9 @@ async fn templates_create_nodes_with_real_runtime_lifecycle_routes() {
     create_custom_from_runtime(&app, "docker", "Alpine custom").await;
     let (status, templates) = request(&app, Method::GET, "/v3/templates".into(), None).await;
     assert_eq!(status, StatusCode::OK);
+    assert!(templates.as_array().unwrap().iter().any(|template| {
+        template["template_type"] == "vpcs" && template["name"] == "VPCS"
+    }));
     let template = templates
         .as_array()
         .unwrap()

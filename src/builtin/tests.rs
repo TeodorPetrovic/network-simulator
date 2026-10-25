@@ -12,12 +12,16 @@ pub(super) fn ethernet_frame(destination: [u8; 6], source: [u8; 6]) -> Vec<u8> {
 #[test]
 fn builtin_templates_have_upstream_names_and_port_shapes() {
     let templates = BuiltinRuntime::templates();
-    assert_eq!(templates.len(), 4);
+    assert_eq!(templates.len(), 5);
     assert_eq!(templates[0]["ports_mapping"].as_array().unwrap().len(), 8);
     assert_eq!(templates[0]["ports_mapping"][7]["name"], "Ethernet7");
     assert_eq!(templates[1]["ports_mapping"].as_array().unwrap().len(), 8);
     assert_eq!(templates[2]["template_type"], "cloud");
     assert_eq!(templates[3]["ports_mapping"][0]["name"], "nat0");
+    let vpcs = templates.iter().find(|template| template["template_type"] == "vpcs").unwrap();
+    assert_eq!(vpcs["name"], "VPCS");
+    assert_eq!(vpcs["builtin"], true);
+    assert_eq!(vpcs["adapters"], 1);
 }
 
 #[test]

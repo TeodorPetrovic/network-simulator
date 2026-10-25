@@ -64,7 +64,11 @@ pub(super) async fn base_runtime_templates(state: &AppState) -> Vec<Value> {
         Err(error) => tracing::debug!(error = %error.message(), "QEMU templates are unavailable"),
     }
     match state.vpcs.templates().await {
-        Ok(available) => templates.extend(available),
+        Ok(available) => templates.extend(
+            available
+                .into_iter()
+                .filter(|template| template["template_type"] != "vpcs"),
+        ),
         Err(error) => tracing::debug!(error = %error.message(), "VPCS templates are unavailable"),
     }
     match state.dynamips.templates().await {
