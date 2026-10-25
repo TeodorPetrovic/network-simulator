@@ -345,7 +345,7 @@ button, input, textarea, select { font: inherit; }
 .sim-loading { display: flex; min-height: 0; flex: 1; align-items: center; justify-content: center; gap: 9px; color: var(--muted-foreground); font-size: 13px; }
 
 .sim-workspace { display: flex; min-height: 0; flex: 1; flex-direction: column; }
-.sim-toolbar { z-index: 5; display: flex; min-height: 58px; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 14px; border-bottom: 1px solid var(--border); background: var(--background); }
+.sim-toolbar { z-index: 5; display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 12px; border-bottom: 1px solid var(--border); background: var(--background); }
 .sim-project-title { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .sim-project-mark { display: grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; border: 1px solid var(--border); border-radius: 8px; color: var(--primary); background: var(--muted); }
 .sim-project-title h1 { overflow: hidden; max-width: 340px; font-size: 14px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
@@ -362,22 +362,22 @@ button, input, textarea, select { font: inherit; }
 .sim-map-actions { display: flex; align-items: center; gap: 1px; border: 1px solid var(--border); border-radius: 7px; padding: 2px; background: color-mix(in oklch, var(--background), transparent 4%); box-shadow: 0 2px 7px #1118270d; backdrop-filter: blur(8px); pointer-events: auto; }
 .sim-map-actions .sim-resource-trigger { margin-right: 2px; }
 .sim-map-actions [data-slot="button"] { flex: 0 0 auto; }
-.sim-canvas-surface { position: relative; width: 100%; height: 100%; min-height: 0; overflow: hidden; color: oklch(0.86 0.015 255); background: oklch(0.985 0.004 255); }
+.sim-canvas-surface { position: relative; width: 100%; height: 100%; min-height: 0; overflow: hidden; color: oklch(0.86 0.015 255); background: oklch(0.975 0.008 250); }
 .sim-canvas-surface.is-drop-active { background: oklch(0.965 0.025 255); box-shadow: inset 0 0 0 2px var(--primary); }
 .sim-canvas-surface svg { display: block; width: 100%; height: 100%; min-height: 0; touch-action: none; }
 .sim-grid-fill { fill: url(#sim-grid); color: oklch(0.84 0.015 255); }
 .sim-node { cursor: grab; outline: none; }
 .sim-node:active { cursor: grabbing; }
-.sim-node-card { fill: var(--background); stroke: oklch(0.84 0.02 255); stroke-width: 1.2px; filter: drop-shadow(0 2px 2px #15203310); transition: stroke .12s, fill .12s; }
+.sim-node-card { display: none; }
 .sim-node:hover .sim-node-card, .sim-node.is-selected .sim-node-card { fill: oklch(0.975 0.018 255); stroke: var(--primary); stroke-width: 1.8px; }
 .sim-node-icon { color: oklch(0.48 0.12 255); }
 .sim-node-symbol { pointer-events: none; }
-.sim-node-type { fill: var(--muted-foreground); font-size: 8px; text-anchor: middle; }
-.sim-node-name { fill: var(--foreground); font-size: 11px; font-weight: 600; paint-order: stroke; stroke: oklch(0.985 0.004 255); stroke-width: 4px; stroke-linejoin: round; text-anchor: middle; }
+.sim-node-type { display: none; }
+.sim-node-name { fill: var(--foreground); font-size: 11px; font-weight: 600; paint-order: stroke; stroke: oklch(0.975 0.008 250); stroke-width: 4px; stroke-linejoin: round; text-anchor: middle; }
 .sim-node-status { stroke: var(--background); stroke-width: 2px; }
 .sim-node-status.running { fill: oklch(0.63 0.16 150); }
 .sim-node-status.stopped { fill: oklch(0.73 0.01 255); }
-.sim-interface { cursor: crosshair; outline: none; opacity: 0; pointer-events: none; transition: opacity .12s; }
+.sim-interface { display: none; }
 .sim-node:hover .sim-interface, .sim-node.is-selected .sim-interface, .sim-node.is-connecting .sim-interface { opacity: 1; pointer-events: auto; }
 .sim-interface circle { fill: var(--background); stroke: oklch(0.59 0.035 255); stroke-width: 1.3px; transition: fill .1s, stroke .1s, r .1s; }
 .sim-interface:hover circle, .sim-interface.is-chosen circle { fill: var(--primary); stroke: var(--primary); r: 6.5px; }

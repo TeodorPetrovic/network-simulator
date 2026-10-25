@@ -331,25 +331,13 @@ export function TopologyCanvas(props: CanvasProps) {
         const selected = (props.selection?.kind === "node" && props.selection.id === node.node_id) || props.selectedNodeIds.includes(node.node_id);
         const symbol = resolveCanvasSymbol(node.node_type ?? "", node.symbol, props.symbolDefaults, props.customSymbolIds);
         const Icon = symbol.kind === "default" ? iconForSymbolName(symbol.name, node.node_type ?? "") : iconForType(node.node_type ?? "");
-        const endpoints = nodePorts(node);
         const label = node.label && typeof node.label === "object" ? node.label as Record<string, unknown> : {};
-        const labelPosition = labelPositions[node.node_id] ?? { x: Number(label.x ?? 0), y: Number(label.y ?? 52) };
+        const labelPosition = labelPositions[node.node_id] ?? { x: Number(label.x ?? 0), y: Number(label.y ?? 38) };
         return <g key={node.node_id} transform={`translate(${x},${y})`} className={`sim-node ${selected ? "is-selected" : ""} ${props.connecting ? "is-connecting" : ""} ${node.locked || props.projectLocked ? "is-locked" : ""}`} onPointerDown={(event) => startMove(event, node)} onClick={(event) => { event.stopPropagation(); if (event.metaKey || event.ctrlKey) props.onMultiSelectNode(node.node_id); else if (!movedRef.current) props.onNodeClick(node.node_id); movedRef.current = false; }} onContextMenu={() => props.onNodeContext(node.node_id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onNodeClick(node.node_id); } }} role="button" aria-label={`Node ${node.name}`} tabIndex={0}>
-          <rect className="sim-node-card" x="-56" y="-36" width="112" height="66" rx="9" />
-          <Icon className="sim-node-icon" x={-13} y={-29} width={26} height={26} strokeWidth={1.7} />
+          <Icon className="sim-node-icon" x={-17} y={-17} width={34} height={34} strokeWidth={1.7} />
           {symbol.kind === "custom" && <AuthenticatedSymbolImage symbolId={symbol.symbolId} />}
-          <text className="sim-node-type" y="8">{kindLabel(node.node_type ?? "device")}</text>
-          <circle className={`sim-node-status ${node.status === "started" ? "running" : "stopped"}`} cx="46" cy="-26" r="4" />
+          <circle className={`sim-node-status ${node.status === "started" ? "running" : "stopped"}`} cx="19" cy="-17" r="3" />
           <text className="sim-node-name" data-node-label="true" x={labelPosition.x} y={labelPosition.y} onPointerDown={(event) => startLabelMove(event, node)} onClick={(event) => event.stopPropagation()}>{node.name}</text>
-          {endpoints.map((endpoint, index) => {
-            const point = localPortPoint(index, endpoints.length);
-            const chosen = props.linkEndpoints.some((item) => sameEndpoint(item, endpoint));
-            const connected = props.links.some((link) => link.nodes?.some((item) => sameEndpoint(item, endpoint)));
-            return <g key={`${endpoint.adapter_number}:${endpoint.port_number}`} data-interface-port="true" className={`sim-interface ${chosen ? "is-chosen" : ""} ${connected ? "is-connected" : ""}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); props.onPortClick(endpoint); }} role="button" aria-label={`${node.name} ${portLabel(node, endpoint)}`} tabIndex={0}>
-              <circle cx={point.x} cy={point.y} r="5.5" />
-              <text x={point.x} y={point.y + 15}>{endpointLabel(node, endpoint)}</text>
-            </g>;
-          })}
         </g>;
         })}
       {selectionBox && <rect className="sim-selection-box" x={selectionBox.x} y={selectionBox.y} width={selectionBox.width} height={selectionBox.height} />}
