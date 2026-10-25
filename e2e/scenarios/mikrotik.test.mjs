@@ -18,7 +18,7 @@ test("MikroTik CHR exchanges traffic with VPCS", async (t) => {
   await pc.sendLine("ip 10.1.1.10/24 10.1.1.1"); await pc.expectRegex(/VPCS>/);
   const serialPath=`/v3/compute/projects/${lab.projectId}/qemu/nodes/${chr.node_id}/console/ws`;
   const ws=new WebSocket(lab.server.base.replace("http","ws")+serialPath); let output="";
-  ws.addEventListener("message",e=>{output+=typeof e.data==="string"?e.data:new TextDecoder().decode(e.data);});
+  ws.addEventListener("message",async e=>{output+=typeof e.data==="string"?e.data:e.data instanceof Blob?await e.data.text():new TextDecoder().decode(e.data);});
   await new Promise((resolve,reject)=>{ws.addEventListener("open",resolve,{once:true});ws.addEventListener("error",reject,{once:true});});
   await waitFor(()=>/MikroTik|Login:|login:|password:|Press ENTER/i.test(output),{timeout:120000,label:"CHR serial login prompt"});
   ws.send("\r"); await waitFor(()=>/Login:/i.test(output),{timeout:30000,label:"CHR login"}); ws.send("admin\r");
