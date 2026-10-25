@@ -73,6 +73,16 @@ describe("PAGES parity routes", () => {
     expect(screen.queryByText("Core lab")).not.toBeInTheDocument();
   });
 
+  it("removes a deleted project from the project list as soon as deletion succeeds", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderPage(ProjectsPage);
+    expect(await screen.findByText("Core lab")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Delete Core lab" }));
+    await waitFor(() => expect(api.deleteProject).toHaveBeenCalledWith("project-1"));
+    expect(screen.queryByText("Core lab")).not.toBeInTheDocument();
+    confirm.mockRestore();
+  });
+
   it("imports a selected .gns3project archive and uses its destination name", async () => {
     renderPage(ProjectsPage);
     fireEvent.click(await screen.findByRole("button", { name: "Import .gns3project" }));
