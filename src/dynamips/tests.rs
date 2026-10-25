@@ -11,6 +11,7 @@ use super::{
     validate_dynamips_options, validate_ios_image, validate_platform_settings,
     validate_router_name,
 };
+use super::config::resolve_working_dir;
 use crate::runtime::RuntimeError;
 use serde_json::json;
 use std::{
@@ -20,6 +21,16 @@ use std::{
     process::Stdio,
 };
 use uuid::Uuid;
+
+#[test]
+fn resolves_and_creates_absolute_working_directory() {
+    let relative = PathBuf::from(format!(".dynamips-path-test-{}", Uuid::new_v4()));
+    let resolved = resolve_working_dir(&relative).expect("working directory is created");
+    assert!(resolved.is_absolute());
+    assert!(resolved.is_dir());
+    assert!(resolved.ends_with(&relative));
+    fs::remove_dir_all(resolved).unwrap();
+}
 
 #[test]
 fn validates_dynamips_compatible_ios_elf_header() {

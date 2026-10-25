@@ -1,5 +1,15 @@
 use super::*;
 
+fn resolve_working_dir(path: &Path) -> std::io::Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    fs::create_dir_all(&absolute)?;
+    fs::canonicalize(absolute)
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DynamipsOptions {
@@ -240,10 +250,13 @@ impl DynamipsRuntime {
             .state_dir
             .join(project_id.to_string())
             .join(node_id.to_string());
-        fs::create_dir_all(working_dir.join("configs")).map_err(|error| {
+        let working_dir = resolve_working_dir(&working_dir).map_err(|error| {
             RuntimeError::Failed(format!(
                 "Could not create Dynamips router directory: {error}"
             ))
+        })?;
+        fs::create_dir_all(working_dir.join("configs")).map_err(|error| {
+            RuntimeError::Failed(format!("Could not create Dynamips configs directory: {error}"))
         })?;
         fs::write(
             working_dir.join(format!(
