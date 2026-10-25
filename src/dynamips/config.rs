@@ -1,6 +1,6 @@
 use super::*;
 
-fn resolve_working_dir(path: &Path) -> std::io::Result<PathBuf> {
+pub(super) fn resolve_working_dir(path: &Path) -> std::io::Result<PathBuf> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
