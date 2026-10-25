@@ -187,6 +187,7 @@ pub(super) async fn create_node_from_template(
             "hda_disk_image_backing_file": template["hda_disk_image_backing_file"],
             "disk_images_to_reset": template["disk_images_to_reset"],
             "cdrom_image": template["cdrom_image"],
+            "cdrom_image2": template["cdrom_image2"],
             "bios_image": template["bios_image"],
             "kernel_image": template["kernel_image"],
             "initrd": template["initrd"],

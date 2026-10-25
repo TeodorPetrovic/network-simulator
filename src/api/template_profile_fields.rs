@@ -22,6 +22,7 @@ pub(super) fn template_profile_fields(kind: &str) -> Result<&'static [&'static s
             "hdd_disk_image_backing_file",
             "hda_disk_image_backing_file",
             "cdrom_image",
+            "cdrom_image2",
             "bios_image",
             "kernel_image",
             "initrd",

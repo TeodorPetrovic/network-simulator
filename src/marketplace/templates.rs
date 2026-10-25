@@ -174,6 +174,7 @@ pub(super) fn appliance_runtime_templates(
                 "hdd_disk_image",
                 "hdd_disk_interface",
                 "cdrom_image",
+                "cdrom_image2",
                 "bios_image",
                 "kernel_image",
                 "initrd",

@@ -197,6 +197,7 @@ pub(super) async fn create_qemu_node(
             .get("cdrom_image")
             .and_then(Value::as_str)
             .map(str::to_owned),
+        cdrom_image2: object.get("cdrom_image2").and_then(Value::as_str).map(str::to_owned),
         bios_image: object
             .get("bios_image")
             .and_then(Value::as_str)

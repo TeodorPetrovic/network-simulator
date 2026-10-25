@@ -98,11 +98,10 @@ pub(super) fn qemu_runtime_arguments(vm: &QemuVm) -> Result<Vec<String>, Runtime
     for disk in &vm.disks {
         args.extend(qemu_disk_arguments(disk)?);
     }
-    if let Some(cdrom) = &vm.cdrom_image {
-        args.extend([
-            "-cdrom".to_owned(),
-            qemu_keyval_escape(&cdrom.display().to_string()),
-        ]);
+    for (index, cdrom) in [vm.cdrom_image.as_ref(), vm.cdrom_image2.as_ref()].into_iter().enumerate() {
+        if let Some(cdrom) = cdrom {
+            args.extend(["-drive".to_owned(), format!("file={},media=cdrom,index={}", qemu_keyval_escape(&cdrom.display().to_string()), index)]);
+        }
     }
     if let Some(kernel) = &vm.kernel_image {
         args.extend([
