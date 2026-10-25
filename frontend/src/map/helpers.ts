@@ -2,19 +2,19 @@ import type { Drawing, LinkEndpoint, Node } from "../api";
 
 export type DrawingTool = "rectangle" | "ellipse" | "line" | "text" | "image";
 
-export function moveSelectionDelta(start: { x: number; y: number }, current: { x: number; y: number }, snapToGrid: boolean, origins?: Iterable<{ x: number; y: number }>, bounds?: { width: number; height: number }, gridSize = 10): { x: number; y: number } {
+/**
+ * Shared delta for moving a selection. The canvas is unbounded (GNS3 coordinates can be negative),
+ * so the result is never clamped. With snapping on, the first selected node lands on the grid and
+ * the rest of the selection keeps its offset from it.
+ */
+export function moveSelectionDelta(start: { x: number; y: number }, current: { x: number; y: number }, snapToGrid: boolean, origins?: Iterable<{ x: number; y: number }>, gridSize = 10): { x: number; y: number } {
   const raw = { x: current.x - start.x, y: current.y - start.y };
-  const delta = snapToGrid ? { x: Math.round(raw.x / gridSize) * gridSize, y: Math.round(raw.y / gridSize) * gridSize } : raw;
-  if (!origins || !bounds) return delta;
-  const points = Array.from(origins);
-  if (!points.length) return delta;
-  const minX = Math.min(...points.map((point) => point.x));
-  const maxX = Math.max(...points.map((point) => point.x));
-  const minY = Math.min(...points.map((point) => point.y));
-  const maxY = Math.max(...points.map((point) => point.y));
+  if (!snapToGrid) return raw;
+  const anchor = origins ? Array.from(origins)[0] : undefined;
+  if (!anchor) return { x: Math.round(raw.x / gridSize) * gridSize, y: Math.round(raw.y / gridSize) * gridSize };
   return {
-    x: Math.max(-minX, Math.min(bounds.width - maxX, delta.x)),
-    y: Math.max(-minY, Math.min(bounds.height - maxY, delta.y)),
+    x: Math.round((anchor.x + raw.x) / gridSize) * gridSize - anchor.x,
+    y: Math.round((anchor.y + raw.y) / gridSize) * gridSize - anchor.y,
   };
 }
 

@@ -118,13 +118,13 @@ export function TopologyCanvas(props: CanvasProps) {
     return () => svg.removeEventListener("wheel", wheel);
   }, [props.zoom, props.centerX, props.centerY, props.onCenterChange, props.onZoom, view.height, view.width, view.x, view.y]);
 
-  const scenePoint = (clientX: number, clientY: number, rect: DOMRect) => {
+  const scenePoint = (clientX: number, clientY: number, rect: DOMRect, snap = props.snapToGrid) => {
     const scale = Math.min(rect.width / view.width, rect.height / view.height);
     const offsetX = (rect.width - view.width * scale) / 2;
     const offsetY = (rect.height - view.height * scale) / 2;
     const x = view.x + (clientX - rect.left - offsetX) / scale;
     const y = view.y + (clientY - rect.top - offsetY) / scale;
-    return props.snapToGrid ? { x: Math.round(x / 10) * 10, y: Math.round(y / 10) * 10 } : { x: Math.round(x), y: Math.round(y) };
+    return snap ? { x: Math.round(x / 10) * 10, y: Math.round(y / 10) * 10 } : { x: Math.round(x), y: Math.round(y) };
   };
 
   function startMove(event: PointerEvent<SVGGElement>, node: Node) {
@@ -137,7 +137,7 @@ export function TopologyCanvas(props: CanvasProps) {
     event.stopPropagation();
     const nodeIds = props.selectedNodeIds.includes(node.node_id) ? props.selectedNodeIds : [node.node_id];
     const origins = new Map(nodeIds.map((id) => { const item = nodeMap.get(id); return [id, { x: Number(item?.x ?? 0), y: Number(item?.y ?? 0) }] as const; }));
-    dragRef.current = { nodeIds, pointerId: event.pointerId, start: scenePoint(event.clientX, event.clientY, svgRef.current.getBoundingClientRect()), origins };
+    dragRef.current = { nodeIds, pointerId: event.pointerId, start: scenePoint(event.clientX, event.clientY, svgRef.current.getBoundingClientRect(), false), origins };
     if (!props.selectedNodeIds.includes(node.node_id)) props.onMultiSelect(nodeIds);
     if (nodeIds.length === 1 && (props.selection?.kind !== "node" || props.selection.id !== node.node_id)) props.onNodeClick(node.node_id);
     movedRef.current = false;
@@ -239,9 +239,9 @@ export function TopologyCanvas(props: CanvasProps) {
     }
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId || !svgRef.current) return;
-    const point = scenePoint(event.clientX, event.clientY, svgRef.current.getBoundingClientRect());
+    const point = scenePoint(event.clientX, event.clientY, svgRef.current.getBoundingClientRect(), false);
     movedRef.current = true;
-    const delta = moveSelectionDelta(drag.start, point, props.snapToGrid, drag.origins.values(), scene);
+    const delta = moveSelectionDelta(drag.start, point, props.snapToGrid, drag.origins.values());
     drag.nodeIds.forEach((id) => { const origin = drag.origins.get(id); if (origin) props.onNodeMove(id, origin.x + delta.x, origin.y + delta.y); });
   }
 
@@ -305,8 +305,8 @@ export function TopologyCanvas(props: CanvasProps) {
     if (!drag || drag.pointerId !== event.pointerId) return;
     dragRef.current = null;
     if (movedRef.current && svgRef.current) {
-      const point = scenePoint(event.clientX, event.clientY, svgRef.current.getBoundingClientRect());
-      const delta = moveSelectionDelta(drag.start, point, props.snapToGrid, drag.origins.values(), scene);
+      const point = scenePoint(event.clientX, event.clientY, svgRef.current.getBoundingClientRect(), false);
+      const delta = moveSelectionDelta(drag.start, point, props.snapToGrid, drag.origins.values());
       lastMoveRef.current = drag.origins;
       props.onNodeMoveEnd(drag.nodeIds.flatMap((id) => { const origin = drag.origins.get(id); return origin ? [{ id, x: origin.x + delta.x, y: origin.y + delta.y }] : []; }));
     }

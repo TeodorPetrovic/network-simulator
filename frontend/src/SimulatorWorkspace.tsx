@@ -164,7 +164,8 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [drawingEditTool, setDrawingEditTool] = useState<DrawingTool | null>(null);
   const [drawingEditValues, setDrawingEditValues] = useState<DrawingValues | null>(null);
   const [gridVisible, setGridVisible] = useState(false);
-  const [snapToGrid, setSnapToGrid] = useState(true);
+  const [snapToGrid, setSnapToGrid] = useState(() => window.localStorage.getItem("network-simulator.snapToGrid") === "true");
+  useEffect(() => { window.localStorage.setItem("network-simulator.snapToGrid", String(snapToGrid)); }, [snapToGrid]);
   const [projectLocked, setProjectLocked] = useState(Boolean(props.project.locked));
   const [symbolDefaults, setSymbolDefaults] = useState<Record<string, string>>({});
   const [customSymbolIds, setCustomSymbolIds] = useState<string[]>([]);

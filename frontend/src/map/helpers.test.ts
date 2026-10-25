@@ -6,7 +6,15 @@ describe("project map helpers", () => {
   it("computes one shared snapped delta for a moved selection", () => {
     expect(moveSelectionDelta({ x: 11, y: 11 }, { x: 27, y: 25 }, true)).toEqual({ x: 20, y: 10 });
     expect(moveSelectionDelta({ x: 11, y: 11 }, { x: 27, y: 25 }, false)).toEqual({ x: 16, y: 14 });
-    expect(moveSelectionDelta({ x: 20, y: 20 }, { x: -50, y: 40 }, false, [{ x: 10, y: 20 }, { x: 80, y: 40 }], { width: 100, height: 100 })).toEqual({ x: -10, y: 20 });
+  });
+  it("never clamps a move, so nodes reach every quadrant including negative coordinates", () => {
+    const origins = [{ x: -250, y: 0 }, { x: 400, y: -300 }];
+    expect(moveSelectionDelta({ x: 0, y: 0 }, { x: -900, y: 700 }, false, origins)).toEqual({ x: -900, y: 700 });
+    expect(moveSelectionDelta({ x: 0, y: 0 }, { x: 2000, y: -2000 }, false, origins)).toEqual({ x: 2000, y: -2000 });
+  });
+  it("lands the first selected node on the grid and keeps the selection's relative layout", () => {
+    expect(moveSelectionDelta({ x: 0, y: 0 }, { x: 13, y: 7 }, true, [{ x: 3, y: 4 }, { x: 53, y: 4 }])).toEqual({ x: 17, y: 6 });
+    expect(moveSelectionDelta({ x: 0, y: 0 }, { x: -13, y: -7 }, true, [{ x: -250, y: -100 }])).toEqual({ x: -10, y: -10 });
   });
   it("filters occupied ports for the link context menu", () => {
     const node: Node = { node_id: "q1", name: "QEMU", node_type: "qemu", adapters: 2 };
