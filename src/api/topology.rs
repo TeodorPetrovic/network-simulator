@@ -74,7 +74,7 @@ pub(super) async fn create_topology_object(
         .get("name")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let mut tx = state.store.pool().begin().await?;
+    let mut tx = state.store.begin_write().await?;
     ensure_project_exists(&mut tx, project_id).await?;
     let existing = sqlx::query(
         "SELECT object_json FROM topology_objects
@@ -166,7 +166,7 @@ pub(super) async fn update_topology_object(
     let patch_object = patch
         .as_object()
         .ok_or_else(|| ApiError::bad_request("topology update body must be an object"))?;
-    let mut tx = state.store.pool().begin().await?;
+    let mut tx = state.store.begin_write().await?;
     ensure_project_exists(&mut tx, &project_id).await?;
     let row = sqlx::query(
         "SELECT object_json FROM topology_objects
@@ -251,7 +251,7 @@ pub(super) async fn delete_topology_object(
     object_id: String,
     kind: &str,
 ) -> Result<StatusCode, ApiError> {
-    let mut tx = state.store.pool().begin().await?;
+    let mut tx = state.store.begin_write().await?;
     ensure_project_exists(&mut tx, &project_id).await?;
     let row = sqlx::query(
         "SELECT object_json FROM topology_objects
@@ -293,7 +293,7 @@ pub(super) async fn delete_node_and_connected_links(
     node_id: String,
 ) -> Result<StatusCode, ApiError> {
     let _project_lock = state.lock_project_operations(&project_id).await;
-    let mut tx = state.store.pool().begin().await?;
+    let mut tx = state.store.begin_write().await?;
     ensure_project_exists(&mut tx, &project_id).await?;
     let node_row = sqlx::query(
         "SELECT object_json FROM topology_objects
@@ -376,7 +376,7 @@ pub(super) async fn get_topology_snapshot(
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     let project_id = project_id.to_string();
-    let mut tx = state.store.pool().begin().await?;
+    let mut tx = state.store.begin_write().await?;
     let project_row = sqlx::query("SELECT project_json FROM projects WHERE project_id = ?")
         .bind(&project_id)
         .fetch_optional(&mut *tx)

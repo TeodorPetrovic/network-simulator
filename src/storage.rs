@@ -25,6 +25,22 @@ pub struct ProjectEvent {
 }
 
 impl Store {
+    /// Start a writer transaction before reading rows that will be modified.
+    /// In WAL mode a deferred transaction can otherwise fail to upgrade its
+    /// snapshot when another writer commits between the read and write.
+    pub async fn begin_write(&self) -> Result<Transaction<'_, Sqlite>, sqlx::Error> {
+        for attempt in 0..4 {
+            match self.pool.begin_with("BEGIN IMMEDIATE").await {
+                Ok(tx) => return Ok(tx),
+                Err(error) if is_sqlite_busy(&error) && attempt < 3 => {
+                    tokio::time::sleep(Duration::from_millis(10 * (1 << attempt))).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("write transaction retry loop returns on its final attempt")
+    }
+
     pub async fn connect(path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let store = Self::connect_unseeded(path).await?;
         // Production start-up calls `auth::initialize` with the bind-derived
@@ -142,4 +158,9 @@ impl Store {
             })
             .collect()
     }
+}
+
+fn is_sqlite_busy(error: &sqlx::Error) -> bool {
+    let sqlx::Error::Database(error) = error else { return false; };
+    matches!(error.code().as_deref(), Some("5" | "517"))
 }
