@@ -21,6 +21,7 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
   const [error, setError] = useState("");
   const kind = node?.node_type;
   const supported = ["qemu", "docker", "vpcs", "dynamips", "ethernet_switch", "ethernet_hub", "hub", "cloud", "nat"].includes(kind ?? "");
+  const requiresStopped = ["qemu", "docker", "dynamips"].includes(kind ?? "");
 
   useEffect(() => {
     if (!node) return;
@@ -51,6 +52,8 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
       ...(["ethernet_switch", "ethernet_hub", "hub"].includes(kind ?? "") ? {
         adapters: String(Array.isArray(node.ports_mapping) ? node.ports_mapping.length : node.ports ?? node.number_of_ports ?? 8),
         port_names: (Array.isArray(node.ports_mapping) ? node.ports_mapping : []).map((item) => String((item as Record<string, unknown>).name ?? "")).join("\n"),
+        port_vlans: (Array.isArray(node.ports_mapping) ? node.ports_mapping : []).map((item) => String((item as Record<string, unknown>).vlan ?? 1)).join("\n"),
+        port_types: (Array.isArray(node.ports_mapping) ? node.ports_mapping : []).map((item) => String((item as Record<string, unknown>).type ?? "access")).join("\n"),
       } : {}),
       ...(kind === "cloud" ? { interfaces: (Array.isArray(node.ports_mapping) ? node.ports_mapping : []).map((item) => String((item as Record<string, unknown>).interface ?? "")).join("\n") } : {}),
     });
@@ -109,7 +112,9 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
     } else if (["ethernet_switch", "ethernet_hub", "hub"].includes(kind ?? "")) {
       const count = Math.max(1, Math.min(64, Number(draft.adapters) || 1));
       const names = (draft.port_names ?? "").split("\n");
-      patch.ports_mapping = Array.from({ length: count }, (_, index) => ({ port_number: index, name: names[index]?.trim() || `Ethernet${index + 1}`, vlan: 1, type: "access", ethertype: "0x8100" }));
+      const vlans = (draft.port_vlans ?? "").split("\n");
+      const types = (draft.port_types ?? "").split("\n");
+      patch.ports_mapping = Array.from({ length: count }, (_, index) => ({ port_number: index, name: names[index]?.trim() || `Ethernet${index + 1}`, vlan: Number(vlans[index]) || 1, type: types[index]?.trim() || "access", ethertype: "0x8100" }));
     } else if (kind === "cloud") {
       patch.ports_mapping = (draft.interfaces ?? "").split("\n").map((name, index) => name.trim() ? ({ port_number: index, name: name.trim(), type: "ethernet", interface: name.trim() }) : null).filter(Boolean);
     }
@@ -146,6 +151,8 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
         {(["ethernet_switch", "ethernet_hub", "hub"].includes(kind ?? "")) && <>
           {field("adapters", "Port count", "number")}
           {textArea("port_names", "Port names", "One name per port. Empty lines use the default port name.")}
+          {textArea("port_vlans", "Port VLANs", "One VLAN ID per port.")}
+          {textArea("port_types", "Port VLAN types", "One type per port, such as access or dot1q.")}
         </>}
         {kind === "cloud" && <div className="template-settings-wide">{textArea("interfaces", "Ethernet interfaces", "One host interface per line.")}</div>}
         {(kind === "qemu" || kind === "docker") && field("memory", kind === "qemu" ? "RAM (MB)" : "Memory limit (MB)", "number", kind === "docker" ? "0 means no Docker memory limit." : undefined)}
@@ -174,9 +181,9 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
         {kind === "vpcs" && <div className="template-settings-wide">{textArea("startup_script", "Startup script", "VPCS commands run when this device starts.")}</div>}
         {kind === "dynamips" && <div className="template-settings-wide">{textArea("startup_config", "Startup configuration", "IOS configuration written before the router starts.", 8)}</div>}
       </div>
-      {node.status !== "stopped" && <p role="status" className="text-sm text-muted-foreground">Stop this device to edit its runtime settings.</p>}
+      {requiresStopped && node.status !== "stopped" && <p role="status" className="text-sm text-muted-foreground">Stop this device to edit its runtime settings.</p>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      <DialogFooter><Button type="button" variant="ghost" disabled={saving} onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" disabled={saving || node.status !== "stopped" || (kind === "docker" && draft.console_type === "none")}>{saving ? "Saving…" : "Save device settings"}</Button></DialogFooter>
+      <DialogFooter><Button type="button" variant="ghost" disabled={saving} onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" disabled={saving || (requiresStopped && node.status !== "stopped") || (kind === "docker" && draft.console_type === "none")}>{saving ? "Saving…" : "Save device settings"}</Button></DialogFooter>
     </form>
   </DialogContent></Dialog>;
 }

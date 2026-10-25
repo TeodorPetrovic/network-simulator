@@ -200,7 +200,7 @@ test("link mode opens a device port picker from a left click", async (t) => {
   const { page, ui } = await workspace(t, { nodes: [{ type: "vpcs", name: "LinkPC" }] });
   await button(page, "Add a link").click();
   await button(page, "Node LinkPC").click();
-  await page.getByRole("menuitem", { name: /Ethernet/ }).first().waitFor();
+  await page.getByRole("menuitem", { name: /eth/i }).first().waitFor();
   await finish(ui);
 });
 
@@ -208,7 +208,7 @@ test("device flyout drag adds a node on canvas and over the right dock", async (
   const { server, page, ui, pid } = await workspace(t);
   const canvas = page.locator(".sim-canvas-surface");
   for (const target of [canvas, page.getByLabel("Workspace docks")]) {
-    await button(page, "Routers").click(); const row = page.locator(".sim-device-template").first(); await row.waitFor();
+    await button(page, "All devices").click(); const row = page.locator(".sim-device-template").first(); await row.waitFor();
     const before = (await server.api("GET", `/projects/${pid}/nodes`)).json.length;
     await row.dragTo(target, { targetPosition: { x: target === canvas ? 600 : 220, y: 300 } });
     await waitFor(async () => (await server.api("GET", `/projects/${pid}/nodes`)).json.length > before, { label: "drag added node" });
@@ -219,9 +219,16 @@ test("device flyout drag adds a node on canvas and over the right dock", async (
 test("device flyout drag supports VPCS, switches, and Dynamips templates", async (t) => {
   const { server, page, ui, pid } = await workspace(t);
   const canvas = page.locator(".sim-canvas-surface");
-  for (const [category, pattern] of [["End devices", /VPCS/i], ["Switches", /switch/i], ["Routers", /dynamips|router/i]]) {
+  const templates = [];
+  for (const type of ["vpcs", "ethernet_switch", "dynamips"]) {
+    const result = await server.api("GET", "/templates");
+    const template = result.json.find((item) => item.template_type === type);
+    if (!template) t.skip(`no ${type} template is installed`);
+    templates.push(template);
+  }
+  for (const [category, template] of [["End devices", templates[0]], ["Switches", templates[1]], ["Routers", templates[2]]]) {
     await button(page, category).click();
-    const row = page.locator(".sim-device-template").filter({ hasText: pattern }).first();
+    const row = page.locator(".sim-device-template").filter({ hasText: template.name }).first();
     await row.waitFor();
     const before = (await server.api("GET", `/projects/${pid}/nodes`)).json.length;
     await row.dragTo(canvas, { targetPosition: { x: 500 + before * 30, y: 320 } });
@@ -243,6 +250,37 @@ test("canvas wheel zoom is smooth and wheel panning updates the scene", async (t
   const beforePan = await svg.getAttribute("viewBox");
   await page.mouse.wheel(0, 120);
   await waitFor(async () => (await svg.getAttribute("viewBox")) !== beforePan, { label: "wheel pan" });
+  await finish(ui);
+});
+
+test("canvas supports middle and space panning plus rubber-band selection", async (t) => {
+  const { page, ui } = await workspace(t, { nodes: [{ type: "vpcs", name: "SelectA", x: 0 }, { type: "vpcs", name: "SelectB", x: 250 }] });
+  const svg = page.getByRole("group", { name: "Network topology canvas" });
+  const canvasBox = await svg.boundingBox();
+  const beforeMiddlePan = await svg.getAttribute("viewBox");
+  await page.mouse.move(canvasBox.x + 24, canvasBox.y + 24);
+  await page.mouse.down({ button: "middle" });
+  await page.mouse.move(canvasBox.x + 84, canvasBox.y + 64);
+  await page.mouse.up({ button: "middle" });
+  await waitFor(async () => (await svg.getAttribute("viewBox")) !== beforeMiddlePan, { label: "middle mouse pan" });
+
+  const beforeSpacePan = await svg.getAttribute("viewBox");
+  await page.keyboard.down("Space");
+  await page.mouse.move(canvasBox.x + 28, canvasBox.y + 80);
+  await page.mouse.down();
+  await page.mouse.move(canvasBox.x + 78, canvasBox.y + 110);
+  await page.mouse.up();
+  await page.keyboard.up("Space");
+  await waitFor(async () => (await svg.getAttribute("viewBox")) !== beforeSpacePan, { label: "space drag pan" });
+
+  const node = page.getByRole("button", { name: "Node SelectA" });
+  const nodeBox = await node.boundingBox();
+  await page.mouse.move(nodeBox.x - 40, nodeBox.y - 40);
+  await page.mouse.down();
+  await page.mouse.move(nodeBox.x + nodeBox.width / 2, nodeBox.y + nodeBox.height / 2);
+  await page.mouse.up();
+  await page.locator(".sim-selection-box").waitFor({ state: "detached" });
+  await page.locator(".sim-node.is-selected").waitFor();
   await finish(ui);
 });
 

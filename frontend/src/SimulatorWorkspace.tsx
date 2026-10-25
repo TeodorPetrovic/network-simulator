@@ -283,8 +283,8 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
 
   function deleteSelectedNodes() {
     const targets = topology.nodes.filter((node) => selectedNodeIds.includes(node.node_id));
-    if (targets.length && !window.confirm(`Delete ${targets.length} selected device${targets.length === 1 ? "" : "s"}?`)) return;
     if (targets.length === 1 && props.selection?.kind === "node") { props.onDeleteSelection(); return; }
+    if (targets.length && !window.confirm(`Delete ${targets.length} selected device${targets.length === 1 ? "" : "s"}?`)) return;
     void Promise.allSettled(targets.map((node) => api.deleteNode(props.project.project_id, node.node_id))).then((results) => {
       const deletedIds = new Set(results.flatMap((result, index) => result.status === "fulfilled" ? [targets[index]!.node_id] : []));
       const failed = results.length - deletedIds.size;
@@ -364,7 +364,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
                     const node = topology.nodes.find((item) => item.node_id === id);
                     if (!node) return;
                     if (["qemu", "docker", "vpcs", "dynamips"].includes(node.node_type ?? "") && node.console_type !== "none") {
-                      if (node.status === "started") props.onOpenConsole(node);
+                      props.onOpenConsole(node);
                       return;
                     }
                     setConfigureNode(node);
