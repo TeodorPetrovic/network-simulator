@@ -18,13 +18,31 @@ test("MikroTik CHR exchanges traffic with VPCS", async (t) => {
   await pc.sendLine("ip 10.1.1.10/24 10.1.1.1"); await pc.expectRegex(/VPCS>/);
   const serialPath=`/v3/compute/projects/${lab.projectId}/qemu/nodes/${chr.node_id}/console/ws`;
   const ws=new WebSocket(lab.server.base.replace("http","ws")+serialPath); let output="";
-  ws.addEventListener("message",async e=>{output+=typeof e.data==="string"?e.data:e.data instanceof Blob?await e.data.text():new TextDecoder().decode(e.data);});
+  ws.addEventListener("message",async e=>{const text=typeof e.data==="string"?e.data:e.data instanceof Blob?await e.data.text():new TextDecoder().decode(e.data);output+=text;if(text.includes("\x1b[6n")) ws.send("\x1b[24;200R");});
   await new Promise((resolve,reject)=>{ws.addEventListener("open",resolve,{once:true});ws.addEventListener("error",reject,{once:true});});
-  await waitFor(()=>/MikroTik|Login:|login:|password:|Press ENTER/i.test(output),{timeout:120000,label:"CHR serial login prompt"});
-  ws.send("\r"); await waitFor(()=>/Login:/i.test(output),{timeout:30000,label:"CHR login"}); ws.send("admin\r");
-  await waitFor(()=>/Password:/i.test(output),{timeout:30000,label:"CHR password prompt"}); ws.send("\r");
-  await waitFor(()=>/\[admin@|new password|license|RouterOS/i.test(output),{timeout:30000,label:"CHR RouterOS prompt"});
-  for(const line of ["/ip address add address=10.1.1.1/24 interface=ether1","/ping 10.1.1.10 count=3"]) { ws.send(line+"\r"); await waitFor(()=>output.includes("10.1.1.10")||output.includes("[admin@"),{timeout:45000,label:`CHR ${line}`}); }
+  const sleep=(ms)=>new Promise((r)=>setTimeout(r,ms));
+  const type=async(text)=>{ for(const c of text){ ws.send(c); await sleep(40); } };
+  const expect=async(re,timeout,label)=>{ try { await waitFor(()=>re.test(output),{timeout,label}); } catch (error) { console.error(`${label}; console tail:`, JSON.stringify(output.slice(-800))); throw error; } };
+  const run=async(line,re,timeout=45000)=>{ output=""; await type(line+"\r"); await expect(re,timeout,`CHR ${line}`); return output; };
+  const nudge=setInterval(()=>{ try{ws.send("\r");}catch{} },4000);
+  try { await expect(/Login:/i,150000,"CHR serial login prompt"); } finally { clearInterval(nudge); }
+  await sleep(1500); output="";
+  await type("admin+ct200w\r"); await expect(/assword:/i,30000,"CHR password prompt");
+  output=""; await type("\r");
+  const prompt=/\[admin@[^\]]*\]\s*>\s*$/;
+  let answeredLicense=false, answeredPassword=false;
+  await waitFor(async()=>{
+    if(prompt.test(output)) return true;
+    if(!answeredLicense && /software license\? \[Y\/n\]:\s*$/.test(output)){ answeredLicense=true; await type("n\r"); }
+    if(/new password>\s*$/i.test(output)){ answeredPassword=true; output=""; ws.send("\x03"); await sleep(1500); ws.send("\r"); }
+    return false;
+  },{timeout:90000,label:"CHR RouterOS prompt"}).catch((error)=>{ console.error("CHR prompt; console tail:",JSON.stringify(output.slice(-600))); throw error; });
+  await run("/ip address add address=10.1.1.1/24 interface=ether1",/\[admin@[^\]]*\]\s*>/);
+  const printed=await run("/ip address print",/10\.1\.1\.1\/24[\s\S]*\[admin@/);
+  assert.match(printed,/ether1/);
+  await pc.sendLine("ping 10.1.1.1 -c 2");
+  const result=await run("/ping 10.1.1.10 count=3",/sent=3 received=\d+/,60000);
+  console.error("CHR ping:",JSON.stringify(result.slice(-500))); assert.match(result,/received=[123]/,"CHR receives replies from the VPCS");
   await commandPc(pc,"ping 10.1.1.1 -c 2",/84 bytes from 10\.1\.1\.1/,45000);
   ws.close();
 });

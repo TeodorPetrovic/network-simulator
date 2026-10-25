@@ -74,3 +74,23 @@ impl DynamipsRuntime {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nio_bindings_are_unique_per_adapter_and_port() {
+        let vm = DynamipsVm {
+            node_id: "node-1".to_owned(), name: "R1".to_owned(), platform: "c3600".to_owned(),
+            chassis: Some("3620".to_owned()), slot0: "NM-1FE-TX".to_owned(),
+            image: PathBuf::new(), ram_mb: 128, nvram: 128, idle_pc: None,
+            startup_config: String::new(), working_dir: PathBuf::new(), hypervisor_port: 7200,
+            console_port: 7201, aux_port: None, log_file: PathBuf::new(),
+            options: DynamipsOptions::default(), ghost_file: None,
+        };
+        assert_ne!(binding_key(&vm, 0, 0), binding_key(&vm, 1, 0));
+        assert_ne!(nio_name(&vm, 0, 0), nio_name(&vm, 1, 0));
+        assert_eq!(nio_name(&vm, 1, 0), "udp-node1-1-0");
+    }
+}
