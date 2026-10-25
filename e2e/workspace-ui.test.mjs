@@ -95,6 +95,7 @@ test("Node menu lifecycle, console, and delete controls follow selection", async
   await waitFor(async () => (await server.api("GET", `/projects/${pid}/nodes`)).json[0]?.status === "started", { label: "selected node reloaded" });
   await page.getByRole("menuitem", { name: "Node" }).click(); await menu(page, "Console selected").click();
   await page.getByRole("region", { name: "Device consoles" }).waitFor();
+  page.once("dialog", (dialog) => void dialog.accept());
   await page.getByRole("menuitem", { name: "Node" }).click(); await menu(page, "Delete selected").click();
   await page.getByRole("dialog").getByRole("button", { name: /Delete|Confirm/i }).click().catch(() => {});
   await waitFor(async () => (await server.api("GET", `/projects/${pid}/nodes`)).json.length === 0, { label: "selected node deleted" });
@@ -195,6 +196,14 @@ test("device rail add-node dialog and link toggle have visible effects", async (
   await finish(ui);
 });
 
+test("link mode opens a device port picker from a left click", async (t) => {
+  const { page, ui } = await workspace(t, { nodes: [{ type: "vpcs", name: "LinkPC" }] });
+  await button(page, "Add a link").click();
+  await button(page, "Node LinkPC").click();
+  await page.getByRole("menuitem", { name: /Ethernet/ }).first().waitFor();
+  await finish(ui);
+});
+
 test("device flyout drag adds a node on canvas and over the right dock", async (t) => {
   const { server, page, ui, pid } = await workspace(t);
   const canvas = page.locator(".sim-canvas-surface");
@@ -204,6 +213,36 @@ test("device flyout drag adds a node on canvas and over the right dock", async (
     await row.dragTo(target, { targetPosition: { x: target === canvas ? 600 : 220, y: 300 } });
     await waitFor(async () => (await server.api("GET", `/projects/${pid}/nodes`)).json.length > before, { label: "drag added node" });
   }
+  await finish(ui);
+});
+
+test("device flyout drag supports VPCS, switches, and Dynamips templates", async (t) => {
+  const { server, page, ui, pid } = await workspace(t);
+  const canvas = page.locator(".sim-canvas-surface");
+  for (const [category, pattern] of [["End devices", /VPCS/i], ["Switches", /switch/i], ["Routers", /dynamips|router/i]]) {
+    await button(page, category).click();
+    const row = page.locator(".sim-device-template").filter({ hasText: pattern }).first();
+    await row.waitFor();
+    const before = (await server.api("GET", `/projects/${pid}/nodes`)).json.length;
+    await row.dragTo(canvas, { targetPosition: { x: 500 + before * 30, y: 320 } });
+    await waitFor(async () => (await server.api("GET", `/projects/${pid}/nodes`)).json.length === before + 1, { label: `${category} template dropped` });
+    await page.getByLabel(`${category} templates`).waitFor();
+  }
+  await finish(ui);
+});
+
+test("canvas wheel zoom is smooth and wheel panning updates the scene", async (t) => {
+  const { page, ui } = await workspace(t);
+  const svg = page.getByRole("group", { name: "Network topology canvas" });
+  const beforeZoom = await zoom(page);
+  await page.keyboard.down("Control");
+  await page.mouse.move(750, 450);
+  await page.mouse.wheel(0, 120);
+  await page.keyboard.up("Control");
+  await waitFor(async () => (await zoom(page)) < beforeZoom, { label: "wheel zoom" });
+  const beforePan = await svg.getAttribute("viewBox");
+  await page.mouse.wheel(0, 120);
+  await waitFor(async () => (await svg.getAttribute("viewBox")) !== beforePan, { label: "wheel pan" });
   await finish(ui);
 });
 
@@ -247,7 +286,11 @@ test("keyboard shortcuts select all, clear selection, delete, escape link mode, 
   await waitFor(async () => { const n = (await server.api("GET", `/projects/${pid}/nodes`)).json[0]; return n.x !== before.x || n.y !== before.y; }, { label: "arrow moved node" });
   await page.keyboard.press("Escape"); await page.locator(".sim-node.is-selected").waitFor({ state: "detached" });
   await button(page, "Add a link").click(); await canvas.focus(); await page.keyboard.press("Escape"); await page.getByText("Link mode is on").waitFor({ state: "detached" });
-  await canvas.focus(); await page.keyboard.press("Control+a"); await page.keyboard.press("Delete");
+  await canvas.focus(); await page.keyboard.press("Control+a");
+  const dialogPromise = page.waitForEvent("dialog");
+  await page.keyboard.press("Delete");
+  const dialog = await dialogPromise;
+  await dialog.accept();
   await waitFor(async () => (await server.api("GET", `/projects/${pid}/nodes`)).json.length === 0, { label: "Delete shortcut removed node" });
   await finish(ui);
 });
