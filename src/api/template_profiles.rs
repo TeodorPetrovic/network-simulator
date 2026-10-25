@@ -462,7 +462,9 @@ pub(super) fn validate_template_profile_patch(
                     .as_str()
                     .filter(|value| matches!(*value, "telnet" | "ssh" | "none"))
                     .ok_or_else(|| {
-                        ApiError::bad_request("VPCS console_type must be telnet, ssh, or none")
+                        ApiError::bad_request(
+                            "Unsupported VPCS console_type; expected telnet, ssh, or none",
+                        )
                     })?;
                 validated.insert(key.clone(), json!(value));
             }

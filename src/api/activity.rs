@@ -71,6 +71,14 @@ impl ProjectActivityTracker {
         activity.open_websockets == 0
             && now.saturating_duration_since(activity.last_activity) >= idle_for
     }
+
+    pub(super) fn has_open_websockets(&self, project_id: &str) -> bool {
+        self.projects
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(project_id)
+            .is_some_and(|activity| activity.open_websockets > 0)
+    }
 }
 
 pub(super) struct ProjectWebSocketGuard {

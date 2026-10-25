@@ -177,7 +177,13 @@ pub(super) fn validate_node_configuration_patch(
                         }
                     })
                     .ok_or_else(|| {
-                        ApiError::bad_request(format!("unsupported {node_type} console_type"))
+                        if node_type == "vpcs" {
+                            ApiError::bad_request(
+                                "Unsupported VPCS console_type; expected telnet, ssh, or none",
+                            )
+                        } else {
+                            ApiError::bad_request(format!("unsupported {node_type} console_type"))
+                        }
                     })?;
                 json!(value)
             }

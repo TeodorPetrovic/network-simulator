@@ -1,46 +1,29 @@
 use super::*;
 
 impl super::AppState {
-    pub(super) fn start_auto_open_worker(&self) {
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            tracing::warn!("auto open is configured but no Tokio runtime is active");
-            return;
-        };
-        let state = self.clone();
-        handle.spawn(async move {
-            let rows = match sqlx::query("SELECT project_id, project_json FROM projects ORDER BY project_id")
-                .fetch_all(state.store.pool())
-                .await
-            {
-                Ok(rows) => rows,
-                Err(error) => {
-                    tracing::error!(%error, "could not load projects for auto open");
-                    return;
-                }
-            };
-            for row in rows {
-                let project_id: String = row.get("project_id");
-                let project = match decode_json(row.get::<String, _>("project_json")) {
-                    Ok(project) => project,
-                    Err(error) => {
-                        tracing::warn!(error = %error.message, %project_id, "skipping invalid project during auto open");
-                        continue;
-                    }
-                };
-                if project.get("auto_open").and_then(Value::as_bool) != Some(true)
-                    || project.get("status").and_then(Value::as_str) == Some("opened")
-                {
-                    continue;
-                }
-                let Ok(id) = Uuid::parse_str(&project_id) else {
-                    tracing::warn!(%project_id, "skipping project with invalid ID during auto open");
-                    continue;
-                };
-                if let Err(error) = super::projects::set_project_status(state.clone(), id, "opened").await {
-                    tracing::error!(error = %error.message, %project_id, "could not auto open project");
-                }
+    pub async fn open_auto_open_projects(&self) {
+        let rows = match sqlx::query(
+            "SELECT project_id FROM projects WHERE json_extract(project_json, '$.auto_open') = 1 ORDER BY project_id",
+        )
+        .fetch_all(self.store.pool())
+        .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(%error, "could not load projects configured to open at startup");
+                return;
             }
-        });
+        };
+        for row in rows {
+            let id: String = row.get("project_id");
+            let Ok(id) = Uuid::parse_str(&id) else {
+                tracing::warn!(project_id = %id, "skipping project with invalid ID during startup open");
+                continue;
+            };
+            if let Err(error) = super::projects::open_project_lifecycle(self.clone(), id).await {
+                tracing::error!(project_id = %id, error = %error.message, "could not open project configured for startup");
+            }
+        }
     }
 
     pub fn new(store: Store) -> Self {
@@ -61,6 +44,7 @@ impl super::AppState {
             project_operation_locks: Arc::new(StdMutex::new(HashMap::new())),
             project_activity: ProjectActivityTracker::default(),
             idle_stop_minutes: configured_idle_stop_minutes(),
+            auto_close_delay: configured_auto_close_delay(),
         }
     }
 
@@ -108,12 +92,39 @@ impl super::AppState {
             project_operation_locks: Arc::new(StdMutex::new(HashMap::new())),
             project_activity: ProjectActivityTracker::default(),
             idle_stop_minutes: configured_idle_stop_minutes(),
+            auto_close_delay: configured_auto_close_delay(),
         }
     }
 
     pub fn with_bind_address(mut self, bind_address: SocketAddr) -> Self {
         self.bind_address = bind_address;
         self
+    }
+
+    pub(super) async fn auto_close_after_disconnect(&self, project_id: &str) {
+        sleep(self.auto_close_delay).await;
+        if self.project_activity.has_open_websockets(project_id) {
+            return;
+        }
+        let project = match fetch_project(self.store.pool(), project_id).await {
+            Ok(project) => project,
+            Err(error) => {
+                tracing::debug!(error = %error.message, %project_id, "project disappeared before auto-close");
+                return;
+            }
+        };
+        if !project["auto_close"].as_bool().unwrap_or(false)
+            || project["status"].as_str() != Some("opened")
+        {
+            return;
+        }
+        let Ok(project_uuid) = Uuid::parse_str(project_id) else {
+            return;
+        };
+        if let Err(error) = projects::set_project_status(self.clone(), project_uuid, "closed").await
+        {
+            tracing::error!(error = %error.message, %project_id, "could not auto-close project after notifications disconnected");
+        }
     }
 
     pub(super) async fn lock_project_operations(&self, project_id: &str) -> OwnedMutexGuard<()> {
@@ -377,4 +388,13 @@ impl super::AppState {
             }
         }
     }
+}
+
+fn configured_auto_close_delay() -> Duration {
+    let millis = std::env::var("NETWORK_SIMULATOR_AUTO_CLOSE_DELAY_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|millis| *millis <= 60_000)
+        .unwrap_or(1_000);
+    Duration::from_millis(millis)
 }

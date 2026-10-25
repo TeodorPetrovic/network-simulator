@@ -158,10 +158,12 @@ pub(super) async fn vpcs_console(
                 "VPCS console is disabled for this node",
             ));
         }
+        // GNS3 wraps both types around VPCS's internal Telnet stream. This route
+        // bridges the browser terminal directly to that negotiated stream.
         "telnet" | "ssh" => {}
         _ => {
             return Err(ApiError::bad_request(
-                "VPCS console_type must be telnet, ssh, or none",
+                "Unsupported VPCS console_type; expected telnet, ssh, or none",
             ));
         }
     }
