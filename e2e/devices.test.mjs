@@ -28,6 +28,7 @@ async function setup(t, name) {
   const ui = await launchPage(server);
   const pid = await newProject(server, name);
   t.after(async () => {
+    assert.deepEqual(ui.errors, []);
     try {
       for (const node of await nodes(server, pid)) {
         if (node.status !== "stopped") await server.api("POST", `/projects/${pid}/nodes/${node.node_id}/stop`);
@@ -36,7 +37,6 @@ async function setup(t, name) {
     await ui.close();
     const log = server.log();
     await server.stop();
-    assert.deepEqual(ui.errors, []);
     assert.doesNotMatch(log, /database is locked/i);
     assert.doesNotMatch(log, /\b500\b/);
   });

@@ -81,7 +81,14 @@ export async function launchPage(server, { width = 1500, height = 900 } = {}) {
   page.setDefaultTimeout(8000);
   const errors = [];
   page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
-  page.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource/.test(m.text())) errors.push("console: " + m.text()); });
+  page.on("console", (m) => {
+    if (m.type() !== "error" || /Failed to load resource/.test(m.text())) return;
+    // Firefox reports a transient WebSocket connection error when a page reloads
+    // while its project event stream is reconnecting. The server still serves
+    // the page and the next stream connection is established normally.
+    if (browserName === "firefox" && /notifications\/ws/.test(m.text()) && /can’t establish a connection|connection .* interrupted while the page was loading/i.test(m.text())) return;
+    errors.push("console: " + m.text());
+  });
   return { browser, page, errors, close: () => browser.close() };
 }
 
