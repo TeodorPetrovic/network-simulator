@@ -29,8 +29,8 @@ export function localPortPoint(index: number, total: number) {
 }
 
 export function portPoint(node: Node, endpoint: LinkEndpoint) {
-  const point = localPortPoint(portIndex(node, endpoint), portCount(node));
-  return { x: Number(node.x ?? 0) + point.x, y: Number(node.y ?? 0) + point.y };
+  void endpoint;
+  return { x: Number(node.x ?? 0), y: Number(node.y ?? 0) };
 }
 
 export function portLabel(node: Node | undefined, endpoint: LinkEndpoint) {

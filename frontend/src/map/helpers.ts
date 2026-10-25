@@ -15,6 +15,11 @@ export function interfacesForNode(node: Node): LinkEndpoint[] {
     : { node_id: node.node_id, adapter_number: 0, port_number: index });
 }
 
+export function availableInterfacesForNode(node: Node, links: Array<{ nodes?: LinkEndpoint[] }>): LinkEndpoint[] {
+  const used = new Set(links.flatMap((link) => link.nodes ?? []).map((endpoint) => `${endpoint.node_id}:${endpoint.adapter_number}:${endpoint.port_number}`));
+  return interfacesForNode(node).filter((endpoint) => !used.has(`${endpoint.node_id}:${endpoint.adapter_number}:${endpoint.port_number}`));
+}
+
 export function endpointName(node: Node, endpoint: LinkEndpoint): string {
   const port = node.node_type === "qemu" ? endpoint.adapter_number : endpoint.port_number;
   if (node.node_type === "qemu") return `Ethernet${port}`;

@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Node } from "../api";
-import { drawingSvg, endpointName, interfacesForNode, reorderDrawings, selectionBoxIds, serializeSvgScreenshot } from "./helpers";
+import { availableInterfacesForNode, drawingSvg, endpointName, interfacesForNode, reorderDrawings, selectionBoxIds, serializeSvgScreenshot } from "./helpers";
 
 describe("project map helpers", () => {
+  it("filters occupied ports for the link context menu", () => {
+    const node: Node = { node_id: "q1", name: "QEMU", node_type: "qemu", adapters: 2 };
+    expect(availableInterfacesForNode(node, [{ nodes: [{ node_id: "q1", adapter_number: 0, port_number: 0 }] }])).toEqual([{ node_id: "q1", adapter_number: 1, port_number: 0 }]);
+  });
+
   it("creates runtime-shaped interface choices for the picker", () => {
     const qemu: Node = { node_id: "q1", name: "QEMU", node_type: "qemu", adapters: 3 };
     const ports = interfacesForNode(qemu);

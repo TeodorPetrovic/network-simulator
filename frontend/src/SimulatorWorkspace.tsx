@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/context-menu";
 import { ResourceMonitorPopover } from "./ResourceMonitorPopover";
 import { NodeSettingsDialog } from "./NodeSettingsDialog";
-import { DrawingEditorDialog, HelpDialog, InfoDialog, InterfacePickerDialog, LinkPropertiesDialog, LogConsoleDialog, ScreenshotDialog, SnapshotsDialog, SymbolPickerDialog } from "./map/MapDialogs";
+import { DrawingEditorDialog, HelpDialog, InfoDialog, LinkPropertiesDialog, LogConsoleDialog, ScreenshotDialog, SnapshotsDialog, SymbolPickerDialog } from "./map/MapDialogs";
 import type { ScreenshotRequest } from "./map/MapDialogs";
 import { serializeSvgScreenshot, svgScreenshotPng } from "./map/helpers";
 import type { DrawingTool } from "./map/helpers";
@@ -80,7 +80,6 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [rightPanel, setRightPanel] = useState("devices");
   const [openTemplateGroups, setOpenTemplateGroups] = useState<Record<string, boolean>>({});
   const [configureNode, setConfigureNode] = useState<Node | null>(null);
-  const [interfaceNode, setInterfaceNode] = useState<Node | null>(null);
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -93,7 +92,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [drawingEditOpen, setDrawingEditOpen] = useState(false);
   const [drawingEditTool, setDrawingEditTool] = useState<DrawingTool | null>(null);
   const [drawingEditValues, setDrawingEditValues] = useState<DrawingValues | null>(null);
-  const [gridVisible, setGridVisible] = useState(true);
+  const [gridVisible, setGridVisible] = useState(false);
   const [snapToGrid, setSnapToGrid] = useState(true);
   const [projectLocked, setProjectLocked] = useState(Boolean(props.project.locked));
   const [symbolDefaults, setSymbolDefaults] = useState<Record<string, string>>({});
@@ -119,6 +118,12 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const selectedLifecycleNodes = topology.nodes.filter((node) => selectedNodeIds.includes(node.node_id) && !node.locked);
 
   useEffect(() => { setTopology(props.topology); }, [props.topology]);
+  useEffect(() => {
+    if (!props.connecting) return;
+    const cancel = (event: KeyboardEvent) => { if (event.key === "Escape") { props.onToggleConnect(); setFeatureMessage("Link drawing cancelled."); } };
+    window.addEventListener("keydown", cancel);
+    return () => window.removeEventListener("keydown", cancel);
+  }, [props.connecting, props.onToggleConnect]);
   useEffect(() => { setProjectLocked(Boolean(props.project.locked)); }, [props.project.project_id, props.project.locked]);
   useEffect(() => {
     let active = true;
@@ -293,7 +298,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
                   selection={props.selection}
                   connecting={props.connecting}
                   linkEndpoints={props.linkEndpoints}
-                  onNodeClick={(id) => { if (props.connecting) setInterfaceNode(topology.nodes.find((node) => node.node_id === id) ?? null); else { setSelectedDrawingId(null); setSelectedNodeIds([id]); props.onSelectNode(id); } }}
+                  onNodeClick={(id) => { setSelectedDrawingId(null); setSelectedNodeIds([id]); props.onSelectNode(id); }}
                   onMultiSelectNode={(id) => setSelectedNodeIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])}
                   onMultiSelect={(ids) => { setSelectedDrawingId(null); setSelectedNodeIds(ids); }}
                   onLinkClick={(id) => { setSelectedDrawingId(null); setSelectedNodeIds([]); props.onSelectLink(id); }}
@@ -319,7 +324,6 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
 
       </div>
       <NodeSettingsDialog node={configureNode} open={configureNode !== null} onOpenChange={(open) => { if (!open) setConfigureNode(null); }} onSave={props.onConfigureNode} />
-      <InterfacePickerDialog node={interfaceNode} links={topology.links} open={interfaceNode !== null} onOpenChange={(open) => { if (!open) setInterfaceNode(null); }} onPick={selectLinkEndpoint} />
       <DrawingEditorDialog tool={drawingEditOpen ? drawingEditTool : drawingTool} open={drawingEditOpen || drawingTool !== null} mode={drawingEditOpen ? "edit" : "create"} initial={drawingEditValues} onOpenChange={(open) => { if (!open) { setDrawingTool(null); setDrawingEditOpen(false); } }} onSave={onDrawingConfigured} />
       <SnapshotsDialog projectId={props.project.project_id} open={snapshotsOpen} onOpenChange={setSnapshotsOpen} onRestored={setTopology} />
       <LinkPropertiesDialog projectId={props.project.project_id} link={selectedLink ?? null} nodes={topology.nodes} open={linkPropertiesOpen} onOpenChange={setLinkPropertiesOpen} onUpdated={(updated) => setTopology((current) => ({ ...current, links: current.links.map((link) => link.link_id === updated.link_id ? updated : link) }))} />

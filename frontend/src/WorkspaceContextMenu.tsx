@@ -3,6 +3,7 @@ import type { Link, Node, TopologySnapshot } from "./api";
 import type { SimulatorWorkspaceProps } from "./SimulatorWorkspace";
 import type { DrawingTool } from "./map/helpers";
 import { canApplyLifecycle } from "./lifecycle";
+import { availableInterfacesForNode, endpointName, interfacesForNode } from "./map/helpers";
 import { nodeHasAuxConsole } from "./map/TopologyCanvas";
 import { ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator } from "@/components/ui/context-menu";
 
@@ -16,6 +17,14 @@ type Props = {
 };
 
 export function WorkspaceContextMenu({ workspace: props, selectedNode, selectedLink, selectedDrawing, setConfigureNode, setSymbolNode, toggleNodeIsolation, toggleNodeLock, setLinkPropertiesOpen, toggleLinkSuspend, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing }: Props) {
+  if (props.connecting && selectedNode) {
+    const ports = interfacesForNode(selectedNode);
+    const available = new Set(availableInterfacesForNode(selectedNode, props.topology.links).map((port) => `${port.adapter_number}:${port.port_number}`));
+    return <ContextMenuContent className="w-56"><ContextMenuLabel>{selectedNode.name} · Select port</ContextMenuLabel><ContextMenuSeparator />{ports.map((port) => {
+      const used = !available.has(`${port.adapter_number}:${port.port_number}`);
+      return <ContextMenuItem key={`${port.adapter_number}:${port.port_number}`} disabled={used} onSelect={() => props.onSelectPort(port)}>{endpointName(selectedNode, port)}{used ? " · in use" : ""}</ContextMenuItem>;
+    })}</ContextMenuContent>;
+  }
   return (
             <ContextMenuContent className="w-56">
               <ContextMenuLabel>{selectedNode?.name ?? (selectedLink ? "Ethernet link" : selectedDrawing ? "Drawing" : "Topology")}</ContextMenuLabel>
