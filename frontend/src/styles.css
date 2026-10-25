@@ -350,7 +350,7 @@ button, input, textarea, select { font: inherit; }
 .sim-project-mark { display: grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; border: 1px solid var(--border); border-radius: 8px; color: var(--primary); background: var(--muted); }
 .sim-project-title h1 { overflow: hidden; max-width: 340px; font-size: 14px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .sim-toolbar-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
-.sim-workspace-grid { display: grid; min-height: 0; flex: 1; grid-template-columns: 280px minmax(0, 1fr); gap: 10px; padding: 10px; }
+.sim-workspace-grid { display: grid; min-height: 0; flex: 1; grid-template-columns: 260px minmax(0, 1fr); gap: 8px; padding: 8px; }
 .sim-canvas-card { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; }
 .sim-live-dot, .sim-state-dot, .sim-console-tab-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: oklch(0.68 0.16 150); }
 .sim-live-dot { box-shadow: 0 0 0 3px oklch(0.68 0.16 150 / 12%); }
@@ -390,7 +390,7 @@ button, input, textarea, select { font: inherit; }
 .sim-link-hit { stroke: transparent !important; stroke-width: 14px !important; }
 .sim-canvas-empty { fill: var(--muted-foreground); font-size: 12px; text-anchor: middle; }
 .sim-empty-subtitle { fill: oklch(0.64 0.02 255); font-size: 10px; }
-.sim-device-sidebar { min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); background: var(--background); }
+.sim-device-sidebar { min-width: 0; min-height: 0; overflow: hidden; border: 1px solid oklch(0.89 0.015 250); border-radius: 7px; background: oklch(0.995 0.003 250); }
 .sim-device-sidebar [data-slot="tabs"] { min-height: 0; }
 .sim-sidebar-heading { padding: 8px; border-bottom: 1px solid var(--border); }
 .sim-sidebar-heading [data-slot="tabs-list"] { height: 34px; }

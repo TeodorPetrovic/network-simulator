@@ -92,7 +92,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [drawingEditOpen, setDrawingEditOpen] = useState(false);
   const [drawingEditTool, setDrawingEditTool] = useState<DrawingTool | null>(null);
   const [drawingEditValues, setDrawingEditValues] = useState<DrawingValues | null>(null);
-  const [gridVisible, setGridVisible] = useState(true);
+  const [gridVisible, setGridVisible] = useState(false);
   const [snapToGrid, setSnapToGrid] = useState(true);
   const [projectLocked, setProjectLocked] = useState(Boolean(props.project.locked));
   const [symbolDefaults, setSymbolDefaults] = useState<Record<string, string>>({});
