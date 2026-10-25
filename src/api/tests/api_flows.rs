@@ -1,4 +1,18 @@
 use super::*;
+use serde_json::json;
+
+#[tokio::test]
+async fn list_name_filters_match_exactly() {
+    let (app, _directory) = test_router().await;
+    for name in ["Exact", "Exact copy"] {
+        let (status, _) = request(&app, Method::POST, "/v3/projects".into(), Some(json!({"name":name}))).await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+    let (status, projects) = request(&app, Method::GET, "/v3/projects?name=Exact".into(), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(projects.as_array().unwrap().len(), 1);
+    assert_eq!(projects[0]["name"], "Exact");
+}
 
 #[tokio::test]
 async fn project_operation_locks_serialize_one_project_without_blocking_another() {
