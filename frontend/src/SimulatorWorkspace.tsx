@@ -69,6 +69,7 @@ export type SimulatorWorkspaceProps = {
 
 export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [view, setView] = useState({ zoom: 1, centerX: 0, centerY: 0 });
+  const [showInterfaceLabels, setShowInterfaceLabels] = useState(false);
   const [topology, setTopology] = useState(props.topology);
   const [deviceQuery, setDeviceQuery] = useState("");
   const [summaryQuery, setSummaryQuery] = useState("");
@@ -252,6 +253,8 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
                   centerY={view.centerY}
                   gridVisible={gridVisible}
                   snapToGrid={snapToGrid}
+                  showInterfaceLabels={showInterfaceLabels}
+                  onToggleInterfaceLabels={() => setShowInterfaceLabels((current) => !current)}
                   projectLocked={projectLocked}
                   selectedNodeIds={selectedNodeIds}
                   selectedDrawingId={selectedDrawingId}

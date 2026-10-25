@@ -390,8 +390,10 @@ button, input, textarea, select { font: inherit; }
 .sim-interface text { fill: var(--muted-foreground); font-size: 7px; text-anchor: middle; pointer-events: none; }
 .sim-interface.is-chosen text { fill: var(--primary); font-weight: 700; }
 .sim-link { cursor: pointer; outline: none; }
-.sim-link line:first-child { stroke: oklch(0.65 0.035 255); stroke-width: 2px; }
-.sim-link.is-selected line:first-child { stroke: var(--primary); stroke-width: 3px; }
+.sim-link .sim-link-stroke { stroke: #555; stroke-width: 2px; }
+.sim-link-status.running { fill: #2c9a45; }
+.sim-link-status.stopped { fill: #d83c35; }
+.sim-link-preview { stroke: #555; stroke-width: 2px; stroke-dasharray: 6 4; pointer-events: none; }
 .sim-link-hit { stroke: transparent !important; stroke-width: 14px !important; }
 .sim-canvas-empty { fill: var(--muted-foreground); font-size: 12px; text-anchor: middle; }
 .sim-empty-subtitle { fill: oklch(0.64 0.02 255); font-size: 10px; }

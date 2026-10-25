@@ -25,6 +25,8 @@ type CanvasProps = {
   centerY: number;
   gridVisible: boolean;
   snapToGrid: boolean;
+  showInterfaceLabels?: boolean;
+  onToggleInterfaceLabels?: () => void;
   projectLocked: boolean;
   selectedNodeIds: string[];
   selectedDrawingId: string | null;
@@ -74,6 +76,7 @@ export function TopologyCanvas(props: CanvasProps) {
   const [drawingPositions, setDrawingPositions] = useState<Record<string, { x: number; y: number }>>({});
   const [labelPositions, setLabelPositions] = useState<Record<string, { x: number; y: number }>>({});
   const [linkLabelPositions, setLinkLabelPositions] = useState<Record<string, { x: number; y: number }>>({});
+  const [cursorPoint, setCursorPoint] = useState<{ x: number; y: number } | null>(null);
   const view = { width: scene.width / props.zoom, height: scene.height / props.zoom, x: props.centerX - scene.width / props.zoom / 2, y: props.centerY - scene.height / props.zoom / 2 };
   const nodeMap = useMemo(() => new Map(props.nodes.map((node) => [node.node_id, node])), [props.nodes]);
   const renderedDrawings = useMemo(() => props.drawings.flatMap((drawing) => {
@@ -161,6 +164,7 @@ export function TopologyCanvas(props: CanvasProps) {
   }
 
   function moveNode(event: PointerEvent<SVGSVGElement>) {
+    if (props.connecting && props.linkEndpoints.length === 1 && svgRef.current) setCursorPoint(scenePoint(event.clientX, event.clientY, svgRef.current.getBoundingClientRect()));
     const selection = selectionRef.current;
     if (selection && selection.pointerId === event.pointerId && svgRef.current) {
       const point = scenePoint(event.clientX, event.clientY, svgRef.current.getBoundingClientRect());
@@ -309,15 +313,21 @@ export function TopologyCanvas(props: CanvasProps) {
         if (!source || endpoints.length < 2) return null;
         const selected = props.selection?.kind === "link" && props.selection.id === link.link_id;
         const sourcePoint = portPoint(source.node, source.endpoint);
-        const style = (link.link_style ?? {}) as Record<string, unknown>;
         return <g key={link.link_id} className={`sim-link ${selected ? "is-selected" : ""} ${link.suspend ? "is-suspended" : ""}`} onClick={(event) => { event.stopPropagation(); props.onLinkClick(link.link_id); }} onContextMenu={() => props.onLinkClick(link.link_id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") props.onLinkClick(link.link_id); }} role="button" aria-label={`Ethernet segment connecting ${endpoints.map(({ node }) => node.name).join(", ")}`} tabIndex={0}>
-          {endpoints.slice(1).map(({ endpoint, node }) => { const point = portPoint(node, endpoint); return <g key={`${endpoint.node_id}:${endpoint.adapter_number}:${endpoint.port_number}`}><line x1={sourcePoint.x} y1={sourcePoint.y} x2={point.x} y2={point.y} style={{ stroke: String(style.color ?? ""), strokeWidth: Number(style.width ?? 0) || undefined, strokeDasharray: link.suspend ? "6 4" : undefined }} /><line className="sim-link-hit" x1={sourcePoint.x} y1={sourcePoint.y} x2={point.x} y2={point.y} /></g>; })}
+          {endpoints.slice(1).map(({ endpoint, node }) => { const point = portPoint(node, endpoint); return <g key={`${endpoint.node_id}:${endpoint.adapter_number}:${endpoint.port_number}`}><line className="sim-link-stroke" x1={sourcePoint.x} y1={sourcePoint.y} x2={point.x} y2={point.y} style={{ stroke: selected ? "#1683df" : "#555", strokeWidth: selected ? 2.5 : 2, strokeDasharray: link.suspend ? "6 4" : undefined }} /><line className="sim-link-hit" x1={sourcePoint.x} y1={sourcePoint.y} x2={point.x} y2={point.y} /></g>; })}
+          {endpoints.map(({ endpoint, node }, index) => {
+            const other = endpoints[index === 0 ? 1 : 0]?.node;
+            const dx = other ? Number(other.x ?? 0) - Number(node.x ?? 0) : 0;
+            const dy = other ? Number(other.y ?? 0) - Number(node.y ?? 0) : 0;
+            const distance = Math.hypot(dx, dy) || 1;
+            return <circle key={`status:${endpoint.node_id}`} className={`sim-link-status ${node.status === "started" ? "running" : "stopped"}`} cx={Number(node.x ?? 0) + dx / distance * 27} cy={Number(node.y ?? 0) + dy / distance * 27} r="3" />;
+          })}
           {endpoints.map(({ endpoint, node }) => {
             const localPort = localPortPoint(portIndex(node, endpoint), portCount(node));
             const key = `${link.link_id}:${endpoint.node_id}`;
             const savedLabel = endpoint.label;
             const text = savedLabel ? String(savedLabel.text ?? "") : portLabel(node, endpoint);
-            if (!text) return null;
+            if (!props.showInterfaceLabels || !text) return null;
             const position = linkLabelPositions[key] ?? { x: Number(savedLabel?.x ?? localPort.x + 8), y: Number(savedLabel?.y ?? localPort.y + 4) };
             return <g key={`label:${endpoint.node_id}`} transform={`translate(${Number(node.x ?? 0)},${Number(node.y ?? 0)})`}>
               <text className="sim-link-label" x={position.x} y={position.y} transform={Number(savedLabel?.rotation) ? `rotate(${Number(savedLabel?.rotation)}, ${position.x}, ${position.y})` : undefined} onPointerDown={(event) => startLinkLabelMove(event, link, endpoint, node)} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.stopPropagation()}>{text}</text>
@@ -325,6 +335,13 @@ export function TopologyCanvas(props: CanvasProps) {
           })}
         </g>;
       })}
+      {props.connecting && props.linkEndpoints.length === 1 && cursorPoint && (() => {
+        const endpoint = props.linkEndpoints[0]!;
+        const node = nodeMap.get(endpoint.node_id);
+        if (!node) return null;
+        const point = portPoint(node, endpoint);
+        return <line className="sim-link-preview" x1={point.x} y1={point.y} x2={cursorPoint.x} y2={cursorPoint.y} />;
+      })()}
       {props.nodes.map((node) => {
         const x = Number(node.x ?? 0);
         const y = Number(node.y ?? 0);
