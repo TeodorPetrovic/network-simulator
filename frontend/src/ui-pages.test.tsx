@@ -83,6 +83,15 @@ describe("PAGES parity routes", () => {
     confirm.mockRestore();
   });
 
+  it("keeps the last project list visible when a manual refresh fails", async () => {
+    vi.mocked(api.listProjects).mockResolvedValueOnce([project]).mockRejectedValueOnce(new Error("Controller unavailable"));
+    renderPage(ProjectsPage);
+    expect(await screen.findByText("Core lab")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh projects" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Controller unavailable");
+    expect(screen.getByText("Core lab")).toBeInTheDocument();
+  });
+
   it("imports a selected .gns3project archive and uses its destination name", async () => {
     renderPage(ProjectsPage);
     fireEvent.click(await screen.findByRole("button", { name: "Import .gns3project" }));

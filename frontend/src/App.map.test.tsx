@@ -6,6 +6,24 @@ import { emptyTopology } from "./App.test-utils";
 import { renderWorkspace } from "./App.test-utils";
 
 describe("map", () => {
+    it("offers packet capture directly from the selected link inspector", async () => {
+      vi.mocked(api.topology).mockResolvedValue({
+        ...emptyTopology,
+        nodes: [
+          { node_id: "n1", name: "Router A", node_type: "qemu", x: 0, y: 0 },
+          { node_id: "n2", name: "Router B", node_type: "qemu", x: 200, y: 0 },
+        ],
+        links: [{ link_id: "l1", nodes: [
+          { node_id: "n1", adapter_number: 0, port_number: 0 },
+          { node_id: "n2", adapter_number: 0, port_number: 0 },
+        ] }],
+      });
+      renderWorkspace();
+      fireEvent.click(await screen.findByRole("button", { name: "Ethernet segment connecting Router A, Router B" }));
+
+      expect(await screen.findByRole("button", { name: "Packet capture" })).toBeInTheDocument();
+    });
+
     it("zooms to a selected device and resets the map scale", async () => {
       vi.mocked(api.topology).mockResolvedValue({
         ...emptyTopology,
