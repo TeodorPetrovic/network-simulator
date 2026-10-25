@@ -95,6 +95,29 @@ export function TopologyCanvas(props: CanvasProps) {
   }), [props.drawings]);
   const orderedDrawings = useMemo(() => [...renderedDrawings].sort((left, right) => Number(left.drawing.z_index ?? 0) - Number(right.drawing.z_index ?? 0)), [renderedDrawings]);
 
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const wheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const rect = svg.getBoundingClientRect();
+      const scale = Math.min(rect.width / view.width, rect.height / view.height);
+      const offsetX = (rect.width - view.width * scale) / 2;
+      const offsetY = (rect.height - view.height * scale) / 2;
+      const anchor = { x: view.x + (event.clientX - rect.left - offsetX) / scale, y: view.y + (event.clientY - rect.top - offsetY) / scale };
+      if (event.ctrlKey || event.metaKey) {
+        const nextZoom = Math.max(0.1, Math.min(4, props.zoom * Math.exp(-event.deltaY * 0.0015)));
+        const ratio = props.zoom / nextZoom;
+        props.onCenterChange(anchor.x + (props.centerX - anchor.x) * ratio, anchor.y + (props.centerY - anchor.y) * ratio);
+        props.onZoom(nextZoom - props.zoom);
+      } else {
+        props.onCenterChange(props.centerX + event.deltaX / scale, props.centerY + event.deltaY / scale);
+      }
+    };
+    svg.addEventListener("wheel", wheel, { passive: false });
+    return () => svg.removeEventListener("wheel", wheel);
+  }, [props.zoom, props.centerX, props.centerY, props.onCenterChange, props.onZoom, view.height, view.width, view.x, view.y]);
+
   const scenePoint = (clientX: number, clientY: number, rect: DOMRect) => {
     const scale = Math.min(rect.width / view.width, rect.height / view.height);
     const offsetX = (rect.width - view.width * scale) / 2;
@@ -322,7 +345,7 @@ export function TopologyCanvas(props: CanvasProps) {
   });
 
   return <div ref={surfaceRef} className={`sim-canvas-surface ${dropActive ? "is-drop-active" : ""}`} onDragOver={(event) => { if (event.dataTransfer.types.includes("application/x-network-simulator-template")) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDropActive(true); } }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) setDropActive(false); }} onDrop={dropTemplate}>
-    <svg ref={svgRef} viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`} role="group" aria-label="Network topology canvas" tabIndex={0} onWheel={(event) => { if (event.ctrlKey || event.metaKey) { event.preventDefault(); props.onZoom(event.deltaY > 0 ? -0.1 : 0.1); } }} onPointerDown={startPan} onPointerMove={moveNode} onPointerUp={endMove} onPointerCancel={endMove} onKeyDown={onKeyDown} onKeyUp={onKeyUp} onBlur={onBlur}  onClick={(event) => {
+    <svg ref={svgRef} viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`} role="group" aria-label="Network topology canvas" tabIndex={0} onPointerDown={startPan} onPointerMove={moveNode} onPointerUp={endMove} onPointerCancel={endMove} onKeyDown={onKeyDown} onKeyUp={onKeyUp} onBlur={onBlur}  onClick={(event) => {
       if (panMovedRef.current) { panMovedRef.current = false; return; }
       if (event.target === event.currentTarget || (event.target as Element).tagName === "rect") {
         const point = scenePoint(event.clientX, event.clientY, svgRef.current!.getBoundingClientRect());
