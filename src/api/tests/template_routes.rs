@@ -9,6 +9,10 @@ async fn templates_create_nodes_with_real_runtime_lifecycle_routes() {
     assert!(templates.as_array().unwrap().iter().any(|template| {
         template["template_type"] == "vpcs" && template["name"] == "VPCS"
     }));
+    let (filtered_status, filtered) = request(&app, Method::GET, "/v3/templates?name=VPCS".into(), None).await;
+    assert_eq!(filtered_status, StatusCode::OK);
+    assert_eq!(filtered.as_array().unwrap().len(), 1);
+    assert_eq!(filtered[0]["name"], "VPCS");
     let template = templates
         .as_array()
         .unwrap()
