@@ -141,3 +141,50 @@ export async function scenario(t, name) {
     async console(node, options) { const c = await connectConsole(node, options); consoles.push(c); return c; },
   };
 }
+
+export const chrImage = `${process.env.HOME}/.local/share/network-simulator/images/qemu/mikrotik-chr-7.23.8.qcow2`;
+
+export async function chrTemplate(lab, name = "CHR scenario", adapters = 2) {
+  const created = await lab.server.api("POST", "/templates", { name, template_type: "qemu", hda_disk_image: chrImage, adapters, memory: 256, cpus: 1, platform: "x86_64", adapter_type: "e1000", hda_disk_interface: "ide", boot_priority: "c", linked_clone: true });
+  if (created.status !== 201) throw new Error(`CHR template failed: ${JSON.stringify(created)}`);
+  return created.json;
+}
+
+// Opens the CHR serial console, logs in as admin with the empty default password and
+// returns { run(line, expectRegex, timeout) -> output, close() }.
+export async function chrConsole(lab, node) {
+  const url = lab.server.base.replace("http", "ws") + `/v3/compute/projects/${lab.projectId}/qemu/nodes/${node.node_id}/console/ws`;
+  const ws = new WebSocket(url);
+  let output = "";
+  ws.addEventListener("message", async (e) => {
+    const text = typeof e.data === "string" ? e.data : e.data instanceof Blob ? await e.data.text() : new TextDecoder().decode(e.data);
+    output += text;
+    if (text.includes("\x1b[6n")) ws.send("\x1b[24;200R");
+  });
+  await new Promise((resolve, reject) => { ws.addEventListener("open", resolve, { once: true }); ws.addEventListener("error", reject, { once: true }); });
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const type = async (text) => { for (const c of text) { ws.send(c); await sleep(40); } };
+  const expect = async (re, timeout, label) => {
+    try { await waitFor(() => re.test(output), { timeout, label }); }
+    catch (error) { console.error(`${label}; console tail:`, JSON.stringify(output.slice(-800))); throw error; }
+  };
+  const nudge = setInterval(() => { try { ws.send("\r"); } catch { /* closed */ } }, 4000);
+  try { await expect(/Login:/i, 150000, `${node.name} serial login prompt`); } finally { clearInterval(nudge); }
+  await sleep(1500); output = "";
+  await type("admin+ct200w\r");
+  await expect(/assword:/i, 30000, `${node.name} password prompt`);
+  output = ""; await type("\r");
+  const prompt = /\[admin@[^\]]*\]\s*>\s*$/;
+  await waitFor(async () => {
+    if (prompt.test(output)) return true;
+    if (/software license\? \[Y\/n\]:\s*$/.test(output)) await type("n\r");
+    if (/new password>\s*$/i.test(output)) { output = ""; ws.send("\x03"); await sleep(1500); ws.send("\r"); }
+    return false;
+  }, { timeout: 90000, label: `${node.name} RouterOS prompt` }).catch((error) => { console.error("CHR prompt; console tail:", JSON.stringify(output.slice(-600))); throw error; });
+  return {
+    async run(line, re = /\[admin@[^\]]*\]\s*>\s*$/, timeout = 45000) {
+      output = ""; await type(line + "\r"); await expect(re, timeout, `${node.name}: ${line}`); return output;
+    },
+    close() { ws.close(); },
+  };
+}
