@@ -75,6 +75,20 @@ export type SimulatorWorkspaceProps = {
 
 export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [view, setView] = useState({ zoom: 1, centerX: 0, centerY: 0 });
+  const viewKey = `ns.view.${props.project.project_id}`;
+  const [savedViewLoaded, setSavedViewLoaded] = useState(false);
+  useEffect(() => {
+    setSavedViewLoaded(false);
+    try {
+      const raw = localStorage.getItem(`ns.view.${props.project.project_id}`);
+      const saved = raw ? JSON.parse(raw) as { zoom?: number; centerX?: number; centerY?: number } : null;
+      if (saved && Number.isFinite(saved.zoom) && Number.isFinite(saved.centerX) && Number.isFinite(saved.centerY)) {
+        setView({ zoom: Math.max(0.4, Math.min(maxZoom, saved.zoom!)), centerX: saved.centerX!, centerY: saved.centerY! });
+      }
+    } catch { /* Ignore invalid or unavailable local storage. */ }
+    setSavedViewLoaded(true);
+  }, [props.project.project_id]);
+  useEffect(() => { if (savedViewLoaded) try { localStorage.setItem(viewKey, JSON.stringify(view)); } catch { /* Storage can be disabled. */ } }, [savedViewLoaded, view, viewKey]);
   const [showInterfaceLabels, setShowInterfaceLabels] = useState(false);
   const [topology, setTopology] = useState(props.topology);
   const [deviceQuery, setDeviceQuery] = useState("");
@@ -173,8 +187,8 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   }
 
   useEffect(() => {
-    fitTopology();
-  }, [props.project.project_id]);
+    if (savedViewLoaded && !localStorage.getItem(viewKey)) fitTopology();
+  }, [props.project.project_id, savedViewLoaded]);
 
   async function exportScreenshot(request: ScreenshotRequest) {
     const svg = document.querySelector<SVGSVGElement>(".sim-canvas-surface svg");
@@ -260,6 +274,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
             <ContextMenuTrigger asChild>
               <div className={`sim-canvas ${props.connecting ? "is-connecting" : ""} ${pendingDrawing ? "is-drawing" : ""}`}>
                 {featureMessage && <div className="sim-map-inline-notice" role="status">{featureMessage}</div>}
+                <div className="sim-zoom-hint">Ctrl + scroll to zoom · drag with middle mouse to pan · <button type="button" onClick={() => setView({ zoom: 1, centerX: 0, centerY: 0 })}>{Math.round(view.zoom * 100)}%</button></div>
 
                 <TopologyCanvas
                   nodes={canvasNodes}

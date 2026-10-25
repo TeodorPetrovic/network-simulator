@@ -518,6 +518,9 @@ button, input, textarea, select { font: inherit; }
 .sim-empty-state b { color: var(--foreground); font-size: 13px; }
 
 .sim-console-dock { position: fixed; z-index: 40; right: 0; bottom: 30px; left: 0; display: flex; height: 258px; flex-direction: column; border-top: 1px solid oklch(0.29 0.025 255); color: oklch(0.9 0.01 255); background: #10151d; box-shadow: 0 -8px 28px #10151d20; transition: height .16s ease; }
+.sim-zoom-hint { position: absolute; z-index: 8; bottom: 10px; left: 10px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted-foreground); background: color-mix(in srgb, var(--background) 88%, transparent); font-size: 10px; opacity: .58; transition: opacity .15s; }
+.sim-zoom-hint:hover, .sim-zoom-hint:focus-within { opacity: 1; }
+.sim-zoom-hint button { color: var(--foreground); text-decoration: underline; text-underline-offset: 2px; }
 .sim-console-loading { position: fixed; z-index: 40; right: 0; bottom: 30px; left: 0; padding: 10px 14px; color: #d6dee9; background: #191f29; font-size: 11px; }
 .sim-dialog-loading { position: fixed; z-index: 70; inset: 0; display: grid; place-items: center; color: var(--foreground); background: oklch(0.12 0.01 255 / 55%); font-size: 13px; }
 .sim-console-dock.is-minimized { height: 32px; }
