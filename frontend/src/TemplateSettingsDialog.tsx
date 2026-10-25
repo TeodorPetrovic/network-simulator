@@ -55,7 +55,7 @@ export function TemplateSettingsDialog({ template, open, onOpenChange, onSave }:
     <Label>{label}</Label>
     <Select value={draft[name] ?? values[0]} onValueChange={(value) => setDraft((current) => ({ ...current, [name]: value }))}>
       <SelectTrigger aria-label={label}><SelectValue /></SelectTrigger>
-      <SelectContent>{values.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent>
+      <SelectContent position="popper" align="start">{values.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent>
     </Select>
   </label>;
   const textArea = (name: string, label: string, helper: string) => <label className="grid gap-1.5" key={name}>
@@ -121,7 +121,7 @@ export function TemplateSettingsDialog({ template, open, onOpenChange, onSave }:
           {textArea("extra_volumes", "Persistent container paths", "One absolute path inside the container per line. Data is stored under the project runtime directory.")}
         </div>}
         {template.template_type === "dynamips" && <>
-          {selectField("platform", "Dynamips platform", ["c7200", "c3600"])}
+          {selectField("platform", "Dynamips platform", ["c1700", "c2600", "c2691", "c3600", "c3725", "c3745", "c7200"])}
           {field("chassis", "Chassis", "text", "For c3600, choose a supported chassis such as 3620.")}
           {field("slot0", "Slot 0 adapter")}
           {field("nvram", "NVRAM (KB)", "number")}
