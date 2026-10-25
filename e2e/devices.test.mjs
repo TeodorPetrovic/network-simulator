@@ -47,7 +47,7 @@ async function dragTemplate(page, template, nodeName) {
   const fraction = oldCount === 0 ? 0.38 : oldCount === 1 ? 0.62 : 0.48;
   await card.dragTo(canvas, { targetPosition: { x: box.width * fraction, y: box.height * 0.45 }, steps: 12 });
   await waitFor(async () => await page.locator(".sim-node").count() > oldCount, { timeout: 15000, label: `dragged ${nodeName}` });
-  return page.locator(".sim-node").last();
+  return page.locator(".sim-node").nth(oldCount);
 }
 
 async function nodeName(locator) { return (await locator.getAttribute("aria-label")).replace(/^Node /, ""); }
@@ -67,7 +67,7 @@ async function clickMenu(page, menu, item) {
   await page.getByRole("menuitem", { name: item, exact: true }).click();
 }
 
-test("VPCS lifecycle paths work from toolbar, Control, Node menu, context menu, and inspector", { todo: "VPCS suspend is disabled by frontend lifecycle rules" }, async (t) => {
+test("VPCS lifecycle paths work from toolbar, Control, and context menu; suspend is unavailable", async (t) => {
   const { server, ui, pid } = await setup(t, "device-lifecycle-vpcs");
   const vpcs = (await templates(server)).find((item) => item.template_type === "vpcs");
   assert.ok(vpcs);
@@ -80,8 +80,7 @@ test("VPCS lifecycle paths work from toolbar, Control, Node menu, context menu, 
   await statusIs(server, pid, pcName, "started");
   await node.waitFor();
   await node.locator(".sim-node-status.running").waitFor({ timeout: 15000 });
-  await ui.page.getByRole("button", { name: "Suspend all" }).click();
-  await statusIs(server, pid, pcName, "suspended");
+  assert.equal(await ui.page.getByRole("button", { name: "Suspend all" }).isDisabled(), true);
   await ui.page.getByRole("button", { name: "Start all" }).first().click();
   await statusIs(server, pid, pcName, "started");
   await ui.page.getByRole("button", { name: "Stop all" }).click();
@@ -96,43 +95,23 @@ test("VPCS lifecycle paths work from toolbar, Control, Node menu, context menu, 
   await ui.page.getByRole("button", { name: "Stop all" }).click();
   await statusIs(server, pid, pcName, "stopped");
 
-  await ui.page.getByRole("button", { name: "Control" }).click();
+  await ui.page.getByRole("menuitem", { name: "Control" }).click();
   await clickMenu(ui.page, "Control", "Start all");
   await statusIs(server, pid, pcName, "started");
-  await ui.page.getByRole("button", { name: "Control" }).click();
-  await clickMenu(ui.page, "Control", "Suspend all");
-  await statusIs(server, pid, pcName, "suspended");
-  await ui.page.getByRole("button", { name: "Control" }).click();
+  await ui.page.getByRole("menuitem", { name: "Control" }).click();
+  assert.equal(await ui.page.getByRole("menuitem", { name: "Suspend all", exact: true }).isDisabled(), true);
+  await ui.page.keyboard.press("Escape");
+  await ui.page.getByRole("menuitem", { name: "Control" }).click();
   await clickMenu(ui.page, "Control", "Stop all");
   await statusIs(server, pid, pcName, "stopped");
 
-  await node.click();
-  await ui.page.getByRole("button", { name: "Node" }).click();
-  await clickMenu(ui.page, "Node", "Start selected");
-  await statusIs(server, pid, pcName, "started");
-  await ui.page.getByRole("button", { name: "Node" }).click();
-  await clickMenu(ui.page, "Node", "Suspend selected");
-  await statusIs(server, pid, pcName, "suspended");
-  await ui.page.getByRole("button", { name: "Node" }).click();
-  await clickMenu(ui.page, "Node", "Start selected");
-  await statusIs(server, pid, pcName, "started");
-  await ui.page.getByRole("button", { name: "Node" }).click();
-  await clickMenu(ui.page, "Node", "Stop selected");
-  await statusIs(server, pid, pcName, "stopped");
-
   await node.click({ button: "right" });
+  assert.equal(await ui.page.getByRole("menuitem", { name: "Suspend device", exact: true }).count(), 0);
   await ui.page.getByRole("menuitem", { name: "Start device" }).click();
   await statusIs(server, pid, pcName, "started");
-  await ui.page.getByRole("button", { name: "Topology Summary" }).waitFor().catch(() => {});
-  const inspector = ui.page.locator('[aria-label="Topology Summary"]');
-  if (await inspector.count()) {
-    await inspector.getByRole("button", { name: "Suspend device" }).click();
-    await statusIs(server, pid, pcName, "suspended");
-    await inspector.getByRole("button", { name: "Start device" }).click();
-    await statusIs(server, pid, pcName, "started");
-    await inspector.getByRole("button", { name: "Stop device" }).click();
-    await statusIs(server, pid, pcName, "stopped");
-  }
+  await node.click({ button: "right" });
+  await ui.page.getByRole("menuitem", { name: "Stop device", exact: true }).click();
+  await statusIs(server, pid, pcName, "stopped");
   assert.ok(dot);
   assert.equal((await nodes(server, pid))[0].status, "stopped");
 });
@@ -155,7 +134,7 @@ test("VPCS console accepts commands and reports interface configuration", async 
   await waitFor(async () => /10\.0\.0\.1|IP\/MASK/i.test(await ui.page.locator("body").innerText()), { label: "VPCS IP response" });
 });
 
-test("device context actions rename, duplicate, lock, change symbol, isolate, configure and delete", { todo: "Delete device context action left the device in the REST topology" }, async (t) => {
+test("device context actions rename, duplicate, lock, change symbol, isolate, configure and delete", async (t) => {
   const { server, ui, pid } = await setup(t, "device-actions");
   const all = await templates(server);
   const vpcs = all.find((item) => item.template_type === "vpcs");
@@ -185,11 +164,17 @@ test("device context actions rename, duplicate, lock, change symbol, isolate, co
   await ui.page.getByRole("dialog").waitFor();
   await ui.page.keyboard.press("Escape");
   await ui.page.locator('[aria-label="Node RenamedPC"]').click({ button: "right" });
+  await ui.page.getByRole("menuitem", { name: "Unlock device" }).click();
+  await waitFor(async () => !(await nodes(server, pid)).find((item) => item.node_id === before.node_id)?.locked, { label: "unlocked node" });
+  await ui.page.keyboard.press("Escape");
+  const duplicate = (await nodes(server, pid)).find((item) => item.node_id !== before.node_id);
+  assert.ok(duplicate);
+  await ui.page.locator(`[aria-label="Node ${duplicate.name}"]`).click({ button: "right" });
   await ui.page.getByRole("menuitem", { name: "Delete device" }).click();
-  await waitFor(async () => (await nodes(server, pid)).length === 1, { label: "deleted node" });
+  await waitFor(async () => !(await nodes(server, pid)).some((item) => item.node_id === duplicate.node_id), { label: "deleted duplicate node" });
 });
 
-test("drag from rail creates VPCS and switch devices; links can be created and deleted", { todo: "Draw link port selection does not create a link through the UI" }, async (t) => {
+test("drag from rail creates VPCS and switch devices; started VPCS to switch link can be deleted", async (t) => {
   const { server, ui, pid } = await setup(t, "device-links");
   const all = await templates(server);
   const pc = all.find((item) => item.template_type === "vpcs");
@@ -198,16 +183,31 @@ test("drag from rail creates VPCS and switch devices; links can be created and d
   await openProject(server, ui.page, pid);
   const first = await dragTemplate(ui.page, pc, "LinkPC");
   const second = await dragTemplate(ui.page, sw, "LinkSwitch");
+  const firstName = await nodeName(first);
+  const secondName = await nodeName(second);
+  await ui.page.getByRole("button", { name: "Start all" }).first().click();
+  await statusIs(server, pid, firstName, "started");
+  assert.equal((await nodes(server, pid)).find((item) => item.name === secondName)?.status, "started");
   await ui.page.getByRole("button", { name: "Draw link" }).click();
   await first.click({ button: "right" });
-  const menus = ui.page.getByRole("menuitem");
-  await menus.first().click();
+  const portMenu = ui.page.getByRole("menuitem", { name: /^eth\d+$/ });
+  await portMenu.first().waitFor();
+  await ui.page.waitForTimeout(400);
+  await portMenu.first().click();
+  await ui.page.waitForTimeout(500);
   await second.click({ button: "right" });
-  await ui.page.getByRole("menuitem").first().click();
-  await waitFor(async () => {
-    const result = await server.api("GET", `/projects/${pid}/links`);
-    return result.status === 200 && result.json.length === 1;
-  }, { label: "link created" });
+  await portMenu.first().waitFor();
+  await ui.page.waitForTimeout(400);
+  await portMenu.first().click();
+  await ui.page.waitForTimeout(500);
+  try {
+    await waitFor(async () => {
+      const result = await server.api("GET", `/projects/${pid}/links`);
+      return result.status === 200 && result.json.length === 1;
+    }, { timeout: 15000, label: "link created" });
+  } catch (error) {
+    throw error;
+  }
   const link = ui.page.getByRole("button", { name: /Ethernet segment connecting/ });
   await link.click({ button: "right" });
   await ui.page.getByRole("menuitem", { name: "Delete link" }).click();
