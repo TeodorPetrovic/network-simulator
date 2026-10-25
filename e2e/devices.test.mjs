@@ -228,7 +228,110 @@ test("drag from rail creates VPCS and switch devices; started VPCS to switch lin
   await waitFor(async () => (await server.api("GET", `/projects/${pid}/links`)).json.length === 0, { label: "link deleted" });
 });
 
-test("Ethernet switch and hub lifecycle is reflected in the canvas and REST", { todo: "Built in switch and hub lifecycle controls are disabled by frontend lifecycle rules" }, async (t) => {
+test("NAT and cloud devices can be added from the device flyout", async (t) => {
+  const { server, ui, pid } = await setup(t, "device-network-nodes");
+  const all = await templates(server);
+  const choices = [all.find((item) => item.template_type === "nat"), all.find((item) => item.template_type === "cloud")].filter(Boolean);
+  assert.equal(choices.length, 2, "built in NAT and cloud templates are available");
+  await openProject(server, ui.page, pid);
+  for (const [index, template] of choices.entries()) {
+    const node = await dragTemplate(ui.page, template, `NetworkNode${index}`);
+    const name = await nodeName(node);
+    assert.ok((await nodes(server, pid)).some((item) => item.name === name && item.node_type === template.template_type));
+  }
+});
+
+test("starting a QEMU node with a missing image shows a visible error", async (t) => {
+  const { server, ui, pid } = await setup(t, "device-missing-runtime");
+  const image = join(qemuImageDir, "mikrotik-chr-7.23.8.qcow2");
+  assert.ok(existsSync(image), "local QEMU image is available to seed the node");
+  const tempImageDir = mkdtempSync(join(qemuImageDir, "e2e-missing-runtime-"));
+  const tempImage = join(tempImageDir, "seed.qcow2");
+  copyFileSync(image, tempImage);
+  t.after(() => rmSync(tempImageDir, { recursive: true, force: true }));
+  const created = await server.api("POST", "/templates", {
+    name: "Missing image QEMU", template_type: "qemu", hda_disk_image: tempImage,
+    adapters: 1, memory: 512, cpus: 1, platform: "x86_64", adapter_type: "e1000",
+    hda_disk_interface: "ide", boot_priority: "c", linked_clone: false,
+  });
+  assert.equal(created.status, 201, JSON.stringify(created));
+  const add = await server.api("POST", `/projects/${pid}/templates/${created.json.template_id}`, { x: 0, y: 0, compute_id: "local" });
+  assert.equal(add.status, 201, JSON.stringify(add));
+  rmSync(tempImageDir, { recursive: true, force: true });
+  await openProject(server, ui.page, pid);
+  const node = ui.page.locator(`[aria-label="Node ${add.json.name}"]`);
+  await node.waitFor();
+  await node.click({ button: "right" });
+  await ui.page.getByRole("menuitem", { name: "Start device", exact: true }).click();
+  try {
+    await ui.page.getByRole("alert").waitFor();
+  } catch (error) {
+    console.error("missing runtime diagnostics", (await ui.page.locator("body").innerText()).slice(-500), server.log().slice(-1000), await nodes(server, pid));
+    throw error;
+  }
+  assert.ok((await ui.page.getByRole("alert").innerText()).trim(), "the runtime failure toast has a visible message");
+});
+
+async function dragNodeBy(page, locator, dx, dy) {
+  const box = await locator.boundingBox();
+  assert.ok(box, "node has a visible canvas position");
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height * 0.3;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + dx, y + dy, { steps: 8 });
+  await page.mouse.up();
+}
+
+test("Ctrl multi-select and rubber-band selection move node groups; locked nodes stay put", async (t) => {
+  const { server, ui, pid } = await setup(t, "device-selection-drag");
+  const pc = (await templates(server)).find((item) => item.template_type === "vpcs");
+  assert.ok(pc);
+  await openProject(server, ui.page, pid);
+  const first = await dragTemplate(ui.page, pc, "GroupA");
+  const second = await dragTemplate(ui.page, pc, "GroupB");
+  const names = [await nodeName(first), await nodeName(second)];
+
+  await first.click({ modifiers: ["Control"] });
+  await second.click({ modifiers: ["Control"] });
+  await waitFor(async () => await ui.page.locator(".sim-node.is-selected").count() === 2, { label: "Ctrl multi-selection" });
+  const boxes = await Promise.all(names.map((name) => ui.page.locator(`[aria-label="Node ${name}"]`).boundingBox()));
+  assert.ok(boxes.every(Boolean));
+  const left = Math.min(...boxes.map((box) => box.x)) - 24;
+  const top = Math.min(...boxes.map((box) => box.y)) - 24;
+  const right = Math.max(...boxes.map((box) => box.x + box.width)) + 24;
+  const bottom = Math.max(...boxes.map((box) => box.y + box.height)) + 24;
+  await ui.page.mouse.move(left, top);
+  await ui.page.mouse.down();
+  await ui.page.mouse.move(right, bottom, { steps: 8 });
+  await ui.page.mouse.up();
+  await waitFor(async () => await ui.page.locator(".sim-node.is-selected").count() === 2, { label: "rubber-band multi-selection" });
+  const initial = await nodes(server, pid);
+  await dragNodeBy(ui.page, ui.page.locator(`[aria-label="Node ${names[0]}"]`), 70, 40);
+  await waitFor(async () => (await nodes(server, pid)).some((node) => {
+    const old = initial.find((item) => item.node_id === node.node_id);
+    return Number(node.x) !== Number(old?.x) || Number(node.y) !== Number(old?.y);
+  }), { label: "rubber-band selected nodes moved" });
+  const moved = await nodes(server, pid);
+  const deltas = names.map((name) => {
+    const old = initial.find((item) => item.name === name);
+    const current = moved.find((item) => item.name === name);
+    return { x: Number(current.x) - Number(old.x), y: Number(current.y) - Number(old.y) };
+  });
+  assert.deepEqual(deltas[1], deltas[0], "rubber-band selected nodes move by the same REST position delta");
+
+  const locked = ui.page.locator(`[aria-label="Node ${names[0]}"]`);
+  await locked.click({ button: "right" });
+  await ui.page.getByRole("menuitem", { name: "Lock device" }).click();
+  await waitFor(async () => (await nodes(server, pid)).find((item) => item.name === names[0])?.locked, { label: "node locked" });
+  const lockedBefore = (await nodes(server, pid)).find((item) => item.name === names[0]);
+  await dragNodeBy(ui.page, locked, 100, 80);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const lockedAfter = (await nodes(server, pid)).find((item) => item.name === names[0]);
+  assert.deepEqual({ x: lockedAfter.x, y: lockedAfter.y }, { x: lockedBefore.x, y: lockedBefore.y });
+});
+
+test("Ethernet switch and hub lifecycle remains started and controls are unavailable", async (t) => {
   const { server, ui, pid } = await setup(t, "device-switch-hub");
   const all = await templates(server);
   const choices = [
