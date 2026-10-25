@@ -201,6 +201,10 @@ pub(super) fn dynamips_options_from_template(
     // fails to deserialize as `DynamipsOptions::dynamips_id: u32` before the
     // allocator's value can be applied. Normalize it before deserializing.
     object.insert("dynamips_id".into(), json!(dynamips_id));
+    // Template-to-node construction includes absent fields as explicit nulls.
+    // Serde's container-level `default` handles absent fields, but not nulls,
+    // so drop null option values before deserializing to use platform defaults.
+    object.retain(|_, value| !value.is_null());
     if object.get("sparsemem").is_none() {
         let platform = object
             .get("platform")

@@ -520,13 +520,18 @@ async fn forwarded_proxy_headers_keep_bearer_authentication_enforced() {
 }
 
 #[test]
-fn dynamips_template_creation_replaces_null_runtime_id_before_deserialization() {
+fn sparse_dynamips_template_options_use_platform_defaults() {
     let mut template = serde_json::json!({
         "dynamips_id": null,
         "platform": "c3725",
         "slot0": "GT96100-FE",
         "slot1": null,
         "wic0": null,
+        "mmap": null,
+        "sparsemem": null,
+        "clock_divisor": null,
+        "private_config": null,
+        "console_type": null,
         "mac_addr": "",
         "system_id": "FTX0945W0MY",
         "iomem": null
@@ -544,4 +549,9 @@ fn dynamips_template_creation_replaces_null_runtime_id_before_deserialization() 
     assert_eq!(options.wics[0], None);
     assert_eq!(options.mac_addr, None);
     assert_eq!(options.iomem, None);
+    assert!(options.mmap);
+    assert!(options.sparsemem);
+    assert_eq!(options.clock_divisor, 8);
+    assert!(options.private_config.is_empty());
+    assert_eq!(options.console_type, "telnet");
 }
