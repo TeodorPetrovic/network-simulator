@@ -8,7 +8,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function link(server, projectId, ...nodes) {
   const result = await server.api("POST", `/projects/${projectId}/links`, {
-    nodes: nodes.map((node) => ({ node_id: node.node_id, adapter_number: 0, port_number: 0 })),
+    nodes: nodes.map((endpoint) => endpoint.node_id
+      ? { node_id: endpoint.node_id, adapter_number: endpoint.adapter_number ?? 0, port_number: endpoint.port_number ?? 0 }
+      : { node_id: endpoint.node.node_id, adapter_number: endpoint.adapter_number ?? 0, port_number: endpoint.port_number ?? 0 }),
   });
   if (result.status !== 201) throw new Error(`link failed: ${JSON.stringify(result)}`);
   return result.json;
