@@ -70,6 +70,7 @@ type PanState = { pointerId: number; startX: number; startY: number; centerX: nu
 
 export function TopologyCanvas(props: CanvasProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const labelDragRef = useRef<LabelDragState | null>(null);
   const linkLabelDragRef = useRef<LinkLabelDragState | null>(null);
@@ -297,7 +298,30 @@ export function TopologyCanvas(props: CanvasProps) {
     props.onDropTemplate(templateId, point.x, point.y);
   }
 
-  return <div className={`sim-canvas-surface ${dropActive ? "is-drop-active" : ""}`} onDragOver={(event) => { if (event.dataTransfer.types.includes("application/x-network-simulator-template")) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDropActive(true); } }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) setDropActive(false); }} onDrop={dropTemplate}>
+  useEffect(() => {
+    const type = "application/x-network-simulator-template";
+    const over = (event: globalThis.DragEvent) => {
+      if (!event.dataTransfer?.types.includes(type) || surfaceRef.current?.contains(event.target as globalThis.Node | null)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    };
+    const drop = (event: globalThis.DragEvent) => {
+      if (!event.dataTransfer?.types.includes(type) || surfaceRef.current?.contains(event.target as globalThis.Node | null) || !svgRef.current) return;
+      event.preventDefault();
+      const templateId = event.dataTransfer.getData(type);
+      if (!templateId) return;
+      const rect = svgRef.current.getBoundingClientRect();
+      const x = Math.min(Math.max(event.clientX, rect.left + 40), rect.right - 40);
+      const y = Math.min(Math.max(event.clientY, rect.top + 40), rect.bottom - 40);
+      const point = scenePoint(x, y, rect);
+      props.onDropTemplate(templateId, point.x, point.y);
+    };
+    window.addEventListener("dragover", over);
+    window.addEventListener("drop", drop);
+    return () => { window.removeEventListener("dragover", over); window.removeEventListener("drop", drop); };
+  });
+
+  return <div ref={surfaceRef} className={`sim-canvas-surface ${dropActive ? "is-drop-active" : ""}`} onDragOver={(event) => { if (event.dataTransfer.types.includes("application/x-network-simulator-template")) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDropActive(true); } }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) setDropActive(false); }} onDrop={dropTemplate}>
     <svg ref={svgRef} viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`} role="group" aria-label="Network topology canvas" tabIndex={0} onWheel={(event) => { if (event.ctrlKey || event.metaKey) { event.preventDefault(); props.onZoom(event.deltaY > 0 ? -0.1 : 0.1); } }} onPointerDown={startPan} onPointerMove={moveNode} onPointerUp={endMove} onPointerCancel={endMove} onKeyDown={onKeyDown} onKeyUp={onKeyUp} onBlur={onBlur}  onClick={(event) => {
       if (panMovedRef.current) { panMovedRef.current = false; return; }
       if (event.target === event.currentTarget || (event.target as Element).tagName === "rect") {

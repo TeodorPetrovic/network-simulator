@@ -53,7 +53,7 @@ pub(super) async fn set_project_lock(
     locked: bool,
 ) -> Result<(), ApiError> {
     let pid = project_id.to_string();
-    let mut tx = state.store.pool().begin().await?;
+    let mut tx = state.store.begin_write().await?;
     let row = sqlx::query("SELECT project_json FROM projects WHERE project_id=?")
         .bind(&pid)
         .fetch_optional(&mut *tx)

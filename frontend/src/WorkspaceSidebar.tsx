@@ -28,6 +28,7 @@ type Props = { workspace: SimulatorWorkspaceProps; deviceQuery: string; setDevic
 export function WorkspaceSidebar({ workspace, deviceQuery, setDeviceQuery, groupedTemplates }: Props) {
   const [active, setActive] = useState<Category | null>(null);
   const [linkMode, setLinkMode] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const templates = useMemo(() => groupedTemplates.flatMap((group) => group.templates), [groupedTemplates]);
   const visible = templates.filter((template) => (active === "all" || templateCategory(template) === active) && (!deviceQuery.trim() || template.name.toLowerCase().includes(deviceQuery.trim().toLowerCase())));
   return <aside className="sim-device-rail" aria-label="Device types">
@@ -35,10 +36,10 @@ export function WorkspaceSidebar({ workspace, deviceQuery, setDeviceQuery, group
       {categories.map(({ id, label, icon: Icon }) => <Button key={id} variant={active === id ? "secondary" : "ghost"} size="icon" title={label} aria-label={label} aria-pressed={active === id} onClick={() => setActive((value) => value === id ? null : id)}><Icon /></Button>)}
     </nav>
     <div className="sim-device-rail-bottom"><Button variant="ghost" size="icon" title="Add node or image" aria-label="Add node or image" onClick={workspace.onOpenNodeDialog}><Plus /></Button><Button variant={linkMode ? "default" : "ghost"} size="icon" title="Add a link" aria-label="Add a link" aria-pressed={linkMode} onClick={() => { setLinkMode((value) => !value); workspace.onToggleConnect(); }}><Link2 /></Button></div>
-    {active && <section className="sim-device-flyout" aria-label={`${categories.find((item) => item.id === active)?.label} templates`}>
+    {active && <section className={`sim-device-flyout${dragging ? " is-dragging" : ""}`} aria-label={`${categories.find((item) => item.id === active)?.label} templates`}>
       <header><b>{categories.find((item) => item.id === active)?.label}</b><Button variant="ghost" size="icon-xs" aria-label="Close device list" onClick={() => setActive(null)}><X /></Button></header>
       <label className="sim-device-search"><Search /><Input value={deviceQuery} onChange={(event) => setDeviceQuery(event.target.value)} placeholder="Filter devices…" aria-label="Filter devices" /></label>
-      <ScrollArea className="sim-device-flyout-list">{visible.length ? visible.map((template) => <DeviceTemplateCard key={template.template_id} template={template} onAdd={() => workspace.onAddTemplate(template.template_id)} onSave={workspace.onSaveTemplate} onDragEnd={() => setActive(null)} />) : <p className="sim-device-empty">No templates in this category.</p>}</ScrollArea>
+      <ScrollArea className="sim-device-flyout-list">{visible.length ? visible.map((template) => <DeviceTemplateCard key={template.template_id} template={template} onAdd={() => workspace.onAddTemplate(template.template_id)} onSave={workspace.onSaveTemplate} onDragStart={() => setDragging(true)} onDragEnd={() => { setDragging(false); setActive(null); }} />) : <p className="sim-device-empty">No templates in this category.</p>}</ScrollArea>
       <Button variant="outline" className="sim-device-catalog" onClick={workspace.onOpenMarketplace}><Search />Find devices and images</Button>
     </section>}
   </aside>;

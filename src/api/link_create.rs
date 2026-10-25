@@ -57,7 +57,7 @@ pub(super) async fn create_link(
     {
         return Ok(Json(decode_json(row.get::<String, _>("object_json"))?).into_response());
     }
-    let mut validation = state.store.pool().begin().await?;
+    let mut validation = state.store.begin_write().await?;
     ensure_project_exists(&mut validation, &project_id).await?;
     validate_link_in_tx(&mut validation, &project_id, &link).await?;
     validation.rollback().await?;

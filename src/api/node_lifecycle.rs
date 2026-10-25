@@ -104,7 +104,7 @@ pub(super) async fn change_node_runtime_state(
     let previous_status = node.get("status").and_then(Value::as_str).map(str::to_owned);
     let status = apply_node_lifecycle(&state, &project_id, &mut node, action).await?;
     node["status"] = json!(status);
-    let mut tx = state.store.pool().begin().await?;
+    let mut tx = state.store.begin_write().await?;
     sqlx::query(
         "UPDATE topology_objects SET object_json = ?
          WHERE project_id = ? AND kind = 'node' AND object_id = ?",

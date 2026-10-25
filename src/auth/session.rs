@@ -129,7 +129,7 @@ pub(super) async fn refresh(
     let claims = decode_token(&body.refresh_token, &key)
         .filter(|claims| claims.token_use == "refresh")
         .ok_or_else(AuthError::unauthorized)?;
-    let mut tx = state.store.pool().begin().await.map_err(db_error)?;
+    let mut tx = state.store.begin_write().await.map_err(db_error)?;
     let now = now_epoch() as i64;
     let update = sqlx::query("UPDATE auth_refresh_tokens SET consumed_at = CURRENT_TIMESTAMP WHERE jti = ? AND consumed_at IS NULL AND expires_at > ?")
         .bind(&claims.jti)

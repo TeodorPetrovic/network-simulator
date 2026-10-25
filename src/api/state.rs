@@ -289,7 +289,7 @@ impl super::AppState {
                 Ok(status) => {
                     node["status"] = json!(status);
                     let result = async {
-                        let mut tx = self.store.pool().begin().await?;
+                        let mut tx = self.store.begin_write().await?;
                         sqlx::query(
                             "UPDATE topology_objects SET object_json = ?
                              WHERE project_id = ? AND kind = 'node' AND object_id = ?",

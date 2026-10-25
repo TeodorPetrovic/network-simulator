@@ -700,3 +700,5 @@ button, input, textarea, select { font: inherit; }
   .appliance-image-library-content > [data-slot="scroll-area"] { max-height: 42dvh; }
   .appliance-toast-viewport { right: 12px; bottom: 12px; width: calc(100vw - 24px); }
 }
+
+.sim-device-flyout.is-dragging { opacity: 0.25; pointer-events: none; }

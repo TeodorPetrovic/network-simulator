@@ -69,7 +69,7 @@ pub(super) async fn restore_snapshot(
     .await?
     .ok_or_else(|| ApiError::not_found("Snapshot does not exist"))?;
     let snapshot = decode_json(row.get("topology_json"))?;
-    let mut tx = state.store.pool().begin().await?;
+    let mut tx = state.store.begin_write().await?;
     sqlx::query("DELETE FROM link_endpoints WHERE project_id=?")
         .bind(&pid)
         .execute(&mut *tx)

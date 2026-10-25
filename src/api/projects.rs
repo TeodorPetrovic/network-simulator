@@ -53,7 +53,7 @@ pub(super) async fn create_project(
 
     let project_json = serde_json::to_string(&project)
         .map_err(|error| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
-    let mut tx = state.store.pool().begin().await?;
+    let mut tx = state.store.begin_write().await?;
     sqlx::query(
         "INSERT INTO projects (project_id, name, status, project_json) VALUES (?, ?, 'opened', ?)",
     )
@@ -83,7 +83,7 @@ pub(super) async fn update_project(
     Json(patch): Json<Value>,
 ) -> Result<Response, ApiError> {
     let project_id = project_id.to_string();
-    let mut tx = state.store.pool().begin().await?;
+    let mut tx = state.store.begin_write().await?;
     let row = sqlx::query("SELECT project_json FROM projects WHERE project_id = ?")
         .bind(&project_id)
         .fetch_optional(&mut *tx)
@@ -156,7 +156,7 @@ pub(super) async fn delete_project(
     for node in &nodes {
         cleanup_node_runtime(&state, node).await?;
     }
-    let mut tx = state.store.pool().begin().await?;
+    let mut tx = state.store.begin_write().await?;
     let row = sqlx::query("SELECT project_json FROM projects WHERE project_id = ?")
         .bind(&project_id)
         .fetch_optional(&mut *tx)
@@ -216,7 +216,7 @@ pub(super) async fn set_project_status(
 ) -> Result<Json<Value>, ApiError> {
     let project_id = project_id.to_string();
     let _project_lock = state.lock_project_operations(&project_id).await;
-    let mut tx = state.store.pool().begin().await?;
+    let mut tx = state.store.begin_write().await?;
     let row = sqlx::query("SELECT project_json FROM projects WHERE project_id = ?")
         .bind(&project_id)
         .fetch_optional(&mut *tx)

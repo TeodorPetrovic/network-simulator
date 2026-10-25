@@ -330,7 +330,7 @@ pub(super) async fn persist_node_configuration(
     patch: Value,
     extra_fields: Map<String, Value>,
 ) -> Result<Json<Value>, ApiError> {
-    let mut tx = state.store.pool().begin().await?;
+    let mut tx = state.store.begin_write().await?;
     ensure_project_exists(&mut tx, project_id).await?;
     let row = sqlx::query(
         "SELECT object_json FROM topology_objects WHERE project_id = ? AND kind = 'node' AND object_id = ?",

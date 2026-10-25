@@ -214,7 +214,7 @@ pub(super) async fn save_imported_project(
             .ok_or_else(|| ApiError::bad_request("project file must contain an object"))?,
         "name",
     )?;
-    let mut tx = state.store.pool().begin().await?;
+    let mut tx = state.store.begin_write().await?;
     sqlx::query("INSERT INTO projects(project_id,name,status,project_json) VALUES(?,?,?,?)")
         .bind(&pid)
         .bind(name)
@@ -271,7 +271,7 @@ pub(super) async fn save_imported_project(
             }
         }
 
-        let mut tx = state.store.pool().begin().await?;
+        let mut tx = state.store.begin_write().await?;
         for (key, kind, id_field) in [("links", "link", "link_id"), ("drawings", "drawing", "drawing_id")] {
             if let Some(items) = source.get(key).and_then(Value::as_array) {
                 for item in items {
@@ -376,7 +376,7 @@ pub(super) async fn duplicate_project(
             Uuid::new_v4().to_string(),
         );
     }
-    let mut tx = state.store.pool().begin().await?;
+    let mut tx = state.store.begin_write().await?;
     let name = new_project["name"].as_str().unwrap_or("Project");
     sqlx::query("INSERT INTO projects(project_id,name,status,project_json) VALUES(?,?,?,?)")
         .bind(&new_id)

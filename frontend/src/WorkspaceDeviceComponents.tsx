@@ -11,7 +11,7 @@ import type { LifecycleAction } from "./lifecycle";
 import { TemplateSettingsDialog } from "./TemplateSettingsDialog";
 import { iconForType, imageName, portCount, portLabel, templateDescription } from "./map/TopologyCanvas";
 
-export function DeviceTemplateCard({ template, onAdd, onSave, onDragEnd }: { template: RuntimeTemplate; onAdd: () => void; onSave: (id: string, patch: Record<string, unknown>) => Promise<void>; onDragEnd?: () => void }) {
+export function DeviceTemplateCard({ template, onAdd, onSave, onDragEnd, onDragStart }: { template: RuntimeTemplate; onAdd: () => void; onSave: (id: string, patch: Record<string, unknown>) => Promise<void>; onDragEnd?: () => void; onDragStart?: () => void }) {
   const Icon = iconForType(template.template_type);
   const [settingsOpen, setSettingsOpen] = useState(false);
   return <>
@@ -19,6 +19,7 @@ export function DeviceTemplateCard({ template, onAdd, onSave, onDragEnd }: { tem
     event.dataTransfer.effectAllowed = "copy";
     event.dataTransfer.setData("application/x-network-simulator-template", template.template_id);
     event.dataTransfer.setData("text/plain", template.name);
+    setTimeout(() => onDragStart?.(), 0);
   }} onDragEnd={onDragEnd}>
     <span className="sim-template-icon" draggable={false} style={{ pointerEvents: "none" }}><Icon size={17} /></span>
     <span className="sim-template-copy"><b title={template.name}>{template.name}</b><small>{templateDescription(template)}</small></span>

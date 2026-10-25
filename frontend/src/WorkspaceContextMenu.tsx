@@ -23,7 +23,7 @@ export function WorkspaceContextMenu({ workspace: props, selectedNode, selectedL
     return <ContextMenuContent className="w-56"><ContextMenuLabel>{selectedNode.name} · Select port</ContextMenuLabel><ContextMenuSeparator />{ports.map((port) => {
       const used = !available.has(`${port.adapter_number}:${port.port_number}`);
       return <ContextMenuItem key={`${port.adapter_number}:${port.port_number}`} disabled={used} onSelect={() => props.onSelectPort(port)}>{endpointName(selectedNode, port)}{used ? " · in use" : ""}</ContextMenuItem>;
-    })}</ContextMenuContent>;
+    })}<ContextMenuSeparator /><ContextMenuItem onSelect={() => props.onToggleConnect()}>Exit link mode (show device menu)</ContextMenuItem></ContextMenuContent>;
   }
   return (
             <ContextMenuContent className="w-56">
