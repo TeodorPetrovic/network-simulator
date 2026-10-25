@@ -1,13 +1,27 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync } from "node:fs";
+import { accessSync, constants, copyFileSync, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { startServer, newProject, launchPage, openProject, waitFor } from "./harness.mjs";
 
 const imageDir = join(process.env.HOME, ".local/share/network-simulator/images/dynamips");
-const hasDynamipsImage = ["c3620", "c7200"].some((platform) => {
-  try { return readdirSync(imageDir).some((file) => file.toLowerCase().includes(platform)); } catch { return false; }
-});
+const qemuImageDir = join(process.env.HOME, ".local/share/network-simulator/images/qemu");
+function executableOnPath(name) {
+  const candidates = [join(process.env.HOME, ".local/share/network-simulator/bin", name), ...String(process.env.PATH ?? "").split(":").map((dir) => join(dir, name))];
+  return candidates.find((path) => {
+    try { accessSync(path, constants.X_OK); return true; } catch { return false; }
+  });
+}
+function imageFor(platform) {
+  try { return readdirSync(imageDir).find((file) => file.toLowerCase().includes(platform) && /\.image$|\.bin$/i.test(file)); } catch { return undefined; }
+}
+const dynamipsBinary = executableOnPath("dynamips");
+const dynamipsImages = Object.fromEntries(["c3620", "c7200"].map((platform) => [platform, imageFor(platform)]));
+const dynamipsSkipReason = !dynamipsBinary
+  ? "Dynamips binary is absent from PATH and ~/.local/share/network-simulator/bin"
+  : !Object.values(dynamipsImages).some(Boolean)
+    ? `no c3620/c7200 IOS image found in ${imageDir}`
+    : undefined;
 
 async function setup(t, name) {
   const server = await startServer();
@@ -230,24 +244,77 @@ test("Ethernet switch and hub lifecycle is reflected in the canvas and REST", { 
     const actualName = await nodeName(node);
     assert.ok((await nodes(server, pid)).some((item) => item.name === actualName));
     assert.equal(await ui.page.getByRole("menuitem", { name: "Start device", exact: true }).count(), 0);
+    await ui.page.keyboard.press("Escape");
+    assert.equal((await nodes(server, pid)).find((item) => item.name === actualName)?.status, "started");
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    assert.equal((await nodes(server, pid)).find((item) => item.name === actualName)?.status, "started");
   }
 });
 
-test("Dynamips Cisco c3620 and c7200 survive start and produce console output", { skip: !hasDynamipsImage || !existsSync("/usr/bin/dynamips") }, async (t) => {
+test("Dynamips Cisco routers start, link, suspend, resume, reload, stop, and produce console output", { skip: dynamipsSkipReason }, async (t) => {
   const { server, ui, pid } = await setup(t, "device-dynamips");
-  const dynamips = (await templates(server)).filter((item) => item.template_type === "dynamips" && item.name.includes("Cisco") && /c3620|c7200/i.test(item.name));
+  const all = await templates(server);
+  const dynamips = all.filter((item) => item.template_type === "dynamips" && /c3620|c7200/i.test(`${item.name} ${item.platform} ${item.image}`));
   for (const [index, platform] of ["c3620", "c7200"].entries()) {
-    const template = dynamips.find((item) => item.name.toLowerCase().includes(platform));
-    if (!template) { t.skip(`${platform} template unavailable`); continue; }
+    if (!dynamipsImages[platform]) { t.diagnostic(`${platform} coverage skipped: no matching IOS image in ${imageDir}`); continue; }
+    const template = dynamips.find((item) => `${item.name} ${item.platform} ${item.image}`.toLowerCase().includes(platform));
+    assert.ok(template, `${platform} IOS image exists but no matching Dynamips template is exposed`);
     await openProject(server, ui.page, pid);
-    const name = `Router${index}`;
-    const node = await dragTemplate(ui.page, template, name);
-    await ui.page.getByRole("button", { name: "Start all" }).first().click();
+    const node = await dragTemplate(ui.page, template, `Router${index}`);
+    const name = await nodeName(node);
+    await node.click({ button: "right" });
+    await ui.page.getByRole("menuitem", { name: "Start device" }).click();
     await statusIs(server, pid, name, "started", 60000);
     await new Promise((resolve) => setTimeout(resolve, 5000));
     assert.equal((await nodes(server, pid)).find((item) => item.name === name)?.status, "started");
+    const consoleFrames = [];
+    ui.page.on("websocket", (socket) => socket.on("framereceived", (frame) => {
+      const value = typeof frame.payload === "string" ? frame.payload : Buffer.from(frame.payload).toString("latin1");
+      consoleFrames.push(value);
+    }));
     await node.click({ button: "right" });
     await ui.page.getByRole("menuitem", { name: "Open console" }).click();
-    await waitFor(async () => /Cisco|Press RETURN|\w+[>#]/i.test(await ui.page.locator("body").innerText()), { timeout: 60000, label: "router console output" });
+    const consolePanel = ui.page.getByRole("region", { name: `Console for ${name}` });
+    await consolePanel.waitFor();
+    await consolePanel.locator(".sim-xterm").waitFor();
+    await consolePanel.locator(".sim-xterm").click();
+    await ui.page.keyboard.press("Enter");
+    await waitFor(async () => consoleFrames.some((frame) => /Cisco|Press RETURN|Router|rommon|boot/i.test(frame)), { timeout: 60000, label: `${platform} console output` });
+
+    const swTemplate = all.find((item) => item.template_type === "ethernet_switch");
+    assert.ok(swTemplate, "built in Ethernet switch template is available");
+    const switchNode = await dragTemplate(ui.page, swTemplate, `RouterSwitch${index}`);
+    await ui.page.getByRole("button", { name: "Draw link" }).click();
+    await node.click({ button: "right" });
+    const ports = ui.page.getByRole("menuitem", { name: /^(eth|Ethernet)\d+$/ });
+    await ports.first().waitFor();
+    await ports.first().click();
+    await switchNode.click({ button: "right" });
+    await ports.first().waitFor();
+    await ports.first().click();
+    await waitFor(async () => (await server.api("GET", `/projects/${pid}/links`)).json.length === 1, { label: "router to switch link" });
+    const link = ui.page.getByRole("button", { name: /Ethernet segment connecting/ });
+    await link.click({ button: "right" });
+    await ui.page.getByRole("menuitem", { name: "Delete link" }).click();
+    await waitFor(async () => (await server.api("GET", `/projects/${pid}/links`)).json.length === 0, { label: "router switch link removal" });
+
+    await node.click({ button: "right" });
+    const suspend = ui.page.getByRole("menuitem", { name: "Suspend device", exact: true });
+    if (await suspend.count()) {
+      await suspend.click();
+      await statusIs(server, pid, name, "suspended", 60000);
+      await node.click({ button: "right" });
+      await ui.page.getByRole("menuitem", { name: "Resume device", exact: true }).click();
+      await statusIs(server, pid, name, "started", 60000);
+    }
+    await node.click({ button: "right" });
+    const reload = ui.page.getByRole("menuitem", { name: "Reload device", exact: true });
+    if (await reload.count()) {
+      await reload.click();
+      await statusIs(server, pid, name, "started", 60000);
+    }
+    await node.click({ button: "right" });
+    await ui.page.getByRole("menuitem", { name: "Stop device", exact: true }).click();
+    await statusIs(server, pid, name, "stopped", 60000);
   }
 });
