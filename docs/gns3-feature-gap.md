@@ -2,6 +2,10 @@
 
 Compared this port's `frontend/src` and `src/api` with the GNS3 GUI [v3.1.0a7 source](https://github.com/GNS3/gns3-gui/tree/v3.1.0a7/gns3) and release records fetched from [gns3-gui v3.1.0a7](https://api.github.com/repos/GNS3/gns3-gui/releases/tags/v3.1.0a7) and [gns3-server v3.1.0a7](https://api.github.com/repos/GNS3/gns3-server/releases/tags/v3.1.0a7). The GUI release specifically includes #3847, “Remove deleted project from recent projects immediately.” The statuses below describe code paths present in this repository, not equivalence to every desktop workflow.
 
+## Project list reachability audit
+
+The root `/` file route in `routes/index.tsx` renders the stateful `ProjectsPage` in `ProjectsPage.tsx`. The project detail route `/projects/$projectId` passes a non-null ID through `AppRoute` to `App`; the appliance route also enters `App` with `showApplianceManager`. Neither route currently reaches `App`'s no-project list branch in normal routing. That branch renders the separate `AppProjectsIndex.tsx` component and is otherwise unreachable. The root route's list supports open/navigation, create, import, export, duplicate, delete, settings/readme/statistics, refresh, and sorting by project, status, or creation time. The `App` list had open, create, delete, filtering, and appliance/catalog navigation, but no import/export/duplicate/close/refresh/sort. Closing is performed from the project workspace, not either list.
+
 | GNS3 feature | Status here | Note |
 |---|---|---|
 | Main window menus / project actions | partial | `WorkspaceToolbar` has a project-map dropdown for preferences, grid, drawings, snapshots, log, screenshot, and information. It is not the desktop main-window menu system. |
