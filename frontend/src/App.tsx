@@ -53,8 +53,8 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
   const { project, setProject, topology, setTopology, busy, connection, error, setError, templates, setTemplates } = useProjectSession(projectId, setNotice);
   const [consoleTargets, setConsoleTargets] = useState<ConsoleTarget[]>([]);
   const [activeConsoleId, setActiveConsoleId] = useState<string | null>(null);
-  const [consoleMinimized, setConsoleMinimized] = useState(true);
-  const [consoleDockOpen, setConsoleDockOpen] = useState(true);
+  const [consoleMinimized, setConsoleMinimized] = useState(() => { try { return JSON.parse(localStorage.getItem("ns.console.float") ?? "{}").minimized ?? true; } catch { return true; } });
+  const [consoleDockOpen, setConsoleDockOpen] = useState(() => { try { return JSON.parse(localStorage.getItem("ns.console.float") ?? "{}").open ?? false; } catch { return false; } });
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const pendingNodeNames = useRef(new Set<string>());
 
@@ -187,6 +187,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
     const target: ConsoleTarget = { id: targetId, projectId, nodeId: node.node_id, nodeName: node.name, nodeType: node.node_type as ConsoleTarget["nodeType"], auxiliary };
     setConsoleTargets((current) => current.some((item) => item.id === targetId) ? current : [...current, target]);
     setActiveConsoleId(targetId);
+    setConsoleDockOpen(true);
     setConsoleMinimized(false);
   }
 
@@ -319,8 +320,9 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
             onStopAll={() => void changeAllNodes("stop")}
             onOpenConsole={openConsole}
             consoleOpen={consoleDockOpen}
-            onCloseConsoleDock={() => setConsoleDockOpen(false)}
+            onCloseConsoleDock={() => { setConsoleDockOpen(false); try { const v=JSON.parse(localStorage.getItem("ns.console.float")??"{}"); localStorage.setItem("ns.console.float",JSON.stringify({...v,open:false})); } catch {} }}
             onOpenConsoleDock={() => { setConsoleDockOpen(true); setConsoleMinimized(false); }}
+            onToggleConsoleDock={() => { if (consoleDockOpen) setConsoleDockOpen(false); else { setConsoleDockOpen(true); setConsoleMinimized(false); } }}
             onToggleConnect={() => { setConnecting((value) => !value); setLinkEndpoints([]); setNotice(connecting ? "Port connection mode cancelled" : "Select interface ports to connect"); }}
             onCreateLink={() => void createSelectedLink()}
             onDeleteSelection={() => void deleteSelection()}
@@ -345,7 +347,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
           onSelect={setActiveConsoleId}
           onMinimize={() => setConsoleMinimized(true)}
           onRestore={() => setConsoleMinimized(false)}
-          onHide={() => setConsoleDockOpen(false)}
+          onHide={() => { setConsoleDockOpen(false); try { const v=JSON.parse(localStorage.getItem("ns.console.float")??"{}"); localStorage.setItem("ns.console.float",JSON.stringify({...v,open:false})); } catch {} }}
           onClose={(targetId) => { setConsoleTargets((current) => current.filter((target) => target.id !== targetId)); setActiveConsoleId((current) => current === targetId ? (consoleTargets.find((target) => target.id !== targetId)?.id ?? null) : current); }}
         /></Suspense>}
 

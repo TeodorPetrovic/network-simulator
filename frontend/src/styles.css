@@ -525,6 +525,12 @@ button, input, textarea, select { font: inherit; }
 .sim-dialog-loading { position: fixed; z-index: 70; inset: 0; display: grid; place-items: center; color: var(--foreground); background: oklch(0.12 0.01 255 / 55%); font-size: 13px; }
 .sim-console-dock.is-minimized { height: 32px; }
 .sim-console-dock.is-minimized .sim-console-tabs { height: 32px; min-height: 32px; }
+.sim-console-dock { position: fixed; z-index: 40; right: auto; bottom: auto; left: 24px; width: 620px; height: 300px; border: 1px solid #303743; border-radius: 8px; overflow: hidden; box-shadow: 0 12px 36px #0006; resize: none; }
+.sim-console-tabs { cursor: move; user-select: none; }
+.sim-console-resize { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; background: linear-gradient(135deg, transparent 50%, #697587 50%, #697587 58%, transparent 58%, transparent 70%, #697587 70%, #697587 78%, transparent 78%); }
+.sim-console-dock.is-minimized { width: 150px; height: 42px; border-radius: 8px; }
+.sim-console-dock.is-minimized .sim-console-panes { display: none; }
+.sim-console-loading { left: auto; right: 24px; width: 620px; }
 .sim-console-tabs { display: flex; height: 38px; min-height: 38px; align-items: stretch; justify-content: space-between; border-bottom: 1px solid #303743; background: #191f29; }
 .sim-console-tab-list { display: flex; min-width: 0; overflow-x: auto; }
 .sim-console-tab { display: flex; min-width: 125px; align-items: center; gap: 3px; padding-left: 10px; border-right: 1px solid #303743; }

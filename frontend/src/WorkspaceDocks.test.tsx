@@ -10,17 +10,11 @@ const makeWorkspace = () => ({ resources: null, selectedNode: null, onSelectNode
 describe("WorkspaceDocks", () => {
   it("shows topology and server summaries and selects a topology node", () => {
     const workspace = makeWorkspace();
-    render(<WorkspaceDocks workspace={workspace} topology={topology} topologyOpen serversOpen consoleOpen onCloseTopology={vi.fn()} onCloseServers={vi.fn()} onCloseConsole={vi.fn()} onOpenConsole={vi.fn()} selectedLink={null} onConfigureNode={vi.fn()} onOpenLinkProperties={vi.fn()} onToggleLinkSuspend={vi.fn()} renderNodeContextMenu={() => null} />);
+    render(<WorkspaceDocks workspace={workspace} topology={topology} topologyOpen serversOpen onCloseTopology={vi.fn()} onCloseServers={vi.fn()} selectedLink={null} onConfigureNode={vi.fn()} onOpenLinkProperties={vi.fn()} onToggleLinkSuspend={vi.fn()} renderNodeContextMenu={() => null} />);
     fireEvent.click(screen.getByRole("button", { name: /Router1/ }));
     expect(workspace.onSelectNode).toHaveBeenCalledWith("n1");
     expect(screen.getByLabelText("Servers Summary")).toBeInTheDocument();
     expect(screen.getByLabelText("Topology Summary")).toBeInTheDocument();
   });
 
-  it("offers a way to reopen the console dock when it is closed", () => {
-    const onOpenConsole = vi.fn();
-    render(<WorkspaceDocks workspace={makeWorkspace()} topology={topology} topologyOpen={false} serversOpen={false} consoleOpen={false} onCloseTopology={vi.fn()} onCloseServers={vi.fn()} onCloseConsole={vi.fn()} onOpenConsole={onOpenConsole} selectedLink={null} onConfigureNode={vi.fn()} onOpenLinkProperties={vi.fn()} onToggleLinkSuspend={vi.fn()} renderNodeContextMenu={() => null} />);
-    fireEvent.click(screen.getByRole("button", { name: "Show Console" }));
-    expect(onOpenConsole).toHaveBeenCalledOnce();
-  });
 });

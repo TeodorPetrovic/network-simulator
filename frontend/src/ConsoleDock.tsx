@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as Xterm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -47,25 +47,32 @@ export function ConsoleDock({
   onHide: () => void;
   onClose: (nodeId: string) => void;
 }) {
-  return <section className={`sim-console-dock ${minimized ? "is-minimized" : ""}`} aria-label="Device consoles">
+  const [position, setPosition] = useState(() => { try { const v = JSON.parse(localStorage.getItem("ns.console.float") ?? "{}"); return { x: v.x ?? 24, y: v.y ?? 62, width: v.width ?? 620, height: v.height ?? 300 }; } catch { return { x: 24, y: 62, width: 620, height: 300 }; } });
+  useEffect(() => { try { localStorage.setItem("ns.console.float", JSON.stringify({...position,minimized,open:true})); } catch {} }, [position, minimized]);
+  const drag = useRef<{x:number;y:number;px:number;py:number}|null>(null);
+  const save = (next: typeof position) => { setPosition(next); try { localStorage.setItem("ns.console.float", JSON.stringify({...next,minimized,open:true})); } catch {} };
+  const beginDrag = (event: React.PointerEvent) => { drag.current = {x:position.x,y:position.y,px:event.clientX,py:event.clientY}; (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId); };
+  const moveDrag = (event: React.PointerEvent) => { if (!drag.current) return; const d=drag.current; save({...position,x:Math.max(0,Math.min(innerWidth-position.width,d.x+event.clientX-d.px)),y:Math.max(0,Math.min(innerHeight-40,d.y+event.clientY-d.py))}); };
+  return <section style={{left:position.x,top:position.y,width:minimized?150:position.width,height:minimized?42:position.height}} className={`sim-console-dock ${minimized ? "is-minimized" : ""}`} aria-label="Device consoles">
     <header className="sim-console-tabs">
-      <div className="sim-console-tab-list" role="tablist" aria-label="Open consoles">
+      <div className="sim-console-tab-list" onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={()=>{drag.current=null; try{localStorage.setItem("ns.console.float",JSON.stringify({...position,minimized,open:true}));}catch{}}} role="tablist" aria-label="Open consoles">
         {targets.map((target) => <div className={`sim-console-tab ${activeNodeId === target.id ? "is-active" : ""}`} key={target.id}>
           <Button variant="ghost" className="sim-console-tab-select" role="tab" aria-selected={activeNodeId === target.id} onClick={() => { onSelect(target.id); onRestore(); }}><span className="sim-console-tab-dot" />{target.nodeName}{target.auxiliary ? " · Aux" : ""}</Button>
           <Button variant="ghost" size="icon-xs" aria-label={`Close ${target.nodeName}${target.auxiliary ? " auxiliary" : ""} console`} onClick={() => onClose(target.id)}><X /></Button>
         </div>)}
       </div>
       <div className="sim-console-dock-actions">
-        <span><Terminal size={14} />Console dock</span>
+        <span onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={()=>{drag.current=null;}}><Terminal size={14} />Console</span>
         {minimized
           ? <Button variant="ghost" size="icon-sm" onClick={onRestore} aria-label="Restore console dock"><ChevronUp /></Button>
-          : <Button variant="ghost" size="icon-sm" onClick={onMinimize} aria-label="Minimize console dock"><ChevronDown /></Button>}
-        {!minimized && <Button variant="ghost" size="icon-sm" onClick={onHide} aria-label="Close console dock"><PanelTopClose /></Button>}
+          : <Button variant="ghost" size="icon-sm" onClick={() => { try { localStorage.setItem("ns.console.float", JSON.stringify({...position,minimized:true,open:true})); } catch {} onMinimize(); }} aria-label="Minimize console dock"><ChevronDown /></Button>}
+        {!minimized && <Button variant="ghost" size="icon-sm" onClick={() => { try { localStorage.setItem("ns.console.float", JSON.stringify({...position,minimized:false,open:false})); } catch {} onHide(); }} aria-label="Close console dock"><PanelTopClose /></Button>}
       </div>
     </header>
     <div className="sim-console-panes">
       {targets.length ? targets.map((target) => <ConsoleSession key={target.id} target={target} active={target.id === activeNodeId && !minimized} />) : <div className="sim-console-empty">Console · Open a device console to start a session.</div>}
     </div>
+    {!minimized && <div className="sim-console-resize" onPointerDown={(e)=>{e.currentTarget.setPointerCapture(e.pointerId); const x=e.clientX,y=e.clientY,p=position; const move=(ev:PointerEvent)=>save({...p,width:Math.max(360,Math.min(innerWidth-p.x,p.width+ev.clientX-x)),height:Math.max(160,Math.min(innerHeight-p.y,p.height+ev.clientY-y))}); const up=()=>{window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",up);};window.addEventListener("pointermove",move);window.addEventListener("pointerup",up);}} />}
   </section>;
 }
 

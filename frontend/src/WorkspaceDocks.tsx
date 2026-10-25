@@ -14,11 +14,8 @@ export type WorkspaceDocksProps = {
   topology: TopologySnapshot;
   topologyOpen: boolean;
   serversOpen: boolean;
-  consoleOpen: boolean;
   onCloseTopology: () => void;
   onCloseServers: () => void;
-  onCloseConsole: () => void;
-  onOpenConsole: () => void;
   selectedLink: Link | null | undefined;
   onConfigureNode: () => void;
   onOpenLinkProperties: () => void;
@@ -26,7 +23,7 @@ export type WorkspaceDocksProps = {
   renderNodeContextMenu: (nodeId: string) => ReactNode;
 };
 
-export function WorkspaceDocks({ workspace, topology, topologyOpen, serversOpen, consoleOpen, onCloseTopology, onCloseServers, onCloseConsole, onOpenConsole, selectedLink, onConfigureNode, onOpenLinkProperties, onToggleLinkSuspend, renderNodeContextMenu }: WorkspaceDocksProps) {
+export function WorkspaceDocks({ workspace, topology, topologyOpen, serversOpen, onCloseTopology, onCloseServers, selectedLink, onConfigureNode, onOpenLinkProperties, onToggleLinkSuspend, renderNodeContextMenu }: WorkspaceDocksProps) {
   return <aside className="sim-workspace-docks" aria-label="Workspace docks">
     {topologyOpen && <section className="sim-summary-dock" aria-label="Topology Summary">
       <header><b>Topology Summary</b><span>{topology.nodes.length} devices · {topology.links.length} links</span><Button variant="ghost" size="icon-xs" aria-label="Close Topology Summary" onClick={onCloseTopology}><X /></Button></header>
@@ -43,7 +40,6 @@ export function WorkspaceDocks({ workspace, topology, topologyOpen, serversOpen,
       </ScrollArea>
     </section>}
     {serversOpen && <ServersSummary resources={workspace.resources} onClose={onCloseServers} />}
-    {!consoleOpen ? <button className="sim-console-hidden-tab" onClick={onOpenConsole}>Show Console</button> : <button className="sim-console-hidden-tab" onClick={onCloseConsole}>Hide Console</button>}
   </aside>;
 }
 
