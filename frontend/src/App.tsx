@@ -53,7 +53,8 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
   const { project, setProject, topology, setTopology, busy, connection, error, setError, templates, setTemplates } = useProjectSession(projectId, setNotice);
   const [consoleTargets, setConsoleTargets] = useState<ConsoleTarget[]>([]);
   const [activeConsoleId, setActiveConsoleId] = useState<string | null>(null);
-  const [consoleMinimized, setConsoleMinimized] = useState(true);
+  const [consoleMinimized, setConsoleMinimized] = useState(false);
+  const [consoleDockOpen, setConsoleDockOpen] = useState(true);
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const pendingNodeNames = useRef(new Set<string>());
 
@@ -69,7 +70,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
   useEffect(() => {
     setConsoleTargets([]);
     setActiveConsoleId(null);
-    setConsoleMinimized(true);
+    setConsoleMinimized(false);
     setResources(null);
   }, [projectId]);
 
@@ -317,6 +318,9 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
             onStartAll={() => void changeAllNodes("start")}
             onStopAll={() => void changeAllNodes("stop")}
             onOpenConsole={openConsole}
+            consoleOpen={consoleDockOpen}
+            onCloseConsoleDock={() => setConsoleDockOpen(false)}
+            onOpenConsoleDock={() => { setConsoleDockOpen(true); setConsoleMinimized(false); }}
             onToggleConnect={() => { setConnecting((value) => !value); setLinkEndpoints([]); setNotice(connecting ? "Port connection mode cancelled" : "Select interface ports to connect"); }}
             onCreateLink={() => void createSelectedLink()}
             onDeleteSelection={() => void deleteSelection()}
@@ -334,13 +338,14 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
           />) : <ProjectsPage onNavigateProject={(id) => navigateToProject(id)} onOpenAppliances={navigateToApplianceManager} />}
         </main>
 
-        {projectId && consoleTargets.length > 0 && <Suspense fallback={<div className="sim-console-loading">Loading console…</div>}><ConsoleDock
+        {projectId && consoleDockOpen && <Suspense fallback={<div className="sim-console-loading">Loading console…</div>}><ConsoleDock
           targets={consoleTargets}
           activeNodeId={activeConsoleId}
           minimized={consoleMinimized}
           onSelect={setActiveConsoleId}
           onMinimize={() => setConsoleMinimized(true)}
           onRestore={() => setConsoleMinimized(false)}
+          onHide={() => setConsoleDockOpen(false)}
           onClose={(targetId) => { setConsoleTargets((current) => current.filter((target) => target.id !== targetId)); setActiveConsoleId((current) => current === targetId ? (consoleTargets.find((target) => target.id !== targetId)?.id ?? null) : current); }}
         /></Suspense>}
 

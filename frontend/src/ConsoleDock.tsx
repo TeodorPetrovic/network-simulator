@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as Xterm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { ChevronDown, ChevronUp, Terminal, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Terminal, X, PanelTopClose } from "lucide-react";
 import { dockerAuxConsoleUrl, dockerConsoleUrl, dynamipsConsoleUrl, qemuConsoleUrl, vpcsConsoleUrl } from "./api";
 import type { Node } from "./api";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,7 @@ export function ConsoleDock({
   onSelect,
   onMinimize,
   onRestore,
+  onHide,
   onClose,
 }: {
   targets: ConsoleTarget[];
@@ -43,9 +44,9 @@ export function ConsoleDock({
   onSelect: (nodeId: string) => void;
   onMinimize: () => void;
   onRestore: () => void;
+  onHide: () => void;
   onClose: (nodeId: string) => void;
 }) {
-  if (targets.length === 0) return null;
   return <section className={`sim-console-dock ${minimized ? "is-minimized" : ""}`} aria-label="Device consoles">
     <header className="sim-console-tabs">
       <div className="sim-console-tab-list" role="tablist" aria-label="Open consoles">
@@ -59,10 +60,11 @@ export function ConsoleDock({
         {minimized
           ? <Button variant="ghost" size="icon-sm" onClick={onRestore} aria-label="Restore console dock"><ChevronUp /></Button>
           : <Button variant="ghost" size="icon-sm" onClick={onMinimize} aria-label="Minimize console dock"><ChevronDown /></Button>}
+        {!minimized && <Button variant="ghost" size="icon-sm" onClick={onHide} aria-label="Close console dock"><PanelTopClose /></Button>}
       </div>
     </header>
     <div className="sim-console-panes">
-      {targets.map((target) => <ConsoleSession key={target.id} target={target} active={target.id === activeNodeId && !minimized} />)}
+      {targets.length ? targets.map((target) => <ConsoleSession key={target.id} target={target} active={target.id === activeNodeId && !minimized} />) : <div className="sim-console-empty">Console · Open a device console to start a session.</div>}
     </div>
   </section>;
 }

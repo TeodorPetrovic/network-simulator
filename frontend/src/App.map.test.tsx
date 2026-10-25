@@ -81,6 +81,7 @@ describe("map", () => {
         status: "stopped",
       });
       renderWorkspace();
+      fireEvent.click(await screen.findByRole("button", { name: "Routers" }));
   
       fireEvent.click(await screen.findByRole("button", { name: "Add router.qcow2" }));
   
@@ -98,10 +99,11 @@ describe("map", () => {
       ]);
       renderWorkspace();
   
+      fireEvent.click(await screen.findByRole("button", { name: "End devices" }));
       expect(await screen.findByRole("button", { name: "Add alpine:latest" })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Routers" }));
       expect(await screen.findByRole("button", { name: "Add router.qcow2" })).toBeInTheDocument();
-      expect(screen.getByText("Docker")).toBeInTheDocument();
-      expect(screen.getByText("QEMU / KVM")).toBeInTheDocument();
+      expect(screen.getByText("Routers")).toBeInTheDocument();
     });
 
     it("opens an interactive serial console for a running QEMU node", async () => {

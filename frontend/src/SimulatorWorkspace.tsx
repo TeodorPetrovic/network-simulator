@@ -20,6 +20,7 @@ import { pngScreenshotAvailable, spreadOverlappingNodes } from "./workspaceUtils
 import type { Selection } from "./map/TopologyCanvas";
 
 import { WorkspaceSidebar } from "./WorkspaceSidebar";
+import { WorkspaceDocks } from "./WorkspaceDocks";
 import { WorkspaceContextMenu } from "./WorkspaceContextMenu";
 import { WorkspaceToolbar } from "./WorkspaceToolbar";
 import { ProjectStatusBar } from "./ProjectStatusBar";
@@ -68,6 +69,9 @@ export type SimulatorWorkspaceProps = {
   onNodeContext: (id: string) => void;
   onNodeMove: (id: string, x: number, y: number) => void;
   onNodeMoveEnd: (id: string, x: number, y: number) => void;
+  consoleOpen?: boolean;
+  onCloseConsoleDock?: () => void;
+  onOpenConsoleDock?: () => void;
 };
 
 
@@ -75,6 +79,8 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [view, setView] = useState({ zoom: 1, centerX: 0, centerY: 0 });
   const [topology, setTopology] = useState(props.topology);
   const [deviceQuery, setDeviceQuery] = useState("");
+  const [topologyDockOpen, setTopologyDockOpen] = useState(true);
+  const [serversDockOpen, setServersDockOpen] = useState(true);
   const [configureNode, setConfigureNode] = useState<Node | null>(null);
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
@@ -250,6 +256,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
 
       <div className="sim-workspace-grid">
         <WorkspaceSidebar workspace={props} deviceQuery={deviceQuery} setDeviceQuery={setDeviceQuery} groupedTemplates={groupedTemplates} />
+        <WorkspaceDocks workspace={props} topology={topology} topologyOpen={topologyDockOpen} serversOpen={serversDockOpen} consoleOpen={props.consoleOpen ?? true} onCloseTopology={() => setTopologyDockOpen(false)} onCloseServers={() => setServersDockOpen(false)} onCloseConsole={props.onCloseConsoleDock ?? (() => undefined)} onOpenConsole={props.onOpenConsoleDock ?? (() => undefined)} selectedLink={selectedLink} onConfigureNode={() => selectedNode && setConfigureNode(selectedNode)} onOpenLinkProperties={() => setLinkPropertiesOpen(true)} onToggleLinkSuspend={(link) => void toggleLinkSuspend(link)} renderNodeContextMenu={(nodeId) => { const node = topology.nodes.find((item) => item.node_id === nodeId); return node ? <WorkspaceContextMenu workspace={props} selectedNode={node} selectedLink={null} selectedDrawing={null} setConfigureNode={setConfigureNode} setSymbolNode={setSymbolNode} toggleNodeIsolation={toggleNodeIsolation} toggleNodeLock={toggleNodeLock} setLinkPropertiesOpen={setLinkPropertiesOpen} toggleLinkSuspend={toggleLinkSuspend} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} /> : null; }} />
         <Card className="sim-canvas-card">
           <ContextMenu>
             <ContextMenuTrigger asChild>

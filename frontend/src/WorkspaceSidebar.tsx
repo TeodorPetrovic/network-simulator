@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Cpu, Link2, Router, Shield, Network, Layers3, Search, X } from "lucide-react";
+import { Cpu, Link2, Router, Shield, Network, Layers3, Search, X, Plus } from "lucide-react";
 import type { RuntimeTemplate } from "./api";
 import type { SimulatorWorkspaceProps } from "./SimulatorWorkspace";
 import { Button } from "@/components/ui/button";
@@ -34,7 +34,7 @@ export function WorkspaceSidebar({ workspace, deviceQuery, setDeviceQuery, group
     <nav className="sim-device-rail-buttons" aria-label="Device categories">
       {categories.map(({ id, label, icon: Icon }) => <Button key={id} variant={active === id ? "secondary" : "ghost"} size="icon" title={label} aria-label={label} aria-pressed={active === id} onClick={() => setActive((value) => value === id ? null : id)}><Icon /></Button>)}
     </nav>
-    <div className="sim-device-rail-bottom"><Button variant={linkMode ? "default" : "ghost"} size="icon" title="Add a link" aria-label="Add a link" aria-pressed={linkMode} onClick={() => { setLinkMode((value) => !value); workspace.onToggleConnect(); }}><Link2 /></Button></div>
+    <div className="sim-device-rail-bottom"><Button variant="ghost" size="icon" title="Add node or image" aria-label="Add node or image" onClick={workspace.onOpenNodeDialog}><Plus /></Button><Button variant={linkMode ? "default" : "ghost"} size="icon" title="Add a link" aria-label="Add a link" aria-pressed={linkMode} onClick={() => { setLinkMode((value) => !value); workspace.onToggleConnect(); }}><Link2 /></Button></div>
     {active && <section className="sim-device-flyout" aria-label={`${categories.find((item) => item.id === active)?.label} templates`}>
       <header><b>{categories.find((item) => item.id === active)?.label}</b><Button variant="ghost" size="icon-xs" aria-label="Close device list" onClick={() => setActive(null)}><X /></Button></header>
       <label className="sim-device-search"><Search /><Input value={deviceQuery} onChange={(event) => setDeviceQuery(event.target.value)} placeholder="Filter devices…" aria-label="Filter devices" /></label>
