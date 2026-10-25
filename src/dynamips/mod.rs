@@ -139,6 +139,7 @@ pub struct DynamipsRuntimeInfo {
 }
 
 pub(crate) use config_files::validate_ios_image;
+pub(crate) use platforms::module_port_count;
 
 impl DynamipsRuntime {
     pub fn new() -> Self {

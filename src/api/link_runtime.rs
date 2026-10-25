@@ -38,17 +38,28 @@ pub(super) async fn link_runtime_endpoints(
             .as_array()
             .map(Vec::len)
             .unwrap_or_default() as u64;
+        let dynamips_slots = if node_type == "dynamips" {
+            (0..=6).filter_map(|slot| {
+                let key = format!("slot{slot}");
+                node.get(&key).and_then(Value::as_str)
+                    .and_then(crate::dynamips::module_port_count)
+                    .map(|ports| (slot as u64, ports as u64))
+            }).collect::<Vec<_>>()
+        } else { Vec::new() };
         let port_capacity = if BuiltinRuntime::is_type(node_type) {
             builtin_ports
         } else if node_type == "docker" || node_type == "qemu" {
             adapters
+        } else if node_type == "dynamips" {
+            dynamips_slots.iter().map(|(_, ports)| ports).sum()
         } else {
             1
         };
         let valid_endpoint = match node_type {
             "docker" => adapter == 0 && port < adapters,
             "qemu" => adapter < adapters && port == 0,
-            "vpcs" | "dynamips" => adapter == 0 && port == 0,
+            "vpcs" => adapter == 0 && port == 0,
+            "dynamips" => dynamips_slots.iter().any(|(slot, ports)| *slot == adapter && port < *ports),
             "ethernet_switch" | "ethernet_hub" | "cloud" => adapter == 0 && port < builtin_ports,
             "nat" => adapter == 0 && port == 0 && builtin_ports == 1,
             _ => {

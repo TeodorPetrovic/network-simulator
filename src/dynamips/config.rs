@@ -562,6 +562,10 @@ impl DynamipsRuntime {
     }
 
     pub fn runtime_fields(&self, vm: &DynamipsVm) -> Value {
+        let adapter_types: Vec<_> = (0..7)
+            .filter_map(|slot| vm.options.slots.get(slot).and_then(Option::as_ref).cloned()
+                .or_else(|| (slot == 0).then(|| vm.slot0.clone())))
+            .collect();
         json!({
             "platform": vm.platform,
             "chassis": vm.chassis,
@@ -574,7 +578,7 @@ impl DynamipsRuntime {
             "runtime_hypervisor_port": vm.hypervisor_port,
             "runtime_working_dir": vm.working_dir,
             "runtime_log_file": vm.log_file,
-            "adapter_types": [vm.slot0],
+            "adapter_types": adapter_types,
             "dynamips_id": vm.options.dynamips_id,
             "clock_divisor": vm.options.clock_divisor,
             "mmap": vm.options.mmap,

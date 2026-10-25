@@ -332,6 +332,14 @@ fn configures_a_real_gns3_cisco_3620_platform_with_ethernet_module() {
 }
 
 #[test]
+fn reports_ethernet_port_counts_for_configured_dynamips_modules() {
+    assert_eq!(super::module_port_count("NM-1FE-TX"), Some(1));
+    assert_eq!(super::module_port_count("NM-4T"), Some(4));
+    assert_eq!(super::module_port_count("NM-16ESW"), Some(16));
+    assert_eq!(super::module_port_count("unconfigured-module"), None);
+}
+
+#[test]
 fn platform_integrated_slot_zero_adapters_are_not_added_twice() {
     let cases = [
         ("c1700", Some("1720"), "C1700-MB-1FE", false),

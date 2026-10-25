@@ -276,6 +276,22 @@ pub(super) fn module_supported_on_slot(
     }
 }
 
+pub(crate) fn module_port_count(module: &str) -> Option<u32> {
+    Some(match module {
+        "NM-1FE-TX" | "NM-1E" | "PA-FE-TX" | "PA-GE" | "C1700-MB-1FE"
+        | "C2600-MB-1FE" | "C2600-MB-1E" | "C1700-MB-WIC1" => 1,
+        "NM-4T" | "NM-4E" | "PA-4T+" | "PA-4E" => 4,
+        "NM-16ESW" => 16,
+        "NM-2FE-TX" | "PA-2FE-TX" | "Leopard-2FE" | "C2600-MB-2FE"
+        | "C2600-MB-2E" | "C7200-IO-2FE" => 2,
+        "C7200-IO-FE" | "GT96100-FE" => 1,
+        "C7200-IO-GE-E" => 1,
+        "PA-8E" | "PA-8T" => 8,
+        "PA-A1" | "PA-POS-OC3" => 1,
+        _ => return None,
+    })
+}
+
 pub(super) fn router_initialization_commands(vm: &DynamipsVm) -> Vec<String> {
     let mut commands = vec![
         format!(
