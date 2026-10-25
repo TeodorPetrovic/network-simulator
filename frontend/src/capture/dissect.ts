@@ -1,22 +1,204 @@
-export type Field = {label:string;value:string;byteOffset:number;length:number};
-export type Layer = {name:string;summary:string;fields:Field[];children?:Layer[]};
-export type Dissection = {layers:Layer[];protocol:string;src:string;dst:string;info:string};
-const mac=(b:Uint8Array,o:number)=>Array.from(b.slice(o,o+6),n=>n.toString(16).padStart(2,"0")).join(":");
-const ip4=(b:Uint8Array,o:number)=>Array.from(b.slice(o,o+4)).join(".");
-const ip6=(b:Uint8Array,o:number)=>Array.from({length:8},(_,i)=>((b[o+i*2]<<8)|b[o+i*2+1]).toString(16)).join(":");
-const u16=(b:Uint8Array,o:number)=>((b[o]??0)<<8)|(b[o+1]??0), u32=(b:Uint8Array,o:number)=>((u16(b,o)<<16)|u16(b,o+2))>>>0;
-const field=(label:string,value:string,byteOffset:number,length:number):Field=>({label,value,byteOffset,length});
-export function dissect(data:Uint8Array,linkType=1):Dissection {
- const layers:Layer[]=[]; let p=0, type=0, src="",dst="",proto="Data",info="";
- if(linkType===1&&data.length>=14){ const s=mac(data,6),d=mac(data,0);type=u16(data,12); layers.push({name:"Ethernet II",summary:`${s} → ${d}`,fields:[field("Destination",d,0,6),field("Source",s,6,6),field("Type",`0x${type.toString(16).padStart(4,"0")}`,12,2)]});p=14;if(type===0x8100&&data.length>=18){type=u16(data,16);layers[0].fields.push(field("802.1Q VLAN",String(u16(data,14)&0xfff),14,4));p=18;}}
- else if(linkType===101){type=(data[0]>>4)===4?0x800:0x86dd;} else return {layers:[{name:"Data",summary:`${data.length} bytes`,fields:[field("Data",`${data.length} bytes`,0,data.length)]}],protocol:"Data",src:"",dst:"",info:`${data.length} bytes`};
- if(type===0x806&&data.length>=p+28){proto="ARP";src=ip4(data,p+14);dst=ip4(data,p+24);info=`Who has ${dst}? Tell ${src}`;layers.push({name:"Address Resolution Protocol",summary:info,fields:[field("Sender MAC",mac(data,p+8),p+8,6),field("Sender IP",src,p+14,4),field("Target MAC",mac(data,p+18),p+18,6),field("Target IP",dst,p+24,4)]});}
- else if(type===0x800&&data.length>=p+20){const ihl=(data[p]&15)*4,ttl=data[p+8],ipProto=data[p+9];src=ip4(data,p+12);dst=ip4(data,p+16);layers.push({name:"Internet Protocol Version 4",summary:`${src} → ${dst}`,fields:[field("Source",src,p+12,4),field("Destination",dst,p+16,4),field("TTL",String(ttl),p+8,1)]});p+=ihl;proto="IPv4";
- if(ipProto===6&&data.length>=p+20){const sp=u16(data,p),dp=u16(data,p+2),seq=u32(data,p+4),ack=u32(data,p+8),flags=data[p+13],win=u16(data,p+14),f=[...(flags&2?["SYN"]:[]),...(flags&16?["ACK"]:[]),...(flags&1?["FIN"]:[]),...(flags&4?["RST"]:[]),...(flags&8?["PSH"]:[])];proto="TCP";info=`${sp} → ${dp} [${f.join(", ")}] Seq=${seq} Win=${win} Len=${Math.max(0,data.length-p-((data[p+12]>>4)*4))}`;layers.push({name:"Transmission Control Protocol",summary:info,fields:[field("Source Port",String(sp),p,2),field("Destination Port",String(dp),p+2,2),field("Sequence Number",String(seq),p+4,4),field("Acknowledgment Number",String(ack),p+8,4),field("Flags",f.join(", "),p+13,1),field("Window",String(win),p+14,2)]});p+=(data[p+12]>>4)*4;proto="TCP";
- if((sp===53||dp===53)&&data.length>=p+12){const q=u16(data,p+4),answers=u16(data,p+6);proto="DNS";info=`${answers?"Standard query response":"Standard query"}, ${q} question${q===1?"":"s"}`;layers.push({name:"Domain Name System",summary:info,fields:[field("Transaction ID",`0x${u16(data,p).toString(16)}`,p,2),field("Questions",String(q),p+4,2),field("Answers",String(answers),p+6,2)]});}
- } else if(ipProto===17&&data.length>=p+8){const sp=u16(data,p),dp=u16(data,p+2);proto=(sp===67||sp===68||dp===67||dp===68)?"DHCP":"UDP";info=`${sp} → ${dp} Len=${u16(data,p+4)}`;layers.push({name:"User Datagram Protocol",summary:info,fields:[field("Source Port",String(sp),p,2),field("Destination Port",String(dp),p+2,2),field("Length",String(u16(data,p+4)),p+4,2)]});if(sp===53||dp===53){proto="DNS";info="DNS query";layers.push({name:"Domain Name System",summary:info,fields:[field("Transaction ID",`0x${u16(data,p+8).toString(16)}`,p+8,2)]});}}
- }
- else if(type===0x86dd&&data.length>=p+40){src=ip6(data,p+8);dst=ip6(data,p+24);const nxt=data[p+6];layers.push({name:"Internet Protocol Version 6",summary:`${src} → ${dst}`,fields:[field("Source",src,p+8,16),field("Destination",dst,p+24,16),field("Hop Limit",String(data[p+7]),p+7,1)]});p+=40;proto="IPv6";if(nxt===58&&data.length>=p+4){proto="ICMPv6";info=`${data[p]===128?"Echo (ping) request":data[p]===129?"Echo (ping) reply":"Neighbor Discovery"} id=0x${u16(data,p+4).toString(16).padStart(4,"0")}, seq=${u16(data,p+6)}`;layers.push({name:"Internet Control Message Protocol v6",summary:info,fields:[field("Type",String(data[p]),p,1),field("Code",String(data[p+1]),p+1,1)]});}}
- if(!info) info=proto==="Data"?`${data.length} bytes`:src&&dst?`${src} → ${dst}`:proto;
- return {layers,protocol:proto,src,dst,info};
+import { dissectArp } from "./dissectors/arp";
+import { dissectCdp } from "./dissectors/cdp";
+import { dissectDhcp } from "./dissectors/dhcp";
+import { dissectDns } from "./dissectors/dns";
+import { dissectEthernet } from "./dissectors/ethernet";
+import { dissectIcmp } from "./dissectors/icmp";
+import { dissectIcmpv6 } from "./dissectors/icmpv6";
+import { dissectIpv4 } from "./dissectors/ipv4";
+import { dissectIpv6 } from "./dissectors/ipv6";
+import { dissectLldp } from "./dissectors/lldp";
+import { dissectOspf } from "./dissectors/ospf";
+import { dissectRip } from "./dissectors/rip";
+import { dissectStp } from "./dissectors/stp";
+import { dissectTcp } from "./dissectors/tcp";
+import { dissectUdp } from "./dissectors/udp";
+import { dissectVlan } from "./dissectors/vlan";
+import { dissectVrrp } from "./dissectors/vrrp";
+import { field, type Layer } from "./dissectors/types";
+
+export type { Field, Layer } from "./dissectors/types";
+
+export type Dissection = {
+  layers: Layer[];
+  protocol: string;
+  src: string;
+  dst: string;
+  info: string;
+};
+
+function dataLayer(data: Uint8Array): Layer {
+  return {
+    name: "Data",
+    summary: `${data.length} bytes`,
+    fields: [field("Data", `${data.length} bytes`, 0, data.length)],
+  };
+}
+
+export function dissect(data: Uint8Array, linkType = 1): Dissection {
+  const layers: Layer[] = [];
+  let offset = 0;
+  let etherType = 0;
+  let protocol = "Data";
+  let source = "";
+  let destination = "";
+  let info = "";
+
+  if (linkType === 1) {
+    const ethernet = dissectEthernet(data);
+    if (!ethernet) return { layers: [dataLayer(data)], protocol, src: source, dst: destination, info: `${data.length} bytes` };
+    layers.push(ethernet.layer);
+    offset = ethernet.nextOffset ?? 0;
+    etherType = ethernet.nextProtocol ?? 0;
+
+    if (etherType === 0x8100 || etherType === 0x88a8) {
+      const vlan = dissectVlan(data, offset);
+      if (vlan) {
+        layers.push(vlan.layer);
+        offset = vlan.nextOffset ?? offset;
+        etherType = vlan.nextProtocol ?? etherType;
+      }
+    }
+  } else if (linkType === 101) {
+    etherType = (data[0] >> 4) === 4 ? 0x0800 : (data[0] >> 4) === 6 ? 0x86dd : 0;
+  } else if (linkType === 113 || linkType === 276) {
+    if (data.length >= 16) {
+      etherType = (data[14] << 8) | data[15];
+      offset = 16;
+    }
+  } else {
+    return { layers: [dataLayer(data)], protocol, src: source, dst: destination, info: `${data.length} bytes` };
+  }
+
+  if (etherType === 0x0806) {
+    const arp = dissectArp(data, offset);
+    if (arp) {
+      layers.push(arp.layer);
+      protocol = arp.protocol;
+      info = arp.info;
+    }
+  } else if (etherType === 0x0800) {
+    const ip = dissectIpv4(data, offset);
+    if (ip) {
+      layers.push(ip.layer);
+      source = ip.source ?? "";
+      destination = ip.destination ?? "";
+      offset = ip.nextOffset ?? offset;
+      const ipProtocol = ip.nextProtocol ?? -1;
+      protocol = "IPv4";
+
+      if (ipProtocol === 6) {
+        const tcp = dissectTcp(data, offset);
+        if (tcp) {
+          layers.push(tcp.layer);
+          offset = tcp.nextOffset ?? offset;
+          protocol = "TCP";
+          info = tcp.info;
+          const sourcePort = Number(tcp.source);
+          const destinationPort = Number(tcp.destination);
+          if (sourcePort === 53 || destinationPort === 53) {
+            const dnsOffset = offset + 2;
+            const dns = dissectDns(data, dnsOffset, "TCP");
+            if (dns) {
+              layers.push(dns.layer);
+              protocol = dns.protocol;
+              info = dns.info;
+            }
+          }
+        }
+      } else if (ipProtocol === 17) {
+        const udp = dissectUdp(data, offset);
+        if (udp) {
+          layers.push(udp.layer);
+          offset = udp.nextOffset ?? offset;
+          protocol = "UDP";
+          info = udp.info;
+          const sourcePort = Number(udp.source);
+          const destinationPort = Number(udp.destination);
+          if (sourcePort === 53 || destinationPort === 53) {
+            const dns = dissectDns(data, offset);
+            if (dns) {
+              layers.push(dns.layer);
+              protocol = dns.protocol;
+              info = dns.info;
+            }
+          } else if ([67, 68].includes(sourcePort) || [67, 68].includes(destinationPort)) {
+            const dhcp = dissectDhcp(data, offset);
+            if (dhcp) {
+              layers.push(dhcp.layer);
+              protocol = dhcp.protocol;
+              info = dhcp.info;
+            }
+          } else if ([520].includes(sourcePort) || [520].includes(destinationPort)) {
+            const rip = dissectRip(data, offset);
+            if (rip) {
+              layers.push(rip.layer);
+              protocol = rip.protocol;
+              info = rip.info;
+            }
+          }
+        }
+      } else if (ipProtocol === 1) {
+        const ttl = Number(ip.layer.fields.find((item) => item.label === "Time to live")?.value);
+        const icmp = dissectIcmp(data, offset, ttl);
+        if (icmp) {
+          layers.push(icmp.layer);
+          protocol = icmp.protocol;
+          info = icmp.info;
+        }
+      } else if (ipProtocol === 89) {
+        const ospf = dissectOspf(data, offset);
+        if (ospf) { layers.push(ospf.layer); protocol = ospf.protocol; info = ospf.info; }
+      } else if (ipProtocol === 112) {
+        const vrrp = dissectVrrp(data, offset);
+        if (vrrp) { layers.push(vrrp.layer); protocol = vrrp.protocol; info = vrrp.info; }
+      }
+    }
+  } else if (etherType === 0x86dd) {
+    const ip = dissectIpv6(data, offset);
+    if (ip) {
+      layers.push(ip.layer);
+      source = ip.source ?? "";
+      destination = ip.destination ?? "";
+      offset = ip.nextOffset ?? offset;
+      const nextHeader = ip.nextProtocol ?? -1;
+      protocol = "IPv6";
+      if (nextHeader === 6) {
+        const tcp = dissectTcp(data, offset);
+        if (tcp) {
+          layers.push(tcp.layer); protocol = tcp.protocol; info = tcp.info;
+          const sourcePort = Number(tcp.source); const destinationPort = Number(tcp.destination);
+          if (sourcePort === 53 || destinationPort === 53) {
+            const dns = dissectDns(data, (tcp.nextOffset ?? offset) + 2, "TCP");
+            if (dns) { layers.push(dns.layer); protocol = dns.protocol; info = dns.info; }
+          }
+        }
+      } else if (nextHeader === 17) {
+        const udp = dissectUdp(data, offset);
+        if (udp) {
+          layers.push(udp.layer); protocol = udp.protocol; info = udp.info;
+          const sourcePort = Number(udp.source); const destinationPort = Number(udp.destination);
+          if (sourcePort === 53 || destinationPort === 53) {
+            const dns = dissectDns(data, udp.nextOffset ?? offset);
+            if (dns) { layers.push(dns.layer); protocol = dns.protocol; info = dns.info; }
+          }
+        }
+      } else if (nextHeader === 58) {
+        const icmp = dissectIcmpv6(data, offset);
+        if (icmp) { layers.push(icmp.layer); protocol = icmp.protocol; info = icmp.info; }
+      }
+    }
+  } else if (etherType === 0x88cc) {
+    const lldp = dissectLldp(data, offset);
+    if (lldp) { layers.push(lldp.layer); protocol = lldp.protocol; info = lldp.info; }
+  } else if (etherType === 0x010b) {
+    const stp = dissectStp(data, offset);
+    if (stp) { layers.push(stp.layer); protocol = stp.protocol; info = stp.info; }
+  } else if (etherType === 0x2000) {
+    const cdp = dissectCdp(data, offset);
+    if (cdp) { layers.push(cdp.layer); protocol = cdp.protocol; info = cdp.info; }
+  }
+
+  if (!info) info = source && destination ? `${source} → ${destination}` : protocol;
+  return { layers, protocol, src: source, dst: destination, info };
 }
