@@ -79,6 +79,9 @@ export async function launchPage(server, { width = 1500, height = 900 } = {}) {
   const browser = await browsers[browserName].launch();
   const page = await browser.newPage({ viewport: { width, height } });
   page.setDefaultTimeout(8000);
+  // Firefox sometimes aborts a navigation with NS_BINDING_ABORTED right after page creation; retry.
+  const goto = page.goto.bind(page);
+  page.goto = async (url, options) => { for (let i = 0; ; i++) { try { return await goto(url, options); } catch (error) { if (i >= 2) throw error; await new Promise((r) => setTimeout(r, 300)); } } };
   const errors = [];
   page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
   page.on("console", (m) => {

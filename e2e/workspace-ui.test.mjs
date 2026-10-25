@@ -263,7 +263,7 @@ test("floating console opens, moves, resizes, minimizes, restores, closes, and p
   await page.mouse.move(titleBox.x + 40, titleBox.y + 16); await page.mouse.down();
   await page.mouse.move(titleBox.x + 150, titleBox.y + 96, { steps: 6 }); await page.mouse.up();
   const moved = await dock.boundingBox(); assert.ok(moved.x !== before.x || moved.y !== before.y);
-  const resize = page.locator(".sim-console-resize"); const rb = await resize.boundingBox(); await page.mouse.move(rb.x + 5, rb.y + 5); await page.mouse.down(); await page.mouse.move(rb.x + 50, rb.y + 40); await page.mouse.up();
+  const resize = page.locator(".sim-console-resize"); const rb = await resize.boundingBox(); await page.mouse.move(rb.x + 5, rb.y + 5); await page.mouse.down(); await page.mouse.move(rb.x + 50, rb.y + 40, { steps: 3 }); await page.mouse.up();
   const resized = await dock.boundingBox();
   await button(page, "Minimize console dock").click(); await button(page, "Restore console dock").waitFor();
   await button(page, "Restore console dock").click(); await button(page, "Close console dock").click(); await dock.waitFor({ state: "detached" });
