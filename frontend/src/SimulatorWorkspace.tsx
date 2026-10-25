@@ -92,13 +92,13 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
     }
   }, [props.topology.links, openedEvents]);
   function openWebWireshark(link: Link, newTab = false) {
-    const wsPath = link.wireshark_ws_path;
+    const wsPath = link.wireshark_ws_path ?? link.ws_path;
     if (typeof wsPath !== "string") return;
     if (newTab) { window.open(webWiresharkClientUrl(wsPath), "_blank", "noopener"); return; }
     setWiresharkWindows((current) => current.some((item) => item.linkId === link.link_id) ? current : [...current, { linkId: link.link_id, wsPath, title: `Web Wireshark · ${link.capture_file_name ?? link.link_id}`, key: Date.now() }]);
   }
   async function restartWebWireshark(link: Link) {
-    try { const updated = await api.restartWebWireshark(props.project.project_id, link.link_id); const wsPath = updated.wireshark_ws_path ?? link.wireshark_ws_path; if (typeof wsPath === "string") setWiresharkWindows((current) => current.map((item) => item.linkId === link.link_id ? { ...item, wsPath, key: Date.now() } : item)); }
+    try { const updated = await api.restartWebWireshark(props.project.project_id, link.link_id); const wsPath = updated.wireshark_ws_path ?? updated.ws_path ?? link.wireshark_ws_path ?? link.ws_path; if (typeof wsPath === "string") setWiresharkWindows((current) => current.map((item) => item.linkId === link.link_id ? { ...item, wsPath, key: Date.now() } : item)); }
     catch (reason) { setFeatureMessage(reason instanceof Error ? reason.message : "Could not restart Web Wireshark."); }
   }
   async function stopLinkCapture(link: Link) {

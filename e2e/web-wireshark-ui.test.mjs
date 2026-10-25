@@ -5,6 +5,7 @@ import { startServer, newProject, launchPage, openProject, templateByType, addNo
 
 const image = "network-simulator-web-wireshark:test";
 const docker = (...args) => execFileSync("docker", args, { encoding: "utf8" }).trim();
+const linkContextMenu = (page) => page.locator(".sim-link").first().evaluate((element) => element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 2, clientX: 500, clientY: 400 })));
 
 test("Web Wireshark starts from the link dialog, opens inline, and closes when capture stops", async (t) => {
   try { docker("image", "inspect", image); } catch { return t.skip(`Docker image ${image} is unavailable`); }
@@ -21,21 +22,24 @@ test("Web Wireshark starts from the link dialog, opens inline, and closes when c
   await Promise.all([a, b].map((node) => server.api("POST", `/projects/${pid}/nodes/${node.node_id}/start`, {})));
   await openProject(server, ui.page, pid);
   const page = ui.page;
-  const line = page.locator(".sim-link").first();
-  await line.click({ button: "right" });
+  await linkContextMenu(page);
   await page.getByRole("menuitem", { name: "Packet capture…" }).click();
   const dialog = page.getByRole("dialog", { name: "Link properties" });
   await dialog.getByRole("checkbox", { name: "Web Wireshark" }).check();
   await dialog.getByRole("button", { name: "Start capture" }).click();
   await page.getByText("Starting Web Wireshark… (3-6 s)").waitFor();
   await waitFor(async () => (await server.api("GET", `/projects/${pid}/links`)).json.find((item) => item.link_id === connected.json.link_id)?.wireshark === true, { timeout: 90_000, label: "Web Wireshark start" });
-  await page.getByRole("dialog").getByRole("button", { name: "Close" }).click().catch(() => {});
-  await page.locator(".sim-link").first().click({ button: "right" });
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "detached" });
+  const autoWindow = page.getByTitle("Web Wireshark");
+  await autoWindow.waitFor();
+  await page.getByRole("button", { name: "Close Web Wireshark" }).click();
+  await linkContextMenu(page);
   await page.getByRole("menuitem", { name: "Open Web Wireshark (Inline)" }).click();
   const frame = page.getByTitle("Web Wireshark");
   await frame.waitFor();
   await frame.contentFrame().locator("canvas").waitFor({ timeout: 60_000 });
-  await page.locator(".sim-link").first().click({ button: "right" });
+  await linkContextMenu(page);
   await page.getByRole("menuitem", { name: "Stop capture" }).click();
   await frame.waitFor({ state: "detached" });
   assert.deepEqual(ui.errors, []);
