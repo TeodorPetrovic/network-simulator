@@ -204,6 +204,16 @@ test("link mode opens a device port picker from a left click", async (t) => {
   await finish(ui);
 });
 
+test("double-clicking a built-in switch opens its configuration dialog", async (t) => {
+  const { page, ui } = await workspace(t, { nodes: [{ type: "ethernet_switch", name: "AccessSwitch" }] });
+  await page.getByRole("button", { name: "Node AccessSwitch" }).dblclick();
+  const dialog = page.getByRole("dialog", { name: "Configure AccessSwitch" });
+  await dialog.waitFor();
+  await dialog.getByLabel("Port count").waitFor();
+  await dialog.getByLabel("Port VLANs").waitFor();
+  await finish(ui);
+});
+
 test("device flyout drag adds a node on canvas and over the right dock", async (t) => {
   const { server, page, ui, pid } = await workspace(t);
   const canvas = page.locator(".sim-canvas-surface");
