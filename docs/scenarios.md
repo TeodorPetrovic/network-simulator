@@ -13,6 +13,8 @@ The runner builds `target/debug/network-simulator` with `nice -n 10 cargo build 
 
 VPCS coverage needs `vpcs` and `ubridge`; routed cases also need `dynamips` and the c3620 IOS image. CHR coverage needs KVM/QEMU and `~/.local/share/network-simulator/images/qemu/mikrotik-chr-7.23.8.qcow2`. Docker coverage needs a working Docker daemon and `alpine:latest`. Tests skip only when those external prerequisites are absent; device or traffic failures remain test failures.
 
+Current runtime limits: the Dynamips launch path exposes one link port per router, so the two-interface c3620 routing cases fail at link creation until the NET-owned multi-interface attachment work is implemented. CHR's QEMU serial console did not produce a login prompt within the 120-second boot window on the local image; the scenario reports this as a failure so it stays visible.
+
 Scenario files:
 
 - `vpcs-basic.test.mjs`: point-to-point ICMP, subnet isolation, switch fanout, and peer-stop behavior.
