@@ -1,15 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { Scan, ZoomIn, ZoomOut } from "lucide-react";
 import type { Link, LinkEndpoint, Node, Project, ResourceMonitor, RuntimeInfo, RuntimeTemplate, TopologySnapshot } from "./api";
 import { api } from "./api";
 import { nodesForLifecycle } from "./lifecycle";
 import type { LifecycleAction } from "./lifecycle";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
   ContextMenu, ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { ResourceMonitorPopover } from "./ResourceMonitorPopover";
 import { NodeSettingsDialog } from "./NodeSettingsDialog";
 import { DrawingEditorDialog, HelpDialog, InfoDialog, LinkPropertiesDialog, LogConsoleDialog, ScreenshotDialog, SnapshotsDialog, SymbolPickerDialog } from "./map/MapDialogs";
 import type { ScreenshotRequest } from "./map/MapDialogs";
@@ -22,7 +19,6 @@ import type { Selection } from "./map/TopologyCanvas";
 import { WorkspaceSidebar } from "./WorkspaceSidebar";
 import { WorkspaceContextMenu } from "./WorkspaceContextMenu";
 import { WorkspaceToolbar } from "./WorkspaceToolbar";
-import { ProjectStatusBar } from "./ProjectStatusBar";
 import { useWorkspaceSelection } from "./useWorkspaceSelection";
 import { useWorkspaceActions } from "./useWorkspaceActions";
 
@@ -165,29 +161,6 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
     setView({ zoom, centerX: (minX + maxX) / 2, centerY: (minY + maxY) / 2 });
   }
 
-  function zoomToSelection() {
-    const selectedIds = new Set(selectedNodeIds);
-    if (props.selection?.kind === "node") selectedIds.add(props.selection.id);
-    if (props.selection?.kind === "link") {
-      const link = topology.links.find((item) => item.link_id === props.selection?.id);
-      link?.nodes.forEach((endpoint) => selectedIds.add(endpoint.node_id));
-    }
-    const selectedNodes = canvasNodes.filter((node) => selectedIds.has(node.node_id));
-    const boxes = selectedNodes.map((node) => ({ left: Number(node.x ?? 0) - 56, right: Number(node.x ?? 0) + 56, top: Number(node.y ?? 0) - 36, bottom: Number(node.y ?? 0) + 36 }));
-    if (selectedDrawing) {
-      const x = Number(selectedDrawing.x ?? 0);
-      const y = Number(selectedDrawing.y ?? 0);
-      boxes.push({ left: x, right: x + Number(selectedDrawing.width ?? 160), top: y, bottom: y + Number(selectedDrawing.height ?? 90) });
-    }
-    if (!boxes.length) { setFeatureMessage("Select a device, link, or drawing to zoom to it."); return; }
-    const left = Math.min(...boxes.map((box) => box.left));
-    const right = Math.max(...boxes.map((box) => box.right));
-    const top = Math.min(...boxes.map((box) => box.top));
-    const bottom = Math.max(...boxes.map((box) => box.bottom));
-    const zoom = Math.max(0.4, Math.min(maxZoom, Math.min(scene.width / (right - left + 80), scene.height / (bottom - top + 80))));
-    setView({ zoom, centerX: (left + right) / 2, centerY: (top + bottom) / 2 });
-  }
-
   useEffect(() => {
     fitTopology();
   }, [props.project.project_id]);
@@ -268,18 +241,6 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
             <ContextMenuTrigger asChild>
               <div className={`sim-canvas ${props.connecting ? "is-connecting" : ""} ${pendingDrawing ? "is-drawing" : ""}`}>
                 {featureMessage && <div className="sim-map-inline-notice" role="status">{featureMessage}</div>}
-                <div className="sim-canvas-controls">
-                  <ProjectStatusBar topology={topology} projectLocked={projectLocked} connecting={props.connecting} linkEndpointCount={props.linkEndpoints.length} pendingDrawing={pendingDrawing} onCancelDrawing={() => setPendingDrawing(null)} />
-                  <div className="sim-map-actions">
-                    <ResourceMonitorPopover compact resources={props.resources} runtimeInfo={props.runtimeInfo} error={props.resourceError} refreshing={props.refreshingResources} onRefresh={props.onRefreshResources} />
-                    <Button variant="ghost" size="icon-sm" aria-label="Zoom out" onClick={() => setView((current) => ({ ...current, zoom: Math.max(0.4, Number((current.zoom - 0.1).toFixed(1))) }))}><ZoomOut /></Button>
-                    <span className="w-12 text-center font-mono text-xs text-muted-foreground">{Math.round(view.zoom * 100)}%</span>
-                    <Button variant="ghost" size="icon-sm" aria-label="Zoom in" onClick={() => setView((current) => ({ ...current, zoom: Math.min(maxZoom, Number((current.zoom + 0.1).toFixed(1))) }))}><ZoomIn /></Button>
-                    <Button variant="ghost" size="icon-sm" aria-label="Fit topology" title="Fit all devices" onClick={fitTopology}><Scan /></Button>
-                    <Button variant="ghost" size="icon-sm" aria-label="Zoom to selection" title="Zoom to selected devices, link, or drawing" onClick={zoomToSelection}><Scan /></Button>
-                    <Button variant="ghost" size="sm" aria-label="Reset zoom" title="Reset zoom to 100%" onClick={() => setView({ zoom: 1, centerX: 0, centerY: 0 })}>100%</Button>
-                  </div>
-                </div>
                 <TopologyCanvas
                   nodes={canvasNodes}
                   links={topology.links}
