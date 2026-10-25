@@ -1,0 +1,2 @@
+import {render,screen} from "@testing-library/react";import {describe,expect,it} from "vitest";import {CaptureViewer} from "./CaptureViewer";
+describe("CaptureViewer",()=>{it("shows capture controls, display filter, and statistics tab",()=>{render(<CaptureViewer/>);expect(screen.getByText("Capture Viewer")).toBeTruthy();expect(screen.getByRole("button",{name:"Save .pcap"})).toBeTruthy();expect(screen.getByLabelText("Display filter")).toBeTruthy();expect(screen.getByRole("button",{name:"Statistics"})).toBeTruthy();});});

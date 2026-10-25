@@ -346,8 +346,10 @@ export function TopologyCanvas(props: CanvasProps) {
         if (!source || endpoints.length < 2) return null;
         const selected = props.selection?.kind === "link" && props.selection.id === link.link_id;
         const sourcePoint = portPoint(source.node, source.endpoint);
+        const targetPoint = portPoint(endpoints[1].node, endpoints[1].endpoint);
         return <g key={link.link_id} className={`sim-link ${selected ? "is-selected" : ""} ${link.suspend ? "is-suspended" : ""}`} onClick={(event) => { event.stopPropagation(); props.onLinkClick(link.link_id); }} onContextMenu={() => props.onLinkClick(link.link_id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") props.onLinkClick(link.link_id); }} role="button" aria-label={`Ethernet segment connecting ${endpoints.map(({ node }) => node.name).join(", ")}`} tabIndex={0}>
           {endpoints.slice(1).map(({ endpoint, node }) => { const point = portPoint(node, endpoint); return <g key={`${endpoint.node_id}:${endpoint.adapter_number}:${endpoint.port_number}`}><line className="sim-link-stroke" x1={sourcePoint.x} y1={sourcePoint.y} x2={point.x} y2={point.y} style={{ stroke: selected ? "#1683df" : "#555", strokeWidth: selected ? 2.5 : 2, strokeDasharray: link.suspend ? "6 4" : undefined }} /><line className="sim-link-hit" x1={sourcePoint.x} y1={sourcePoint.y} x2={point.x} y2={point.y} /></g>; })}
+          {Boolean(link.capturing) && <g pointerEvents="none" transform={`translate(${(sourcePoint.x+targetPoint.x)/2},${(sourcePoint.y+targetPoint.y)/2-12})`}><rect x="-25" y="-10" width="50" height="18" rx="9" fill="#dc2626"/><text y="3" textAnchor="middle" fill="white" fontSize="10" fontWeight="700">● CAP</text></g>}
           {endpoints.map(({ endpoint, node }, index) => {
             const other = endpoints[index === 0 ? 1 : 0]?.node;
             const dx = other ? Number(other.x ?? 0) - Number(node.x ?? 0) : 0;

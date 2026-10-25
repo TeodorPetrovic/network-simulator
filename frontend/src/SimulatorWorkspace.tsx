@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Link, LinkEndpoint, Node, Project, ResourceMonitor, RuntimeInfo, RuntimeTemplate, TopologySnapshot } from "./api";
-import { api } from "./api";
+import { api, getAuthToken } from "./api";
 import { ResourceMonitorPopover } from "./ResourceMonitorPopover";
 import { nodesForLifecycle } from "./lifecycle";
 import type { LifecycleAction } from "./lifecycle";
@@ -24,6 +24,7 @@ import { WorkspaceIconToolbar, WorkspaceToolbar } from "./WorkspaceToolbar";
 import { ProjectStatusBar } from "./ProjectStatusBar";
 import { useWorkspaceSelection } from "./useWorkspaceSelection";
 import { useWorkspaceActions } from "./useWorkspaceActions";
+import { CaptureWindow } from "./capture/CaptureWindow";
 
 type DrawingValues = { width: number; height: number; stroke: string; fill: string; strokeWidth: number; text: string; imageDataUrl?: string };
 
@@ -75,6 +76,8 @@ export type SimulatorWorkspaceProps = {
 
 
 export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
+  const [captureViewer, setCaptureViewer] = useState<{url:string;title:string}|null>(null);
+  async function openCaptureViewer(link: Link, newTab=false) { const path=api.linkCaptureStreamUrl(props.project.project_id,link.link_id); const url=new URL(path,window.location.href); if(getAuthToken()) url.searchParams.set("ticket",await api.accessTicket(path)); const title=String(link.capture_file_name??link.link_id); if(newTab){window.open(`/capture?stream=${encodeURIComponent(url.toString())}&title=${encodeURIComponent(title)}`,"_blank","noopener");return;} setCaptureViewer({url:url.toString(),title:`Capture · ${title}`}); }
   const [view, setView] = useState({ zoom: 1, centerX: 0, centerY: 0 });
   const viewKey = `ns.view.${props.project.project_id}`;
   const [savedViewLoaded, setSavedViewLoaded] = useState(false);
@@ -322,7 +325,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
                 />
               </div>
             </ContextMenuTrigger>
-            <WorkspaceContextMenu workspace={props} selectedNode={selectedNode} selectedLink={selectedLink} selectedDrawing={selectedDrawing} setConfigureNode={setConfigureNode} setSymbolNode={setSymbolNode} toggleNodeIsolation={toggleNodeIsolation} toggleNodeLock={toggleNodeLock} setLinkPropertiesOpen={setLinkPropertiesOpen} toggleLinkSuspend={toggleLinkSuspend} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} />
+            <WorkspaceContextMenu workspace={props} selectedNode={selectedNode} selectedLink={selectedLink} selectedDrawing={selectedDrawing} setConfigureNode={setConfigureNode} setSymbolNode={setSymbolNode} toggleNodeIsolation={toggleNodeIsolation} toggleNodeLock={toggleNodeLock} setLinkPropertiesOpen={setLinkPropertiesOpen} toggleLinkSuspend={toggleLinkSuspend} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} onOpenCaptureViewer={openCaptureViewer} />
           </ContextMenu>
         </Card>
 
@@ -337,6 +340,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
       <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
       <InfoDialog project={props.project} nodeCount={topology.nodes.length} linkCount={topology.links.length} drawingCount={topology.drawings.length} eventCursor={topology.event_cursor} open={infoOpen} onOpenChange={setInfoOpen} />
       <ScreenshotDialog open={screenshotOpen} onOpenChange={setScreenshotOpen} onExport={(request) => void exportScreenshot(request)} pngAvailable={pngScreenshotAvailable()} />
+      {captureViewer&&<CaptureWindow url={captureViewer.url} title={captureViewer.title} onClose={()=>setCaptureViewer(null)}/>}
     </section>
   );
 }

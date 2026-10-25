@@ -39,6 +39,7 @@ Status is measured against the current MAP implementation. **Present** means an 
 - [x] Partial — suspend/resume calls link update and reports controller availability.
 - [x] Partial — filter editor and available-filter discovery use `/v3` link routes; runtime filtering behavior still needs an end-to-end controller check.
 - [x] Partial — capture start/stop, Web Wireshark launch, stream open, and stream URL copy use `/v3` routes; runtime capture behavior still needs an end-to-end controller check.
+- [x] Capture Viewer — classic pcap stream/file inspection, display filters, packet details/hex, floating topology viewer, and capture badge are available in browser; pcapng and advanced protocol dissection are not yet supported.
 - [x] Present — link menu shows clear error states when API operations fail.
 
 ## Drawings
