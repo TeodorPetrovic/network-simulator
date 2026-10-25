@@ -1,0 +1,9 @@
+# Xpra HTML5 v20 defaults for Web Wireshark
+encoding = auto
+xpramenu = false
+clipboard = false
+sound = false
+keyboard = false
+cursor_lock_button = false
+fullscreen_button = true
+reconnect = true
