@@ -298,8 +298,14 @@ fn qemu_runtime_arguments_cover_disks_direct_boot_console_and_extra_options() {
     assert!(args.windows(2).any(|pair| pair == ["-cpu", "Haswell"]));
     assert!(args.iter().any(|arg| arg.contains("format=qcow2")));
     assert!(args.iter().any(|arg| arg.contains("format=raw")));
-    assert!(args.windows(2).any(|pair| pair == ["-drive", "file=/images/install.iso,media=cdrom,index=0"]));
-    assert!(args.windows(2).any(|pair| pair == ["-drive", "file=/images/drivers.iso,media=cdrom,index=1"]));
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["-drive", "file=/images/install.iso,media=cdrom,index=0"])
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["-drive", "file=/images/drivers.iso,media=cdrom,index=1"])
+    );
     assert!(args.iter().any(|arg| arg.contains("telnet:127.0.0.1:2002")));
     assert!(!args.iter().any(|arg| arg.contains("telnet:127.0.0.1:2001")));
     assert!(
@@ -307,6 +313,27 @@ fn qemu_runtime_arguments_cover_disks_direct_boot_console_and_extra_options() {
             .any(|pair| pair == ["-loadvm", "GNS3_SAVED_STATE"])
     );
     assert!(cpu_limiter_arguments(123, 75).contains(&"--limit=75".to_owned()));
+    let mut network_vm = vm.clone();
+    network_vm.adapters = 2;
+    let links = [QemuLink {
+        adapter_number: 1,
+        adapter_port: 20_000,
+        runtime_port: 20_001,
+    }];
+    assert_eq!(
+        super::lifecycle::qemu_network_arguments(&network_vm, &links),
+        [
+            "-netdev",
+            "hubport,id=nsboot0,hubid=1000",
+            "-device",
+            "virtio-net-pci,id=nsdev_boot0,netdev=nsboot0,mac=52:54:00:00:00:01",
+            "-netdev",
+            "socket,id=nsboot1,udp=127.0.0.1:20000,localaddr=127.0.0.1:20001",
+            "-device",
+            "virtio-net-pci,id=nsdev_boot1,netdev=nsboot1,mac=52:54:00:00:00:00"
+        ]
+        .map(str::to_owned)
+    );
 }
 
 #[test]
@@ -340,7 +367,6 @@ fn qemu_extra_options_use_a_safe_allowlist() {
 #[test]
 fn qemu_links_use_a_local_udp_nio_to_the_ubridge_adapter_port() {
     let link = QemuLink {
-        link_id: "00000000-0000-0000-0000-000000000001".to_owned(),
         adapter_number: 2,
         adapter_port: 20_000,
         runtime_port: 20_001,

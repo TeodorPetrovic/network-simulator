@@ -44,9 +44,18 @@ pub(super) async fn apply_node_lifecycle(
         }
         "qemu" => {
             let vm = state.qemu.vm_from_node(node).map_err(runtime_api_error)?;
+            let links = if matches!(&action, NodeAction::Start) {
+                node_link_entries(state, project_id, node_id)
+                    .await?
+                    .into_iter()
+                    .map(|(_, endpoint, _)| qemu_link_from_endpoint(&endpoint))
+                    .collect::<Result<Vec<_>, _>>()?
+            } else {
+                Vec::new()
+            };
             let status = state
                 .qemu
-                .lifecycle(&vm, action, &[])
+                .lifecycle(&vm, action, &links)
                 .await
                 .map_err(runtime_api_error)?;
             if matches!(&action, NodeAction::Start) {

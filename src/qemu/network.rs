@@ -23,13 +23,12 @@ pub(super) fn qemu_netdev_argument(link: &QemuLink, net_id: &str) -> String {
     )
 }
 
-pub(super) fn qemu_nio_id(link_id: &str) -> String {
-    link_id.chars().filter(char::is_ascii_hexdigit).collect()
+pub(super) fn qemu_adapter_netdev_id(adapter_number: u32) -> String {
+    format!("nsboot{adapter_number}")
 }
 
-pub(super) fn qmp_reports_duplicate_id(error: &RuntimeError) -> bool {
-    let message = error.message().to_ascii_lowercase();
-    message.contains("duplicate") || message.contains("already exists")
+pub(super) fn qemu_adapter_device_id(adapter_number: u32) -> String {
+    format!("nsdev_boot{adapter_number}")
 }
 
 pub(super) fn qmp_reports_missing_id(error: &RuntimeError) -> bool {

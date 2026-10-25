@@ -76,44 +76,7 @@ impl QemuRuntime {
         }
         // QEMU treats QMP system_reset as a shutdown when -no-reboot is set.
         command.args(runtime_arguments);
-        // TODO(RUNTIME-NET QEMU custom adapter hook): materialize adapter
-        // counts without links, custom_adapters, configured MAC addresses, and
-        // carrier replication through NET's NIC work.
-        if links.is_empty() {
-            command.arg("-nic").arg("none");
-        } else {
-            let mut links = links.to_vec();
-            links.sort_by_key(|link| link.adapter_number);
-            for adapter_number in 0..vm.adapters {
-                if let Some(link) = links
-                    .iter()
-                    .find(|link| link.adapter_number == adapter_number)
-                {
-                    let id = qemu_nio_id(&link.link_id);
-                    let net_id = format!("ns_{id}");
-                    command
-                        .arg("-netdev")
-                        .arg(qemu_netdev_argument(link, &net_id))
-                        .arg("-device")
-                        .arg(format!(
-                            "{},netdev={net_id},mac={}",
-                            vm.adapter_type,
-                            mac_address(&vm.node_id, adapter_number)
-                        ));
-                } else {
-                    let net_id = format!("ns_unused_{adapter_number}");
-                    command
-                        .arg("-netdev")
-                        .arg(format!("null,id={net_id}"))
-                        .arg("-device")
-                        .arg(format!(
-                            "{},netdev={net_id},mac={}",
-                            vm.adapter_type,
-                            mac_address(&vm.node_id, adapter_number)
-                        ));
-                }
-            }
-        }
+        command.args(qemu_network_arguments(vm, links));
         if vm.tpm {
             self.start_tpm(vm).await?;
         }
@@ -394,4 +357,35 @@ impl QemuRuntime {
         }
         let _ = fs::remove_file(tpm_socket_path(vm));
     }
+}
+
+pub(super) fn qemu_network_arguments(vm: &QemuVm, links: &[QemuLink]) -> Vec<String> {
+    let links_by_adapter = links
+        .iter()
+        .map(|link| (link.adapter_number, link))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut args = Vec::with_capacity(vm.adapters as usize * 4);
+    for adapter_number in 0..vm.adapters {
+        let net_id = qemu_adapter_netdev_id(adapter_number);
+        if let Some(link) = links_by_adapter.get(&adapter_number) {
+            args.extend(["-netdev".to_owned(), qemu_netdev_argument(link, &net_id)]);
+        } else {
+            // An isolated hub port gives the NIC a valid, disconnected
+            // backend that can be replaced through QMP when a link appears.
+            args.extend([
+                "-netdev".to_owned(),
+                format!("hubport,id={net_id},hubid={}", 1000 + adapter_number),
+            ]);
+        }
+        args.extend([
+            "-device".to_owned(),
+            format!(
+                "{},id={},netdev={net_id},mac={}",
+                vm.adapter_type,
+                qemu_adapter_device_id(adapter_number),
+                mac_address(&vm.node_id, adapter_number)
+            ),
+        ]);
+    }
+    args
 }

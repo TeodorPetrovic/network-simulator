@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { scenario, link, startNode, waitFor } from "./lib.mjs";
+import { scenario, link, startNode, waitFor, chrImage, chrTemplate, chrConsole } from "./lib.mjs";
 import { templateByType } from "../harness.mjs";
 
 const image = `${process.env.HOME}/.local/share/network-simulator/images/qemu/mikrotik-chr-7.23.8.qcow2`;
@@ -47,3 +47,25 @@ test("MikroTik CHR exchanges traffic with VPCS", async (t) => {
   ws.close();
 });
 async function commandPc(c,line,re,timeout){c.sendLine(line);await c.expectRegex(re,{timeout});}
+
+test("MikroTik CHR keeps an adapter-1-only link on ether2", async (t) => {
+  if (!existsSync(chrImage)) return t.skip("local MikroTik CHR image is absent");
+  const lab = await scenario(t, "scenario-mikrotik-adapter-index");
+  const template = await chrTemplate(lab, "CHR adapter index", 2);
+  const chr = await lab.add(template, 0, 0, "CHR");
+  const vpcs = await lab.add(await templateByType(lab.server, "vpcs"), 0, 0, "VPCS");
+  await Promise.all([startNode(lab.server, lab.projectId, chr), startNode(lab.server, lab.projectId, vpcs)]);
+  await link(lab.server, lab.projectId, { node: chr, adapter_number: 1 }, { node: vpcs });
+  const pc = await lab.console(vpcs);
+  await pc.expectRegex(/VPCS>/);
+  await pc.sendLine("ip 10.1.2.10/24 10.1.2.1");
+  await pc.expectRegex(/VPCS>/);
+  const router = await chrConsole(lab, chr);
+  t.after(() => router.close());
+  await router.run("/ip address add address=10.1.2.1/24 interface=ether2");
+  const addresses = await router.run("/ip address print", /10\.1\.2\.1\/24[\s\S]*\[admin@/);
+  assert.match(addresses, /ether2/);
+  await pc.sendLine("ping 10.1.2.1 -c 2");
+  await pc.expectRegex(/84 bytes from 10\.1\.2\.1/, { timeout: 45000 });
+  await router.run("/ping 10.1.2.10 count=3", /sent=3 received=[123]/, 60000);
+});

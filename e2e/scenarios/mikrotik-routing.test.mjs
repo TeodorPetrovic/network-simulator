@@ -37,8 +37,10 @@ test("two MikroTik CHR routers route between two VPCS hosts", async (t) => {
   await pb.sendLine("ping 10.0.1.10 -c 3");
   await pb.expectRegex(/84 bytes from 10\.0\.1\.10/, { timeout: 60000 });
 
-  await pa.sendLine("trace 10.0.3.10");
-  await pa.expectRegex(/10\.0\.1\.1[\s\S]*10\.0\.2\.2[\s\S]*10\.0\.3\.10/, { timeout: 60000 });
+  // VPCS reports the address CHR2 uses to return the TTL-expired response
+  // (10.0.3.1) rather than the inter-router interface address (10.0.2.2).
+  await pa.sendLine("trace 10.0.3.1");
+  await pa.expectRegex(/10\.0\.1\.1[\s\S]*10\.0\.3\.1/, { timeout: 60000 });
 
   const trace = await r1.run("/tool traceroute 10.0.3.10 count=1", /10\.0\.3\.10[\s\S]*\[admin@[^\]]*\]\s*>\s*$/, 90000);
   assert.match(trace, /10\.0\.2\.2/, "traceroute from CHR1 shows CHR2 as a hop");

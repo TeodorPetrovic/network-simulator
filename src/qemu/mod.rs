@@ -123,7 +123,6 @@ pub struct QemuTemplateOptions {
 
 #[derive(Clone, Debug)]
 pub struct QemuLink {
-    pub link_id: String,
     pub adapter_number: u32,
     pub adapter_port: u16,
     pub runtime_port: u16,
@@ -324,9 +323,8 @@ impl QemuRuntime {
                 link.adapter_number
             )));
         }
-        let id = qemu_nio_id(&link.link_id);
-        let netdev = format!("ns_{id}");
-        let device = format!("nsdev_{id}");
+        let netdev = qemu_adapter_netdev_id(link.adapter_number);
+        self.remove_adapter_netdev(vm, link.adapter_number).await?;
         if let Err(error) = self
             .qmp_execute(
                 &vm.qmp_socket,
@@ -340,26 +338,8 @@ impl QemuRuntime {
             )
             .await
         {
-            if qmp_reports_duplicate_id(&error) {
-                return Ok(());
-            }
-            return Err(error);
-        }
-        if let Err(error) = self
-            .qmp_execute(
-                &vm.qmp_socket,
-                "device_add",
-                Some(json!({
-                    "driver": vm.adapter_type,
-                    "id": device,
-                    "netdev": netdev,
-                    "mac": mac_address(&vm.node_id, link.adapter_number)
-                })),
-            )
-            .await
-        {
             let _ = self
-                .qmp_execute(&vm.qmp_socket, "netdev_del", Some(json!({ "id": netdev })))
+                .add_disconnected_adapter_netdev(vm, link.adapter_number)
                 .await;
             return Err(error);
         }
@@ -367,32 +347,43 @@ impl QemuRuntime {
     }
 
     pub async fn detach_nio(&self, vm: &QemuVm, link: &QemuLink) -> Result<(), RuntimeError> {
-        let id = qemu_nio_id(&link.link_id);
-        if let Err(error) = self
-            .qmp_execute(
-                &vm.qmp_socket,
-                "device_del",
-                Some(json!({ "id": format!("nsdev_{id}") })),
-            )
+        self.remove_adapter_netdev(vm, link.adapter_number).await?;
+        self.add_disconnected_adapter_netdev(vm, link.adapter_number)
             .await
-        {
-            if !qmp_reports_missing_id(&error) {
-                return Err(error);
-            }
-        }
+    }
+
+    async fn remove_adapter_netdev(
+        &self,
+        vm: &QemuVm,
+        adapter_number: u32,
+    ) -> Result<(), RuntimeError> {
+        let id = qemu_adapter_netdev_id(adapter_number);
         if let Err(error) = self
-            .qmp_execute(
-                &vm.qmp_socket,
-                "netdev_del",
-                Some(json!({ "id": format!("ns_{id}") })),
-            )
+            .qmp_execute(&vm.qmp_socket, "netdev_del", Some(json!({ "id": id })))
             .await
+            && !qmp_reports_missing_id(&error)
         {
-            if !qmp_reports_missing_id(&error) {
-                return Err(error);
-            }
+            return Err(error);
         }
         Ok(())
+    }
+
+    async fn add_disconnected_adapter_netdev(
+        &self,
+        vm: &QemuVm,
+        adapter_number: u32,
+    ) -> Result<(), RuntimeError> {
+        self.qmp_execute(
+            &vm.qmp_socket,
+            "netdev_add",
+            Some(json!({
+                "type": "hubport",
+                "id": qemu_adapter_netdev_id(adapter_number),
+                "hubid": 1000 + adapter_number
+            })),
+        )
+        .await
+        .map(|_| ())
     }
 
     pub async fn status(&self, vm: &QemuVm) -> Result<String, RuntimeError> {
