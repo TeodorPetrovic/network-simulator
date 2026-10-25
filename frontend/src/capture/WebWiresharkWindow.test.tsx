@@ -8,7 +8,7 @@ const itLong = (name: string, test: () => unknown) => it(name, test, 15_000);
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("WebWiresharkWindow", () => {
-  itLong("loads the vendored client with a socket path and retry controls", () => {
+  itLong("loads the vendored client with a socket path and retry controls", async () => {
     render(<WebWiresharkWindow projectId="p1" linkId="l1" wsPath="/v3/projects/p1/links/l1/capture/web-wireshark" title="Web Wireshark" onClose={() => undefined} />);
     const frame = screen.getByTitle("Web Wireshark") as HTMLIFrameElement;
     expect(frame.src).toContain("/xpra/index.html?");
@@ -17,7 +17,11 @@ describe("WebWiresharkWindow", () => {
     expect(frame.src).toContain("clipboard=false");
     expect(screen.getByRole("status")).toHaveTextContent("Connecting to Web Wireshark");
     fireEvent.load(frame);
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    const connected = new MessageEvent("message", { data: { type: "xpra-connected" }, origin: window.location.origin });
+    Object.defineProperty(connected, "source", { value: frame.contentWindow });
+    window.dispatchEvent(connected);
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
   });
 
   itLong("restarts the server session and reloads the iframe", async () => {
