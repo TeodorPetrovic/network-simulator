@@ -89,7 +89,7 @@ static WARNED_FORWARDED_AUTH: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug)]
 pub(crate) struct Principal {
-    user_id: String,
+    pub(crate) user_id: String,
     is_superadmin: bool,
     must_change_password: bool,
 }
