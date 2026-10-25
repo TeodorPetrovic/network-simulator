@@ -154,7 +154,7 @@ async fn qemu_templates_create_private_disks_and_exercise_qmp_process_lifecycle(
     );
     assert_eq!(
         websocket_status(&app, console_path.clone()).await,
-        StatusCode::CONFLICT
+        StatusCode::SWITCHING_PROTOCOLS
     );
 
     let (status, node) = request(
