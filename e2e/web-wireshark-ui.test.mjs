@@ -29,6 +29,7 @@ test("Web Wireshark starts from the link dialog, opens inline, and closes when c
   await dialog.getByRole("button", { name: "Start capture" }).click();
   await page.getByText("Starting Web Wireshark… (3-6 s)").waitFor();
   await waitFor(async () => (await server.api("GET", `/projects/${pid}/links`)).json.find((item) => item.link_id === connected.json.link_id)?.wireshark === true, { timeout: 90_000, label: "Web Wireshark start" });
+  await page.getByText("◉ WS").waitFor();
   await page.keyboard.press("Escape");
   await dialog.waitFor({ state: "detached" });
   const autoWindow = page.getByTitle("Web Wireshark");
