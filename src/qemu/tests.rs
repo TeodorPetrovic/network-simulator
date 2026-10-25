@@ -257,7 +257,8 @@ fn qemu_runtime_arguments_cover_disks_direct_boot_console_and_extra_options() {
                 format: "raw".to_owned(),
             },
         ],
-        cdrom_image: None,
+        cdrom_image: Some("/images/install.iso".into()),
+        cdrom_image2: Some("/images/drivers.iso".into()),
         bios_image: None,
         kernel_image: Some("/images/bzImage".into()),
         initrd: Some("/images/initrd.img".into()),
@@ -297,6 +298,8 @@ fn qemu_runtime_arguments_cover_disks_direct_boot_console_and_extra_options() {
     assert!(args.windows(2).any(|pair| pair == ["-cpu", "Haswell"]));
     assert!(args.iter().any(|arg| arg.contains("format=qcow2")));
     assert!(args.iter().any(|arg| arg.contains("format=raw")));
+    assert!(args.windows(2).any(|pair| pair == ["-drive", "file=/images/install.iso,media=cdrom,index=0"]));
+    assert!(args.windows(2).any(|pair| pair == ["-drive", "file=/images/drivers.iso,media=cdrom,index=1"]));
     assert!(args.iter().any(|arg| arg.contains("telnet:127.0.0.1:2002")));
     assert!(!args.iter().any(|arg| arg.contains("telnet:127.0.0.1:2001")));
     assert!(

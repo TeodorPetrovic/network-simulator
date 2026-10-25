@@ -33,6 +33,7 @@ pub struct DynamipsOptions {
     pub midplane: Option<String>,
     pub iomem: Option<u8>,
     pub ghost_ios: bool,
+    pub l1_keepalives: bool,
     pub console_type: String,
     pub aux_type: String,
 }
@@ -59,6 +60,7 @@ impl Default for DynamipsOptions {
             midplane: Some("vxr".to_owned()),
             iomem: None,
             ghost_ios: false,
+            l1_keepalives: true,
             console_type: "telnet".to_owned(),
             aux_type: "none".to_owned(),
         }
@@ -116,6 +118,7 @@ impl DynamipsRuntime {
                 "midplane": "vxr",
                 "iomem": null,
                 "ghost_ios": false,
+                "l1_keepalives": true,
                 "console_type": "telnet",
                 "aux_type": "none"
             }));
@@ -593,6 +596,7 @@ impl DynamipsRuntime {
             "midplane": vm.options.midplane,
             "iomem": vm.options.iomem.or_else(|| default_iomem(&vm.platform)),
             "ghost_ios": vm.options.ghost_ios,
+            "l1_keepalives": vm.options.l1_keepalives,
             "console_type": vm.options.console_type,
             "aux_type": vm.options.aux_type,
             "aux": vm.aux_port,

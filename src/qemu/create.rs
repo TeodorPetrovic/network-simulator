@@ -249,6 +249,7 @@ impl QemuRuntime {
                 .transpose()
         };
         let cdrom_image = resolve_optional(options.cdrom_image.as_ref())?;
+        let cdrom_image2 = resolve_optional(options.cdrom_image2.as_ref())?;
         let bios_image = resolve_optional(options.bios_image.as_ref())?;
         let kernel_image = resolve_optional(options.kernel_image.as_ref())?;
         let initrd = resolve_optional(options.initrd.as_ref())?;
@@ -329,6 +330,7 @@ impl QemuRuntime {
             boot_priority: boot_priority.to_owned(),
             disks,
             cdrom_image,
+            cdrom_image2,
             bios_image,
             kernel_image,
             initrd,
