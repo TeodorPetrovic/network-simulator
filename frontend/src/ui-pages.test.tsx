@@ -92,6 +92,31 @@ describe("PAGES parity routes", () => {
     expect(screen.getByText("Core lab")).toBeInTheDocument();
   });
 
+  it("closes an opened project from the shared project list", async () => {
+    const opened = { ...project, status: "opened" };
+    vi.mocked(api.listProjects).mockResolvedValue([opened]);
+    vi.mocked(api.closeProject).mockResolvedValue({ ...opened, status: "closed" });
+    renderPage(ProjectsPage);
+    expect(await screen.findByText("Core lab")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close project" }));
+    await waitFor(() => expect(api.closeProject).toHaveBeenCalledWith("project-1"));
+    expect(await screen.findByRole("status")).toHaveTextContent("Closed “Core lab”.");
+    expect(screen.queryByRole("button", { name: "Close project" })).not.toBeInTheDocument();
+  });
+
+  it("sorts projects when a column header is selected", async () => {
+    vi.mocked(api.listProjects).mockResolvedValue([
+      { ...project, project_id: "z", name: "Zebra" },
+      { ...project, project_id: "a", name: "Alpine" },
+    ]);
+    renderPage(ProjectsPage);
+    expect(await screen.findByText("Alpine")).toBeInTheDocument();
+    const rows = screen.getAllByRole("row");
+    expect(rows[1]).toHaveTextContent("Alpine");
+    fireEvent.click(screen.getByRole("button", { name: "Project" }));
+    await waitFor(() => expect(screen.getAllByRole("row")[1]).toHaveTextContent("Zebra"));
+  });
+
   it("imports a selected .gns3project archive and uses its destination name", async () => {
     renderPage(ProjectsPage);
     fireEvent.click(await screen.findByRole("button", { name: "Import .gns3project" }));

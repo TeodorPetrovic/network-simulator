@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ArrowDown, ArrowUp, BarChart3, Copy, Download, FileUp, FolderOpen, Pencil, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
@@ -14,6 +14,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+
+const MarketplaceDialog = lazy(() => import("./MarketplaceDialog").then((module) => ({ default: module.MarketplaceDialog })));
 
 type SortColumn = "name" | "status" | "created_at";
 type ProjectDraft = {
@@ -50,8 +52,17 @@ function projectUuid() {
   });
 }
 
-export function ProjectsPage() {
+export function ProjectsPage({ onNavigateProject, onOpenAppliances }: { onNavigateProject?: (id: string) => void; onOpenAppliances?: () => void } = {}) {
+  if (onNavigateProject) return <ProjectsPageContent navigateProject={onNavigateProject} onOpenAppliances={onOpenAppliances} embedded />;
+  return <RoutedProjectsPage onOpenAppliances={onOpenAppliances} />;
+}
+
+function RoutedProjectsPage({ onOpenAppliances }: { onOpenAppliances?: () => void }) {
   const navigate = useNavigate();
+  return <ProjectsPageContent navigateProject={(id) => void navigate({ to: "/projects/$projectId", params: { projectId: id } })} onOpenAppliances={onOpenAppliances ?? (() => void navigate({ to: "/appliances" as never }))} />;
+}
+
+function ProjectsPageContent({ navigateProject, onOpenAppliances, embedded = false }: { navigateProject: (id: string) => void; onOpenAppliances?: () => void; embedded?: boolean }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [busy, setBusy] = useState(true);
   const [working, setWorking] = useState(false);
@@ -72,6 +83,7 @@ export function ProjectsPage() {
   const [statisticsTarget, setStatisticsTarget] = useState<Project | null>(null);
   const [statistics, setStatistics] = useState<ProjectStatistics | null>(null);
   const [detailsError, setDetailsError] = useState("");
+  const [marketplaceOpen, setMarketplaceOpen] = useState(false);
 
   async function refresh() {
     setBusy(true); setError("");
@@ -98,7 +110,7 @@ export function ProjectsPage() {
   async function createProject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!newName.trim()) return;
     setWorking(true); setError("");
-    try { const project = await api.createProject(newName.trim()); await navigate({ to: "/projects/$projectId", params: { projectId: project.project_id } }); }
+    try { const project = await api.createProject(newName.trim()); navigateProject(project.project_id); }
     catch (reason) { setError(message(reason)); }
     finally { setWorking(false); }
   }
@@ -140,6 +152,16 @@ export function ProjectsPage() {
     finally { setWorking(false); }
   }
 
+  async function closeProject(project: Project) {
+    setError(""); setWorking(true);
+    try {
+      const closed = await api.closeProject(project.project_id);
+      setProjects((current) => current.map((item) => item.project_id === closed.project_id ? closed : item));
+      setNotice(`Closed “${closed.name}”.`);
+    } catch (reason) { setError(message(reason)); }
+    finally { setWorking(false); }
+  }
+
   function openSettings(project: Project) { setSettingsTarget(project); setDraft(blankDraft(project)); setDetailsError(""); }
   async function saveSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!settingsTarget) return;
@@ -177,8 +199,8 @@ export function ProjectsPage() {
   const checkbox = (key: "auto_open" | "auto_start" | "auto_close" | "show_interface_labels", text: string) => <label key={key} className="pages-checkbox"><input type="checkbox" checked={draft[key]} onChange={(event) => setDraft((current) => ({ ...current, [key]: event.target.checked }))} />{text}</label>;
   const field = (key: "name" | "scene_width" | "scene_height" | "grid_size" | "drawing_grid_size", label: string, type = "text") => <label key={key} className="grid gap-1.5"><Label htmlFor={`project-${key}`}>{label}</Label><Input id={`project-${key}`} type={type} min={type === "number" ? 1 : undefined} value={draft[key]} onChange={(event) => setDraft((current) => ({ ...current, [key]: event.target.value }))} /></label>;
 
-  return <PagesShell active="Projects"><div className="pages-content">
-    <PageTitle eyebrow="LAB MANAGEMENT" title="Projects" description="Create, organize, import, and inspect network labs." actions={<><Button variant="outline" onClick={() => void refresh()} disabled={busy}><RefreshCw size={15} />Refresh projects</Button><Button variant="outline" onClick={() => void navigate({ to: "/appliances" as never })}>Appliance manager</Button></>} />
+  const content = <div className="pages-content">
+    <PageTitle eyebrow="LAB MANAGEMENT" title="Projects" description="Create, organize, import, and inspect network labs." actions={<><Button variant="outline" onClick={() => void refresh()} disabled={busy}><RefreshCw size={15} />Refresh projects</Button><Button variant="outline" onClick={onOpenAppliances}>Appliance manager</Button><Button variant="outline" onClick={() => setMarketplaceOpen(true)}>Image catalog</Button></>} />
     {error && <div role="alert" className="pages-alert">{error}<Button size="sm" variant="ghost" onClick={() => setError("")}>Dismiss</Button></div>}
     {notice && <div role="status" className="pages-notice">{notice}</div>}
 
@@ -193,7 +215,8 @@ export function ProjectsPage() {
         <TableCell><Badge variant={project.status === "opened" ? "default" : "secondary"}>{project.status ?? "closed"}</Badge></TableCell>
         <TableCell>{typeof project.created_at === "string" ? new Date(project.created_at).toLocaleString() : "—"}</TableCell>
         <TableCell><div className="flex flex-wrap justify-end gap-1">
-          <Button size="sm" onClick={() => void navigate({ to: "/projects/$projectId", params: { projectId: project.project_id } })}><FolderOpen size={14} />Open project</Button>
+          <Button size="sm" onClick={() => navigateProject(project.project_id)}><FolderOpen size={14} />Open project</Button>
+          {project.status === "opened" && <Button size="sm" variant="outline" disabled={working} onClick={() => void closeProject(project)}>Close project</Button>}
           <Button size="icon-sm" variant="ghost" title="Project settings" aria-label={`Settings for ${project.name}`} onClick={() => openSettings(project)}><Pencil size={15} /></Button>
           <Button size="icon-sm" variant="ghost" title="Project readme" aria-label={`Readme for ${project.name}`} onClick={() => void openReadme(project)}><span className="text-xs font-semibold">R</span></Button>
           <Button size="icon-sm" variant="ghost" title="Project statistics" aria-label={`Statistics for ${project.name}`} onClick={() => void openStatistics(project)}><BarChart3 size={15} /></Button>
@@ -213,5 +236,7 @@ export function ProjectsPage() {
     <Dialog open={Boolean(readmeTarget)} onOpenChange={(open) => !open && setReadmeTarget(null)}><DialogContent><DialogHeader><DialogTitle>Project readme</DialogTitle><DialogDescription>Readme file for {readmeTarget?.name ?? "this project"}.</DialogDescription></DialogHeader><form className="grid gap-3" onSubmit={(event) => void saveReadme(event)}><Textarea aria-label="Project readme content" value={readme} onChange={(event) => setReadme(event.target.value)} rows={12} />{detailsError && <p role="alert" className="text-sm text-destructive">{detailsError}</p>}<DialogFooter><Button type="button" variant="ghost" onClick={() => setReadmeTarget(null)}>Close</Button><Button type="submit" disabled={working || Boolean(detailsError)}>{working ? "Saving…" : "Save readme"}</Button></DialogFooter></form></DialogContent></Dialog>
 
     <Dialog open={Boolean(statisticsTarget)} onOpenChange={(open) => !open && setStatisticsTarget(null)}><DialogContent><DialogHeader><DialogTitle>Project statistics</DialogTitle><DialogDescription>Statistics reported by the controller for {statisticsTarget?.name ?? "this project"}.</DialogDescription></DialogHeader>{detailsError ? <p role="alert" className="text-sm text-destructive">{detailsError}</p> : statistics ? <div className="grid grid-cols-2 gap-3">{Object.entries(statistics).map(([key, value]) => <div key={key} className="rounded-md border p-3"><div className="text-xs capitalize text-muted-foreground">{key.replaceAll("_", " ")}</div><div className="mt-1 text-lg font-semibold">{typeof value === "number" || typeof value === "string" ? value : JSON.stringify(value)}</div></div>)}</div> : <p className="text-sm text-muted-foreground">Loading statistics…</p>}<DialogFooter><Button variant="outline" onClick={() => setStatisticsTarget(null)}>Close</Button></DialogFooter></DialogContent></Dialog>
-  </div></PagesShell>;
+    {marketplaceOpen && <Suspense fallback={<div className="sim-dialog-loading">Loading image catalog…</div>}><MarketplaceDialog onClose={() => setMarketplaceOpen(false)} /></Suspense>}
+  </div>;
+  return embedded ? content : <PagesShell active="Projects">{content}</PagesShell>;
 }

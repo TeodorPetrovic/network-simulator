@@ -1,8 +1,7 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Activity } from "lucide-react";
 import { api, dockerHttpConsoleUrl } from "./api";
-import type { LinkEndpoint, Node, Project, ResourceMonitor, RuntimeInfo } from "./api";
+import type { LinkEndpoint, Node, ResourceMonitor, RuntimeInfo } from "./api";
 import { nodesForLifecycle } from "./lifecycle";
 import { errorMessage, samePort, upsertLink } from "./appUtils";
 import { SimulatorWorkspace } from "./SimulatorWorkspace";
@@ -14,7 +13,7 @@ import { NodeDialog } from "./NodeDialog";
 import { AppNavigationHeader } from "./AppNavigationHeader";
 import { useAppNodeActions } from "./useAppNodeActions";
 import { useAppDeviceActions } from "./useAppDeviceActions";
-import { ProjectsPage } from "./AppProjectsIndex";
+import { ProjectsPage } from "./ProjectsPage";
 import { useProjectSession } from "./useProjectSession";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -35,9 +34,6 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
   const [resources, setResources] = useState<ResourceMonitor | null>(null);
   const [resourceError, setResourceError] = useState("");
   const [refreshingResources, setRefreshingResources] = useState(false);
-  const [filter, setFilter] = useState("");
-  const [projectName, setProjectName] = useState("");
-  const [creatingProject, setCreatingProject] = useState(false);
   const [creatingNode, setCreatingNode] = useState(false);
   const [nodeDialogOpen, setNodeDialogOpen] = useState(false);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
@@ -54,7 +50,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
   const [linkEndpoints, setLinkEndpoints] = useState<LinkEndpoint[]>([]);
   const [startingAll, setStartingAll] = useState(false);
   const [notice, setNotice] = useState("");
-  const { projects, setProjects, project, setProject, topology, setTopology, busy, connection, error, setError, templates, setTemplates } = useProjectSession(projectId, setNotice);
+  const { project, setProject, topology, setTopology, busy, connection, error, setError, templates, setTemplates } = useProjectSession(projectId, setNotice);
   const [consoleTargets, setConsoleTargets] = useState<ConsoleTarget[]>([]);
   const [activeConsoleId, setActiveConsoleId] = useState<string | null>(null);
   const [consoleMinimized, setConsoleMinimized] = useState(true);
@@ -112,44 +108,11 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
 
 
 
-  const filteredProjects = useMemo(() => {
-    const query = filter.trim().toLowerCase();
-    return projects.filter((item) => !query || item.name.toLowerCase().includes(query));
-  }, [filter, projects]);
-
-  async function createProject(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const name = projectName.trim();
-    if (!name) return;
-    try {
-      setCreatingProject(true);
-      setError("");
-      const created = await api.createProject(name);
-      setProjectName("");
-      navigateToProject(created.project_id);
-    } catch (reason) {
-      setError(errorMessage(reason));
-    } finally {
-      setCreatingProject(false);
-    }
-  }
-
   async function closeProject() {
     if (!projectId) return;
     try {
       await api.closeProject(projectId);
       navigateToProject(null);
-    } catch (reason) {
-      setError(errorMessage(reason));
-    }
-  }
-
-  async function deleteProject(item: Project) {
-    if (!window.confirm(`Delete “${item.name}” and its topology?`)) return;
-    try {
-      await api.deleteProject(item.project_id);
-      setProjects((current) => current.filter((candidate) => candidate.project_id !== item.project_id));
-      setNotice(`Deleted ${item.name}`);
     } catch (reason) {
       setError(errorMessage(reason));
     }
@@ -368,7 +331,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
             onNodeContext={(id) => setSelection({ kind: "node", id })}
             onNodeMove={updateLocalPosition}
             onNodeMoveEnd={saveNodePosition}
-          />) : <ProjectsPage projects={projects} filteredProjects={filteredProjects} busy={busy} filter={filter} projectName={projectName} creatingProject={creatingProject} onFilterChange={setFilter} onProjectNameChange={setProjectName} onCreateProject={createProject} onNavigate={navigateToProject} onOpenAppliances={navigateToApplianceManager} onOpenMarketplace={() => setMarketplaceOpen(true)} onDeleteProject={(item) => void deleteProject(item)} />}
+          />) : <ProjectsPage onNavigateProject={(id) => navigateToProject(id)} onOpenAppliances={navigateToApplianceManager} />}
         </main>
 
         {projectId && consoleTargets.length > 0 && <Suspense fallback={<div className="sim-console-loading">Loading console…</div>}><ConsoleDock
