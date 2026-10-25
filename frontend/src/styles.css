@@ -170,6 +170,7 @@ button, input, textarea, select { font: inherit; }
 .projects-search > svg { position: absolute; left: 10px; z-index: 1; color: var(--muted-foreground); }
 .projects-search input { padding-left: 32px; }
 .projects-table-card { overflow: hidden; }
+[data-slot="card"]:has(> [data-slot="table-container"]) { padding-block: 0; }
 .projects-sort { display: inline-flex; align-items: center; gap: 5px; color: inherit; font-weight: 600; }
 .pages-checkbox { display: flex; align-items: flex-start; gap: 8px; color: var(--foreground); font-size: 13px; }
 .pages-checkbox input, .settings-boolean input, .pages-checkbox-row input { margin-top: 2px; accent-color: var(--primary); }
