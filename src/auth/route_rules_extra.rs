@@ -195,6 +195,11 @@ pub const ROUTE_RULES_EXTRA: &[RouteRule] = rules![
     ),
     (
         "POST",
+        "/projects/{project_id}/nodes/{node_id}/pause",
+        RouteClass::Privilege("Node.PowerMgmt")
+    ),
+    (
+        "POST",
         "/projects/{project_id}/nodes/{node_id}/reload",
         RouteClass::Privilege("Node.PowerMgmt")
     ),

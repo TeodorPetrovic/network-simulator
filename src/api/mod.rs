@@ -179,6 +179,10 @@ pub fn router(state: AppState) -> Router {
             post(node_lifecycle::suspend_node),
         )
         .route(
+            "/v3/projects/{project_id}/nodes/{node_id}/pause",
+            post(node_lifecycle::suspend_node),
+        )
+        .route(
             "/v3/projects/{project_id}/nodes/{node_id}/reload",
             post(node_lifecycle::reload_node),
         )

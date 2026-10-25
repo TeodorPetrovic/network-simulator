@@ -440,7 +440,7 @@ async fn vpcs_suspend_matches_gns3_method_not_allowed_behavior() {
         .unwrap();
 
     let state = AppState::new(store);
-    let error = match suspend_node(State(state), Path((project_id, node_id))).await {
+    let error = match suspend_node(State(state), Path((project_id, node_id)), axum::extract::Query(Default::default())).await {
         Ok(_) => panic!("VPCS suspend should be rejected"),
         Err(error) => error,
     };

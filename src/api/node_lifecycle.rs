@@ -10,6 +10,7 @@ pub(super) async fn delete_node(
 pub(super) async fn start_node(
     State(state): State<AppState>,
     Path((project_id, node_id)): Path<(Uuid, Uuid)>,
+    Query(_options): Query<HashMap<String, String>>,
 ) -> Result<Json<Value>, ApiError> {
     change_node_runtime_state(state, project_id, node_id, NodeAction::Start).await
 }
@@ -17,6 +18,7 @@ pub(super) async fn start_node(
 pub(super) async fn stop_node(
     State(state): State<AppState>,
     Path((project_id, node_id)): Path<(Uuid, Uuid)>,
+    Query(_options): Query<HashMap<String, String>>,
 ) -> Result<Json<Value>, ApiError> {
     change_node_runtime_state(state, project_id, node_id, NodeAction::Stop).await
 }
@@ -24,6 +26,7 @@ pub(super) async fn stop_node(
 pub(super) async fn suspend_node(
     State(state): State<AppState>,
     Path((project_id, node_id)): Path<(Uuid, Uuid)>,
+    Query(_options): Query<HashMap<String, String>>,
 ) -> Result<Json<Value>, ApiError> {
     let node = get_topology_object(
         state.store.pool(),
@@ -45,6 +48,7 @@ pub(super) async fn suspend_node(
 pub(super) async fn reload_node(
     State(state): State<AppState>,
     Path((project_id, node_id)): Path<(Uuid, Uuid)>,
+    Query(_options): Query<HashMap<String, String>>,
 ) -> Result<Json<Value>, ApiError> {
     change_node_runtime_state(state, project_id, node_id, NodeAction::Reload).await
 }
