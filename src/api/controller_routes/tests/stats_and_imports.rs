@@ -226,10 +226,10 @@ async fn controller_statistics_reports_live_node_link_and_capture_counts() {
         None,
     )
     .await;
-    assert_eq!(reset.status(), StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(reset.status(), StatusCode::CONFLICT);
     assert_eq!(
         json_body(reset).await["message"],
-        "Resetting runtime consoles is not supported"
+        "Console reset is unavailable because this runtime has no console listener reset hook"
     );
     for id in [&started_id, &stopped_id] {
         let row = sqlx::query("SELECT object_json FROM topology_objects WHERE project_id=? AND kind='node' AND object_id=?")

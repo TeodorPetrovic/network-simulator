@@ -358,7 +358,7 @@ async fn project_stats_lock_snapshots_files_export_import_and_duplicate_work_ove
         )
         .await
         .status(),
-        StatusCode::NOT_IMPLEMENTED
+        StatusCode::CONFLICT
     );
     let file_response = send(
         &app,

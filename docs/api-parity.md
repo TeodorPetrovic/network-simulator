@@ -124,7 +124,7 @@ Statuses mean:
 | `nodes.py` | GET | `/v3/projects/{project_id}/nodes` | Implemented |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes` | Implemented |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/batch` | Missing |
-| `nodes.py` | POST | `/v3/projects/{project_id}/nodes/console/reset` | Not implemented — returns 501 until runtime console reset is supported |
+| `nodes.py` | POST | `/v3/projects/{project_id}/nodes/console/reset` | Runtime without listener reset hook returns 409 with explanation |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/reload` | Partial |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/start` | Partial |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/stop` | Partial |
@@ -132,7 +132,7 @@ Statuses mean:
 | `nodes.py` | DELETE | `/v3/projects/{project_id}/nodes/{node_id}` | Implemented |
 | `nodes.py` | GET | `/v3/projects/{project_id}/nodes/{node_id}` | Implemented |
 | `nodes.py` | PUT | `/v3/projects/{project_id}/nodes/{node_id}` | Implemented |
-| `nodes.py` | POST | `/v3/projects/{project_id}/nodes/{node_id}/console/reset` | Not implemented — returns 501 until runtime console reset is supported |
+| `nodes.py` | POST | `/v3/projects/{project_id}/nodes/{node_id}/console/reset` | Runtime without listener reset hook returns 409 with explanation |
 | `nodes.py` | WEBSOCKET | `/v3/projects/{project_id}/nodes/{node_id}/console/vnc` | Missing — controller console proxy endpoints remain |
 | `nodes.py` | WEBSOCKET | `/v3/projects/{project_id}/nodes/{node_id}/console/ws` | Missing — controller console proxy endpoints remain |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/{node_id}/duplicate` | Partial — copies topology metadata without provisioning a separate runtime instance |

@@ -54,6 +54,25 @@ async fn disconnect_compute_persists_state_and_get_returns_auto_connect() {
     assert_eq!(computes[0]["connected"], false);
 }
 
+#[tokio::test]
+async fn remote_compute_crud_persists_and_protects_local_compute() {
+    let (app, _dir, _store) = app().await;
+    let body = json!({"name":"Remote","protocol":"http","host":"10.0.0.4","port":3080,"user":"u","password":"p","compute_id":"remote-1"});
+    let created = send(&app, Method::POST, "/v3/computes", Body::from(body.to_string()), Some("application/json")).await;
+    assert_eq!(created.status(), StatusCode::OK);
+    assert_eq!(json_body(created).await["compute_id"], "remote-1");
+    let listed = json_body(send(&app, Method::GET, "/v3/computes", Body::empty(), None).await).await;
+    assert_eq!(listed.len(), 2);
+    let updated = send(&app, Method::PUT, "/v3/computes/remote-1", Body::from(json!({"name":"Updated","protocol":"https","host":"remote.test","port":443,"compute_id":"remote-1"}).to_string()), Some("application/json")).await;
+    assert_eq!(updated.status(), StatusCode::OK);
+    let deleted = send(&app, Method::DELETE, "/v3/computes/remote-1", Body::empty(), None).await;
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+    let local_delete = send(&app, Method::DELETE, "/v3/computes/local", Body::empty(), None).await;
+    assert_eq!(local_delete.status(), StatusCode::BAD_REQUEST);
+    let invalid = send(&app, Method::POST, "/v3/computes", Body::from(json!({"name":"bad","protocol":"http","host":" ","port":0}).to_string()), Some("application/json")).await;
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+}
+
 async fn mock_dynamips(commands: Vec<(&'static str, &'static str)>) -> u16 {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -519,7 +538,7 @@ async fn settings_computes_symbols_and_node_file_actions_are_http_accessible() {
         )
         .await
         .status(),
-        StatusCode::NOT_IMPLEMENTED
+        StatusCode::CONFLICT
     );
     assert!(
         json_body(

@@ -82,7 +82,7 @@ pub(super) async fn reset_all_consoles(
     let pid = project_id.to_string();
     ensure_project_exists_pool(state.store.pool(), &pid).await?;
     Err(ApiError::new(
-        StatusCode::NOT_IMPLEMENTED,
-        "Resetting runtime consoles is not supported",
+        StatusCode::CONFLICT,
+        "Console reset is unavailable because this runtime has no console listener reset hook",
     ))
 }

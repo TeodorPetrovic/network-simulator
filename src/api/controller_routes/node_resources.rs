@@ -82,8 +82,8 @@ pub(super) async fn reset_console(
     )
     .await?;
     Err(ApiError::new(
-        StatusCode::NOT_IMPLEMENTED,
-        "Resetting runtime consoles is not supported",
+        StatusCode::CONFLICT,
+        "Console reset is unavailable because this runtime has no console listener reset hook",
     ))
 }
 pub(super) async fn node_links(
