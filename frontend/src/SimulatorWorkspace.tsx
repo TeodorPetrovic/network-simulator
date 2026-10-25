@@ -25,6 +25,8 @@ import { ProjectStatusBar } from "./ProjectStatusBar";
 import { useWorkspaceSelection } from "./useWorkspaceSelection";
 import { useWorkspaceActions } from "./useWorkspaceActions";
 import { CaptureWindow } from "./capture/CaptureWindow";
+import { WebWiresharkWindow } from "./capture/WebWiresharkWindow";
+import { webWiresharkClientUrl } from "./api";
 
 type DrawingValues = { width: number; height: number; stroke: string; fill: string; strokeWidth: number; text: string; imageDataUrl?: string };
 
@@ -77,6 +79,32 @@ export type SimulatorWorkspaceProps = {
 
 export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [captureViewer, setCaptureViewer] = useState<{ url?: string; downloadUrl?: string; title: string } | null>(null);
+  const [wiresharkWindows, setWiresharkWindows] = useState<Array<{ linkId: string; wsPath: string; title: string; key: number }>>([]);
+  const openedEvents = useMemo(() => new Set<string>(), [props.project.project_id]);
+  useEffect(() => {
+    for (const link of props.topology.links) {
+      const path = link.wireshark_ws_path;
+      if (link.wireshark === true && typeof path === "string" && !openedEvents.has(link.link_id)) {
+        openedEvents.add(link.link_id);
+        setWiresharkWindows((current) => current.some((item) => item.linkId === link.link_id) ? current : [...current, { linkId: link.link_id, wsPath: path, title: `Web Wireshark · ${link.capture_file_name ?? link.link_id}`, key: Date.now() }]);
+      }
+      if (link.capturing === false || link.wireshark === false) setWiresharkWindows((current) => current.filter((item) => item.linkId !== link.link_id));
+    }
+  }, [props.topology.links, openedEvents]);
+  function openWebWireshark(link: Link, newTab = false) {
+    const wsPath = link.wireshark_ws_path;
+    if (typeof wsPath !== "string") return;
+    if (newTab) { window.open(webWiresharkClientUrl(wsPath), "_blank", "noopener"); return; }
+    setWiresharkWindows((current) => current.some((item) => item.linkId === link.link_id) ? current : [...current, { linkId: link.link_id, wsPath, title: `Web Wireshark · ${link.capture_file_name ?? link.link_id}`, key: Date.now() }]);
+  }
+  async function restartWebWireshark(link: Link) {
+    try { const updated = await api.restartWebWireshark(props.project.project_id, link.link_id); const wsPath = updated.wireshark_ws_path ?? link.wireshark_ws_path; if (typeof wsPath === "string") setWiresharkWindows((current) => current.map((item) => item.linkId === link.link_id ? { ...item, wsPath, key: Date.now() } : item)); }
+    catch (reason) { setFeatureMessage(reason instanceof Error ? reason.message : "Could not restart Web Wireshark."); }
+  }
+  async function stopLinkCapture(link: Link) {
+    try { await api.stopLinkCapture(props.project.project_id, link.link_id); setWiresharkWindows((current) => current.filter((item) => item.linkId !== link.link_id)); setTopology((current) => ({ ...current, links: current.links.map((item) => item.link_id === link.link_id ? { ...item, capturing: false, wireshark: false } : item) })); }
+    catch (reason) { setFeatureMessage(reason instanceof Error ? reason.message : "Could not stop packet capture."); }
+  }
   async function openCaptureViewer(link: Link, newTab = false) {
     const capturing = Boolean(link.capturing);
     const route = capturing
@@ -344,7 +372,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
                 />
               </div>
             </ContextMenuTrigger>
-            <WorkspaceContextMenu workspace={props} selectedNode={selectedNode} selectedLink={selectedLink} selectedDrawing={selectedDrawing} setConfigureNode={setConfigureNode} setSymbolNode={setSymbolNode} toggleNodeIsolation={toggleNodeIsolation} toggleNodeLock={toggleNodeLock} setLinkPropertiesOpen={setLinkPropertiesOpen} toggleLinkSuspend={toggleLinkSuspend} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} onOpenCaptureViewer={openCaptureViewer} />
+            <WorkspaceContextMenu workspace={props} selectedNode={selectedNode} selectedLink={selectedLink} selectedDrawing={selectedDrawing} setConfigureNode={setConfigureNode} setSymbolNode={setSymbolNode} toggleNodeIsolation={toggleNodeIsolation} toggleNodeLock={toggleNodeLock} setLinkPropertiesOpen={setLinkPropertiesOpen} toggleLinkSuspend={toggleLinkSuspend} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} onOpenCaptureViewer={openCaptureViewer} onOpenWebWireshark={openWebWireshark} onRestartWebWireshark={restartWebWireshark} onStopCapture={stopLinkCapture} />
           </ContextMenu>
         </Card>
 
@@ -360,6 +388,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
       <InfoDialog project={props.project} nodeCount={topology.nodes.length} linkCount={topology.links.length} drawingCount={topology.drawings.length} eventCursor={topology.event_cursor} open={infoOpen} onOpenChange={setInfoOpen} />
       <ScreenshotDialog open={screenshotOpen} onOpenChange={setScreenshotOpen} onExport={(request) => void exportScreenshot(request)} pngAvailable={pngScreenshotAvailable()} />
       {captureViewer&&<CaptureWindow url={captureViewer.url} downloadUrl={captureViewer.downloadUrl} title={captureViewer.title} onClose={()=>setCaptureViewer(null)}/>}
+      {wiresharkWindows.map((item) => <WebWiresharkWindow key={item.key} projectId={props.project.project_id} linkId={item.linkId} wsPath={item.wsPath} title={item.title} onClose={() => setWiresharkWindows((current) => current.filter((window) => window.linkId !== item.linkId))} />)}
     </section>
   );
 }

@@ -29,6 +29,11 @@ export function applyProjectEvent(
   snapshot: TopologySnapshot,
   message: ProjectEvent,
 ): TopologySnapshot {
+  if (message.action === "link.web_wireshark_started") {
+    const linkId = message.event.link_id;
+    if (typeof linkId !== "string" || typeof message.event.ws_path !== "string") return snapshot;
+    return { ...snapshot, links: snapshot.links.map((link) => link.link_id === linkId ? { ...link, wireshark: true, wireshark_ws_path: message.event.ws_path } : link), event_cursor: Math.max(snapshot.event_cursor, message.sequence) };
+  }
   const id = idFor(message);
   if (!id) return snapshot;
 

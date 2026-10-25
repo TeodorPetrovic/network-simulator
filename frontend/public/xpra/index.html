@@ -1493,6 +1493,9 @@
           }
         );
         client.on_connect = function() {
+          if (window.parent !== window) {
+            window.parent.postMessage({ type: "xpra-connected" }, window.location.origin);
+          }
           init_float_menu();
           if (client.clipboard_enabled) {
             enable_clipboard_autofocus();

@@ -19,6 +19,8 @@ export const linksApi = {
     request<Link>(`/projects/${projectId}/links/${linkId}/capture/start`, jsonBody(settings)),
     stopLinkCapture: (projectId: string, linkId: string) =>
     request<void>(`/projects/${projectId}/links/${linkId}/capture/stop`, jsonBody({})),
+    restartWebWireshark: (projectId: string, linkId: string) =>
+    request<Link>(`/projects/${projectId}/links/${linkId}/capture/wireshark/restart`, jsonBody({})),
     linkCaptureStreamUrl: (projectId: string, linkId: string) =>
     `/v3/projects/${projectId}/links/${linkId}/capture/stream` as const,
     linkCaptureFileUrl: (projectId: string, linkId: string) =>

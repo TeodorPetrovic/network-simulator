@@ -13,11 +13,14 @@ type Props = {
   toggleNodeIsolation: (node: Node) => void; toggleNodeLock: (node: Node) => void; setLinkPropertiesOpen: (open: boolean) => void;
   toggleLinkSuspend: (link: Link) => void; setDrawingEditTool: (tool: DrawingTool | null) => void; setDrawingEditValues: (values: { width: number; height: number; stroke: string; fill: string; strokeWidth: number; text: string; imageDataUrl?: string } | null) => void;
   onOpenCaptureViewer?: (link: Link, newTab?: boolean) => void;
+  onOpenWebWireshark?: (link: Link, newTab?: boolean) => void;
+  onRestartWebWireshark?: (link: Link) => void;
+  onStopCapture?: (link: Link) => void;
   valuesFromDrawing: (drawing: TopologySnapshot["drawings"][number]) => { width: number; height: number; stroke: string; fill: string; strokeWidth: number; text: string; imageDataUrl?: string };
   setDrawingEditOpen: (open: boolean) => void; changeDrawingOrder: (direction: "front" | "back") => void; removeDrawing: () => void;
 };
 
-export function WorkspaceContextMenu({ workspace: props, selectedNode, selectedLink, selectedDrawing, setConfigureNode, setSymbolNode, toggleNodeIsolation, toggleNodeLock, setLinkPropertiesOpen, toggleLinkSuspend, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, onOpenCaptureViewer }: Props) {
+export function WorkspaceContextMenu({ workspace: props, selectedNode, selectedLink, selectedDrawing, setConfigureNode, setSymbolNode, toggleNodeIsolation, toggleNodeLock, setLinkPropertiesOpen, toggleLinkSuspend, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, onOpenCaptureViewer, onOpenWebWireshark, onRestartWebWireshark, onStopCapture }: Props) {
   if (props.connecting && selectedNode) {
     const ports = interfacesForNode(selectedNode);
     const available = new Set(availableInterfacesForNode(selectedNode, props.topology.links).map((port) => `${port.adapter_number}:${port.port_number}`));
@@ -49,8 +52,9 @@ export function WorkspaceContextMenu({ workspace: props, selectedNode, selectedL
                 <ContextMenuItem onSelect={() => setLinkPropertiesOpen(true)}><Settings2 />Link properties and filters</ContextMenuItem>
                 <ContextMenuItem onSelect={() => void toggleLinkSuspend(selectedLink)}>{selectedLink.suspend ? <Play /> : <Pause />}{selectedLink.suspend ? "Resume link" : "Suspend link"}</ContextMenuItem>
                 <ContextMenuItem onSelect={() => setLinkPropertiesOpen(true)}><Activity />Packet capture…</ContextMenuItem>
-                <ContextMenuItem onSelect={() => onOpenCaptureViewer?.(selectedLink)}><Activity />Open capture viewer</ContextMenuItem>
+                <ContextMenuItem onSelect={() => onOpenCaptureViewer?.(selectedLink)}><Activity />Open built-in Capture Viewer</ContextMenuItem>
                 <ContextMenuItem onSelect={() => onOpenCaptureViewer?.(selectedLink, true)}>Open in new tab</ContextMenuItem>
+                {selectedLink.wireshark === true && <><ContextMenuItem onSelect={() => onOpenWebWireshark?.(selectedLink)}>Open Web Wireshark (Inline)</ContextMenuItem><ContextMenuItem onSelect={() => onOpenWebWireshark?.(selectedLink, true)}>Open Web Wireshark in new tab</ContextMenuItem><ContextMenuItem onSelect={() => onRestartWebWireshark?.(selectedLink)}>Restart Web Wireshark</ContextMenuItem><ContextMenuItem variant="destructive" onSelect={() => onStopCapture?.(selectedLink)}>Stop capture</ContextMenuItem></>}
                 <ContextMenuSeparator /><ContextMenuItem variant="destructive" onSelect={props.onDeleteSelection}><Trash2 />Delete link</ContextMenuItem>
               </> : selectedDrawing ? <>
                 <ContextMenuItem onSelect={() => { setDrawingEditTool((selectedDrawing.drawing_kind as DrawingTool) ?? "rectangle"); setDrawingEditValues(valuesFromDrawing(selectedDrawing)); setDrawingEditOpen(true); }}><Pencil />Edit drawing</ContextMenuItem>

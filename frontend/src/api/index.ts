@@ -32,3 +32,19 @@ export function dockerHttpConsoleUrl(protocol: "http" | "https", host: string, p
 export function symbolRawUrl(symbolId: string): string { return `/v3/symbols/${encodeURIComponent(symbolId)}/raw`; }
 export function vpcsConsoleUrl(projectId: string, nodeId: string): Promise<string> { return withSocketTicket(`/v3/compute/projects/${projectId}/vpcs/nodes/${nodeId}/console/ws`); }
 export function dynamipsConsoleUrl(projectId: string, nodeId: string): Promise<string> { return withSocketTicket(`/v3/compute/projects/${projectId}/dynamips/nodes/${nodeId}/console/ws`); }
+export function webWiresharkUrl(path: string): string {
+  const url = new URL(path, window.location.href);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  if (getAuthToken()) url.searchParams.set("token", getAuthToken()!);
+  return url.toString();
+}
+export function webWiresharkClientUrl(path: string): string {
+  const target = new URL("/xpra/index.html", window.location.href);
+  const socket = new URL(webWiresharkUrl(path));
+  target.searchParams.set("server", socket.hostname);
+  if (socket.port) target.searchParams.set("port", socket.port);
+  target.searchParams.set("ssl", String(socket.protocol === "wss:"));
+  target.searchParams.set("path", `${socket.pathname}${socket.search}`);
+  for (const [key, value] of Object.entries({ encoding: "auto", reconnect: "true", clipboard: "false", sound: "false", keyboard: "false", xpramenu: "false", cursor_lock_button: "false", fullscreen_button: "true" })) target.searchParams.set(key, value);
+  return target.toString();
+}
