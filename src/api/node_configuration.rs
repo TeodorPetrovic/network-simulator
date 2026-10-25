@@ -17,6 +17,7 @@ pub(super) fn validate_node_configuration_patch(
             "cpus",
             "adapters",
             "adapter_type",
+            "replicate_network_connection_state",
             "hda_disk_interface",
             "boot_priority",
         ],
@@ -96,6 +97,11 @@ pub(super) fn validate_node_configuration_patch(
                     .filter(|adapters| (1..=99).contains(adapters))
                     .ok_or_else(|| ApiError::bad_request("adapters must be from 1 to 99"))?;
                 json!(adapters)
+            }
+            "replicate_network_connection_state" => {
+                json!(value.as_bool().ok_or_else(|| ApiError::bad_request(
+                    "replicate_network_connection_state must be a boolean"
+                ))?)
             }
             "adapter_type" => {
                 let model = value

@@ -129,6 +129,7 @@ pub struct QemuLink {
     pub adapter_number: u32,
     pub adapter_port: u16,
     pub runtime_port: u16,
+    pub suspended: bool,
 }
 
 #[derive(Serialize)]
@@ -463,6 +464,21 @@ impl QemuRuntime {}
 mod lifecycle;
 
 impl QemuRuntime {
+    pub async fn set_adapter_link(
+        &self,
+        vm: &QemuVm,
+        adapter_number: u32,
+        up: bool,
+    ) -> Result<(), RuntimeError> {
+        self.qmp_execute(
+            &vm.qmp_socket,
+            "human-monitor-command",
+            Some(json!({ "command-line": network::qemu_set_link_command(adapter_number, up) })),
+        )
+        .await
+        .map(|_| ())
+    }
+
     async fn qmp_execute(
         &self,
         socket: &Path,

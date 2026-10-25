@@ -245,7 +245,7 @@ pub(super) async fn attach_runtime_link_endpoint(
                 .qemu
                 .adapter_nio(&endpoint)
                 .map_err(runtime_api_error)?;
-            let qemu_link = qemu_link_from_endpoint(&endpoint)?;
+            let qemu_link = qemu_link_from_endpoint(&endpoint, suspended)?;
             attach_runtime_nio_with_rollback(
                 !relay_already_exists,
                 || async {
@@ -268,6 +268,20 @@ pub(super) async fn attach_runtime_link_endpoint(
                 },
             )
             .await?;
+            if vm.replicate_network_connection_state {
+                if let Err(error) = state
+                    .qemu
+                    .set_adapter_link(&vm, qemu_link.adapter_number, !suspended)
+                    .await
+                {
+                    tracing::warn!(
+                        node_id,
+                        adapter = qemu_link.adapter_number,
+                        error = error.message(),
+                        "Could not synchronize QEMU link carrier after attach"
+                    );
+                }
+            }
         }
         "vpcs" => {
             if let Some(port) = state.vpcs.adapter_udp_port(node_id).await {
@@ -449,7 +463,21 @@ pub(super) async fn detach_runtime_link_endpoint(
             }
         }
         // Like GNS3, QEMU keeps its boot-time NIC and UDP tunnel; only the relay side is torn down.
-        "qemu" => {}
+        "qemu" => {
+            let node = load_topology_node(state.store.pool(), project_id, node_id).await?;
+            let vm = state.qemu.vm_from_node(&node).map_err(runtime_api_error)?;
+            if vm.replicate_network_connection_state {
+                let adapter = endpoint["adapter_number"].as_u64().unwrap_or_default() as u32;
+                if let Err(error) = state.qemu.set_adapter_link(&vm, adapter, false).await {
+                    tracing::warn!(
+                        node_id,
+                        adapter,
+                        error = error.message(),
+                        "Could not lower QEMU link carrier after detach"
+                    );
+                }
+            }
+        }
         "vpcs" => {}
         "dynamips" => {
             let node = load_topology_node(state.store.pool(), project_id, node_id).await?;
@@ -480,7 +508,7 @@ pub(super) async fn detach_runtime_link_endpoint(
     engine_result.map_err(runtime_api_error)
 }
 
-pub(super) fn qemu_link_from_endpoint(endpoint: &Value) -> Result<QemuLink, ApiError> {
+pub(super) fn qemu_link_from_endpoint(endpoint: &Value, suspended: bool) -> Result<QemuLink, ApiError> {
     Ok(QemuLink {
         adapter_number: endpoint["adapter_number"].as_u64().unwrap_or_default() as u32,
         adapter_port: endpoint["runtime_adapter_port"]
@@ -491,6 +519,7 @@ pub(super) fn qemu_link_from_endpoint(endpoint: &Value) -> Result<QemuLink, ApiE
             .as_u64()
             .and_then(|port| u16::try_from(port).ok())
             .ok_or_else(|| ApiError::conflict("QEMU link has no runtime UDP port"))?,
+        suspended,
     })
 }
 

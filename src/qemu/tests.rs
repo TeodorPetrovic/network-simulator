@@ -321,6 +321,7 @@ fn qemu_runtime_arguments_cover_disks_direct_boot_console_and_extra_options() {
         adapter_number: 1,
         adapter_port: 20_000,
         runtime_port: 20_001,
+        suspended: false,
     }];
     assert_eq!(
         super::lifecycle::qemu_network_arguments(&network_vm, &links),
@@ -372,6 +373,7 @@ fn qemu_links_use_a_local_udp_nio_to_the_ubridge_adapter_port() {
         adapter_number: 2,
         adapter_port: 20_000,
         runtime_port: 20_001,
+        suspended: false,
     };
     assert_eq!(
         qemu_netdev_argument(&link, "ns_00000000000000000000000000000001"),

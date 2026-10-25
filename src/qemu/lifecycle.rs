@@ -119,6 +119,18 @@ impl QemuRuntime {
                             let _ = self.stop(vm).await;
                             return Err(error);
                         }
+                        if vm.replicate_network_connection_state {
+                            let links_by_adapter = links
+                                .iter()
+                                .map(|link| (link.adapter_number, !link.suspended))
+                                .collect::<std::collections::HashMap<_, _>>();
+                            for adapter in 0..vm.adapters {
+                                let up = links_by_adapter.get(&adapter).copied().unwrap_or(false);
+                                if let Err(error) = self.set_adapter_link(vm, adapter, up).await {
+                                    tracing::warn!(node_id = %vm.node_id, adapter, error = error.message(), "Could not synchronize QEMU link carrier");
+                                }
+                            }
+                        }
                         return Ok(status);
                     }
                     Ok(_) => {}

@@ -2,6 +2,8 @@
 
 Compared against `~/.cache/gns3-server-3.1/gns3server/api/routes/controller/` route decorators and `controller/__init__.py` router prefixes. Paths below include the server `/v3` prefix. The matrix records route coverage after the auth implementation; auth behavior is summarized below the table.
 
+QEMU node/template properties include `replicate_network_connection_state` (default `true`). When enabled, QEMU NIC carrier follows link presence and suspend state through startup and live link changes.
+
 Statuses mean:
 
 - **Implemented**: current route and behavior match the selected upstream endpoint at the level verified in the existing code.

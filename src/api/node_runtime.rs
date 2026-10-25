@@ -48,7 +48,12 @@ pub(super) async fn apply_node_lifecycle(
                 node_link_entries(state, project_id, node_id)
                     .await?
                     .into_iter()
-                    .map(|(_, endpoint, _)| qemu_link_from_endpoint(&endpoint))
+                    .map(|(link, endpoint, _)| {
+                        qemu_link_from_endpoint(
+                            &endpoint,
+                            link["suspend"].as_bool().unwrap_or(false),
+                        )
+                    })
                     .collect::<Result<Vec<_>, _>>()?
             } else {
                 Vec::new()

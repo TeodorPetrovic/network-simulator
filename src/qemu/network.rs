@@ -27,6 +27,14 @@ pub(super) fn qemu_adapter_netdev_id(adapter_number: u32) -> String {
     format!("nsboot{adapter_number}")
 }
 
+pub(super) fn qemu_set_link_command(adapter_number: u32, up: bool) -> String {
+    format!(
+        "set_link {} {}",
+        qemu_adapter_netdev_id(adapter_number),
+        if up { "on" } else { "off" }
+    )
+}
+
 pub(super) fn qemu_adapter_device_id(adapter_number: u32) -> String {
     format!("nsdev_boot{adapter_number}")
 }
@@ -36,4 +44,15 @@ pub(super) fn qmp_reports_missing_id(error: &RuntimeError) -> bool {
     message.contains("not found")
         || message.contains("does not exist")
         || message.contains("not a valid")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::qemu_set_link_command;
+
+    #[test]
+    fn set_link_targets_boot_netdev_ids() {
+        assert_eq!(qemu_set_link_command(0, true), "set_link nsboot0 on");
+        assert_eq!(qemu_set_link_command(12, false), "set_link nsboot12 off");
+    }
 }
