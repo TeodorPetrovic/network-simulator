@@ -313,11 +313,10 @@ export function SymbolPickerDialog({ projectId, node, open, onOpenChange, onSave
   </DialogContent></Dialog>;
 }
 
-export function LogConsoleDialog({ projectId, cursor, open, onOpenChange }: { projectId: string; cursor: number; open: boolean; onOpenChange: (open: boolean) => void }) {
+export function LogConsoleDialog({ projectId, cursor, open, onOpenChange, onCountsChange }: { projectId: string; cursor: number; open: boolean; onOpenChange: (open: boolean) => void; onCountsChange?: (level: "error" | "warning") => void }) {
   const [messages, setMessages] = useState<Array<{ sequence: number; action: string; text: string }>>([]);
   const [status, setStatus] = useState("Waiting for controller events");
   useEffect(() => {
-    if (!open) return;
     let active = true;
     let socket: WebSocket | null = null;
     setStatus("Connecting to project event stream…");
@@ -330,6 +329,9 @@ export function LogConsoleDialog({ projectId, cursor, open, onOpenChange }: { pr
           const value = JSON.parse(String(event.data)) as { sequence?: number; action?: string; event?: Record<string, unknown> };
           const action = String(value.action ?? "controller.event");
           const details = String(value.event?.name ?? value.event?.node_id ?? value.event?.link_id ?? value.event?.drawing_id ?? "");
+          const severity = String(value.event?.severity ?? value.event?.level ?? value.event?.type ?? "").toLowerCase();
+          if (severity.includes("error")) onCountsChange?.("error");
+          else if (severity.includes("warn")) onCountsChange?.("warning");
           setMessages((current) => [...current.slice(-199), { sequence: Number(value.sequence ?? 0), action, text: details }]);
         } catch { /* Ignore non-JSON keepalive frames. */ }
       };
@@ -337,7 +339,7 @@ export function LogConsoleDialog({ projectId, cursor, open, onOpenChange }: { pr
       socket.onclose = () => setStatus("Project event stream disconnected");
     }).catch(() => setStatus("The project event stream is not available."));
     return () => { active = false; socket?.close(); };
-  }, [open, projectId, cursor]);
+  }, [projectId, cursor, onCountsChange]);
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-w-2xl">
     <DialogHeader><DialogTitle>Project log console</DialogTitle><DialogDescription>Recent events from the live project notification stream.</DialogDescription></DialogHeader>
     <p role="status" className="text-xs text-muted-foreground">{status}</p>

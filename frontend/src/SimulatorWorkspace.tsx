@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Scan, ZoomIn, ZoomOut } from "lucide-react";
 import type { Link, LinkEndpoint, Node, Project, ResourceMonitor, RuntimeInfo, RuntimeTemplate, TopologySnapshot } from "./api";
 import { api } from "./api";
@@ -84,6 +84,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [logOpen, setLogOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [logCounts, setLogCounts] = useState({ errors: 0, warnings: 0 });
   const [screenshotOpen, setScreenshotOpen] = useState(false);
   const [linkPropertiesOpen, setLinkPropertiesOpen] = useState(false);
   const [symbolNode, setSymbolNode] = useState<Node | null>(null);
@@ -116,6 +117,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const selectedLink = props.selection?.kind === "link" ? topology.links.find((link) => link.link_id === props.selection?.id) ?? props.selectedLink : props.selectedLink;
   const { placeDrawing, saveEditedDrawing, removeDrawing, moveDrawing, changeDrawingOrder, toggleProjectLock, toggleNodeLock, toggleNodeIsolation, toggleLinkSuspend, saveNodeLabelPosition, saveLinkEndpointLabelPosition } = useWorkspaceActions({ workspace: props, topology, selectedDrawing, pendingDrawing, projectLocked, setTopology, setSelectedNodeIds, setSelectedDrawingId, setPendingDrawing, setFeatureMessage, setDrawingEditOpen, setProjectLocked });
   const selectedLifecycleNodes = topology.nodes.filter((node) => selectedNodeIds.includes(node.node_id) && !node.locked);
+  const onLogCount = useCallback((level: "error" | "warning") => setLogCounts((current) => ({ ...current, [level === "error" ? "errors" : "warnings"]: current[level === "error" ? "errors" : "warnings"] + 1 })), []);
 
   useEffect(() => { setTopology(props.topology); }, [props.topology]);
   useEffect(() => {
@@ -276,9 +278,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
               <div className={`sim-canvas ${props.connecting ? "is-connecting" : ""} ${pendingDrawing ? "is-drawing" : ""}`}>
                 {featureMessage && <div className="sim-map-inline-notice" role="status">{featureMessage}</div>}
                 <div className="sim-canvas-controls">
-                  <ProjectStatusBar topology={topology} projectLocked={projectLocked} connecting={props.connecting} linkEndpointCount={props.linkEndpoints.length} pendingDrawing={pendingDrawing} onCancelDrawing={() => setPendingDrawing(null)} />
                   <div className="sim-map-actions">
-                    <ResourceMonitorPopover compact resources={props.resources} runtimeInfo={props.runtimeInfo} error={props.resourceError} refreshing={props.refreshingResources} onRefresh={props.onRefreshResources} />
                     <Button variant="ghost" size="icon-sm" aria-label="Zoom out" onClick={() => setView((current) => ({ ...current, zoom: Math.max(0.4, Number((current.zoom - 0.1).toFixed(1))) }))}><ZoomOut /></Button>
                     <span className="w-12 text-center font-mono text-xs text-muted-foreground">{Math.round(view.zoom * 100)}%</span>
                     <Button variant="ghost" size="icon-sm" aria-label="Zoom in" onClick={() => setView((current) => ({ ...current, zoom: Math.min(maxZoom, Number((current.zoom + 0.1).toFixed(1))) }))}><ZoomIn /></Button>
@@ -330,12 +330,13 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
         </Card>
 
       </div>
+      <ProjectStatusBar topology={topology} projectLocked={projectLocked} connecting={props.connecting} linkEndpointCount={props.linkEndpoints.length} pendingDrawing={pendingDrawing} onCancelDrawing={() => setPendingDrawing(null)} connection={props.connection} onOpenLog={() => setLogOpen(true)} errors={logCounts.errors} warnings={logCounts.warnings} resources={<ResourceMonitorPopover resources={props.resources} runtimeInfo={props.runtimeInfo} error={props.resourceError} refreshing={props.refreshingResources} onRefresh={props.onRefreshResources} />} />
       <NodeSettingsDialog node={configureNode} open={configureNode !== null} onOpenChange={(open) => { if (!open) setConfigureNode(null); }} onSave={props.onConfigureNode} />
       <DrawingEditorDialog tool={drawingEditOpen ? drawingEditTool : drawingTool} open={drawingEditOpen || drawingTool !== null} mode={drawingEditOpen ? "edit" : "create"} initial={drawingEditValues} onOpenChange={(open) => { if (!open) { setDrawingTool(null); setDrawingEditOpen(false); } }} onSave={onDrawingConfigured} />
       <SnapshotsDialog projectId={props.project.project_id} open={snapshotsOpen} onOpenChange={setSnapshotsOpen} onRestored={setTopology} />
       <LinkPropertiesDialog projectId={props.project.project_id} link={selectedLink ?? null} nodes={topology.nodes} open={linkPropertiesOpen} onOpenChange={setLinkPropertiesOpen} onUpdated={(updated) => setTopology((current) => ({ ...current, links: current.links.map((link) => link.link_id === updated.link_id ? updated : link) }))} />
       <SymbolPickerDialog projectId={props.project.project_id} node={symbolNode} open={symbolNode !== null} onOpenChange={(open) => { if (!open) setSymbolNode(null); }} onSaved={(updated) => setTopology((current) => ({ ...current, nodes: current.nodes.map((node) => node.node_id === updated.node_id ? updated : node) }))} />
-      <LogConsoleDialog projectId={props.project.project_id} cursor={topology.event_cursor} open={logOpen} onOpenChange={setLogOpen} />
+      <LogConsoleDialog projectId={props.project.project_id} cursor={topology.event_cursor} open={logOpen} onOpenChange={setLogOpen} onCountsChange={onLogCount} />
       <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
       <InfoDialog project={props.project} nodeCount={topology.nodes.length} linkCount={topology.links.length} drawingCount={topology.drawings.length} eventCursor={topology.event_cursor} open={infoOpen} onOpenChange={setInfoOpen} />
       <ScreenshotDialog open={screenshotOpen} onOpenChange={setScreenshotOpen} onExport={(request) => void exportScreenshot(request)} pngAvailable={pngScreenshotAvailable()} />

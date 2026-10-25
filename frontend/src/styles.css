@@ -354,6 +354,14 @@ button, input, textarea, select { font: inherit; }
 .sim-icon-toolbar { display: flex; min-height: 36px; align-items: center; gap: 2px; padding: 3px 8px; border-bottom: 1px solid var(--border); background: var(--muted); }
 .sim-icon-action { width: 28px; height: 28px; }
 .sim-toolbar-divider { height: 22px; width: 1px; margin: 0 5px; background: var(--border); }
+.sim-statusbar { display: flex; min-height: 30px; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--border); padding: 0 10px; color: var(--muted-foreground); background: var(--muted); font-size: 11px; }
+.sim-statusbar-left, .sim-statusbar-right { display: flex; min-width: 0; align-items: center; gap: 7px; }
+.sim-statusbar-left { overflow: hidden; white-space: nowrap; }
+.sim-statusbar-right { flex: 0 0 auto; }
+.sim-status-separator { color: var(--border); }
+.sim-status-context { display: inline-flex; align-items: center; gap: 4px; margin-left: 5px; color: var(--foreground); }
+.sim-log-counts { height: 26px; gap: 5px; padding-inline: 7px; font-size: 10px; }
+.sim-log-counts svg { width: 13px; height: 13px; }
 .sim-project-title { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .sim-project-mark { display: grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; border: 1px solid var(--border); border-radius: 8px; color: var(--primary); background: var(--muted); }
 .sim-project-title h1 { overflow: hidden; max-width: 340px; font-size: 14px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
