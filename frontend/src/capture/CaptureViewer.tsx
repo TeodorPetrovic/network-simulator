@@ -1,26 +1,233 @@
-import {useEffect,useMemo,useRef,useState} from "react";
-import {ChevronDown,ChevronRight,Download,FileUp,Pause,Play,Trash2} from "lucide-react";
-import {Button} from "@/components/ui/button";
-import {dissect,type Field} from "./dissect";
-import {readPcap} from "./pcap";
-import {compileDisplayFilter,DisplayFilterError,type PacketRecord} from "./filter";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { dissect } from "./dissect";
+import { readPcap } from "./pcap";
+import { compileDisplayFilter, DisplayFilterError, type PacketRecord } from "./filter";
+import { CaptureFilterBar, CaptureStatusBar, CaptureToolbar, FollowStreamDialog, PacketDetails, PacketList, StatisticsPanel } from "./CaptureComponents";
 import "./capture.css";
 
-export type CaptureViewerProps={streamUrl?:string;title?:string;onClose?:()=>void};
-export function CaptureViewer({streamUrl,title="Capture Viewer"}:CaptureViewerProps){
- const [packets,setPackets]=useState<PacketRecord[]>([]),[filter,setFilter]=useState(""),[paused,setPaused]=useState(false),[autoScroll,setAutoScroll]=useState(true),[rowStart,setRowStart]=useState(0),[selected,setSelected]=useState<number|null>(null),[tab,setTab]=useState<"packets"|"statistics">("packets"),[expanded,setExpanded]=useState<number[]>([]),[highlight,setHighlight]=useState<Field|null>(null),[status,setStatus]=useState("Ready"); const scroll=useRef<HTMLDivElement>(null),file=useRef<HTMLInputElement>(null),nextNum=useRef(1),cancel=useRef<AbortController|null>(null),pausedRef=useRef(false);
- useEffect(()=>{pausedRef.current=paused},[paused]);
- const consume=async(body:ReadableStream<Uint8Array>)=>{try{for await(const raw of readPcap(body)){while(pausedRef.current)await new Promise(r=>setTimeout(r,100));const packet:PacketRecord={...raw,number:nextNum.current++,time:raw.timestamp,decoded:dissect(raw.data,raw.linkType)};setPackets(p=>[...p,packet]);setStatus("Capturing");}}catch(e){setStatus(e instanceof Error?e.message:"Capture stream failed");}};
- useEffect(()=>{if(!streamUrl)return;cancel.current=new AbortController();void fetch(streamUrl,{signal:cancel.current.signal}).then(r=>{if(!r.ok||!r.body)throw new Error(`Capture request failed (${r.status})`);return consume(r.body)}).catch(e=>{if(e.name!=="AbortError")setStatus(e.message)});return()=>cancel.current?.abort();},[streamUrl]);
- const filtered=useMemo(()=>{if(!filter.trim())return{packets,error:""};try{return{packets:packets.filter(compileDisplayFilter(filter)),error:""};}catch(e){return{packets:[] as PacketRecord[],error:e instanceof DisplayFilterError?e.message:"Invalid display filter"};}},[packets,filter]); const shown=filtered.packets;
- const current=packets.find(p=>p.number===selected)??shown[0];
- const visible=shown.slice(rowStart,rowStart+100); useEffect(()=>{if(autoScroll&&scroll.current)scroll.current.scrollTop=scroll.current.scrollHeight;},[shown.length,autoScroll]);
- const load=async(f:File)=>{setPackets([]);nextNum.current=1;setStatus(`Reading ${f.name}…`);try{const buffer=new Uint8Array(await f.arrayBuffer());const stream=new ReadableStream<Uint8Array>({start(c){c.enqueue(buffer);c.close()}});const all:PacketRecord[]=[];for await(const p of readPcap(stream))all.push({...p,time:p.timestamp,number:nextNum.current++,decoded:dissect(p.data,p.linkType)});setPackets(all);setStatus(`${all.length} packets · ${f.name}`);}catch(e){setStatus(e instanceof Error?e.message:"Could not read capture");}};
- const save=()=>{const size=24+packets.reduce((n,p)=>n+16+p.data.length,0),b=new Uint8Array(size);b.set([0xd4,0xc3,0xb2,0xa1]);const d=new DataView(b.buffer);d.setUint16(4,2,true);d.setUint16(6,4,true);d.setUint32(16,262144,true);d.setUint32(20,1,true);let o=24;for(const p of packets){const sec=Math.floor(p.timestamp),us=Math.round((p.timestamp-sec)*1e6);d.setUint32(o,sec,true);d.setUint32(o+4,us,true);d.setUint32(o+8,p.data.length,true);d.setUint32(o+12,p.originalLength,true);b.set(p.data,o+16);o+=16+p.data.length;}const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([b],{type:"application/vnd.tcpdump.pcap"}));a.download="capture.pcap";a.click();URL.revokeObjectURL(a.href)};
- return <div className="capture-viewer"><div className="capture-toolbar"><strong>{title}</strong><span className="capture-spacer"/><Button size="sm" variant="outline" onClick={()=>setAutoScroll(!autoScroll)}>{autoScroll?"Auto-scroll on":"Auto-scroll off"}</Button><Button size="sm" variant="outline" onClick={()=>setPaused(!paused)}>{paused?<Play/>:<Pause/>}{paused?"Resume":"Pause"}</Button><Button size="sm" variant="outline" onClick={()=>{setPackets([]);nextNum.current=1;setStatus("Cleared");}}><Trash2/>Clear</Button><Button size="sm" variant="outline" onClick={save}><Download/>Save .pcap</Button><Button size="sm" variant="outline" onClick={()=>file.current?.click()}><FileUp/>Open .pcap</Button><input ref={file} hidden type="file" accept=".pcap,application/vnd.tcpdump.pcap" onChange={e=>e.target.files?.[0]&&void load(e.target.files[0])}/></div>
- <div className={`capture-filter ${filtered.error?"invalid":""}`}><label>Display filter</label><input aria-label="Display filter" value={filter} onChange={e=>setFilter(e.target.value)} placeholder="tcp.port == 80 && ip"/><span>{filtered.error||"Apply"}</span></div>
- <div className="capture-tabs"><button onClick={()=>setTab("packets")} aria-selected={tab==="packets"}>Packets</button><button onClick={()=>setTab("statistics")} aria-selected={tab==="statistics"}>Statistics</button></div>
- {tab==="packets"?<><div className="capture-table"><div className="capture-head"><span>No.</span><span>Time</span><span>Source</span><span>Destination</span><span>Protocol</span><span>Length</span><span>Info</span></div><div className="capture-rows" ref={scroll} onScroll={e=>setRowStart(Math.max(0,Math.floor(e.currentTarget.scrollTop/25)-10))}><div style={{height:rowStart*25}}/>{visible.map(p=><button className={`capture-row ${selected===p.number?"selected":""} protocol-${p.decoded.protocol.toLowerCase()}`} key={p.number} onClick={()=>setSelected(p.number)}><span>{p.number}</span><span>{(p.time-(packets[0]?.time??p.time)).toFixed(6)}</span><span>{p.decoded.src||"—"}</span><span>{p.decoded.dst||"—"}</span><span>{p.decoded.protocol}</span><span>{p.originalLength}</span><span>{p.decoded.info}</span></button>)}<div style={{height:Math.max(0,(shown.length-rowStart-visible.length)*25)}}/></div></div><div className="capture-inspector"><div className="capture-tree">{current?.decoded.layers.map((layer,i)=><div key={i}><button className="capture-layer" onClick={()=>setExpanded(v=>v.includes(i)?v.filter(x=>x!==i):[...v,i])}>{expanded.includes(i)?<ChevronDown/>:<ChevronRight/>}{layer.name} · {layer.summary}</button>{expanded.includes(i)&&layer.fields.map((f,j)=><button key={j} className="capture-field" onMouseEnter={()=>setHighlight(f)} onClick={()=>setHighlight(f)}>{f.label}: {f.value}</button>)}</div>)}</div><HexPane packet={current} highlight={highlight}/></div></>:<Statistics packets={shown}/>}<footer>{status}<span>{shown.length} displayed / {packets.length} packets</span></footer></div>;
+export type CaptureViewerProps = {
+  streamUrl?: string;
+  downloadUrl?: string;
+  title?: string;
+  onClose?: () => void;
+};
+
+type Tab = "packets" | "statistics";
+
+export function CaptureViewer({ streamUrl, downloadUrl, title = "Capture Viewer" }: CaptureViewerProps) {
+  const [packets, setPackets] = useState<PacketRecord[]>([]);
+  const [filter, setFilter] = useState("");
+  const [paused, setPaused] = useState(false);
+  const [autoScroll, setAutoScroll] = useState(true);
+  const [relativeTime, setRelativeTime] = useState(true);
+  const [selectedNumber, setSelectedNumber] = useState<number | null>(null);
+  const [tab, setTab] = useState<Tab>("packets");
+  const [status, setStatus] = useState("Ready");
+  const [followPackets, setFollowPackets] = useState<PacketRecord[] | null>(null);
+  const [paneHeight, setPaneHeight] = useState(42);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const filterInput = useRef<HTMLInputElement>(null);
+  const nextNumber = useRef(1);
+  const pausedRef = useRef(paused);
+  const pausedWaiters = useRef<Array<() => void>>([]);
+  const abort = useRef<AbortController | null>(null);
+
+  useEffect(() => { pausedRef.current = paused; }, [paused]);
+
+  const appendCapture = useCallback(async (body: ReadableStream<Uint8Array>, label: string) => {
+    const batch: PacketRecord[] = [];
+    setStatus(label);
+    try {
+      for await (const raw of readPcap(body)) {
+        while (pausedRef.current) await new Promise<void>((resolve) => pausedWaiters.current.push(resolve));
+        batch.push({
+          ...raw,
+          number: nextNumber.current++,
+          time: raw.timestamp,
+          decoded: dissect(raw.data, raw.linkType),
+        });
+        if (batch.length >= 128) {
+          const added = batch.splice(0);
+          await new Promise<void>((resolve) => {
+            const commit = () => { setPackets((current) => [...current, ...added]); resolve(); };
+            const idleWindow = window as Window & { requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number };
+            if (idleWindow.requestIdleCallback) idleWindow.requestIdleCallback(commit, { timeout: 100 });
+            else window.setTimeout(commit, 0);
+          });
+        }
+      }
+      if (batch.length) setPackets((current) => [...current, ...batch]);
+      setStatus(`${nextNumber.current - 1} packets · ${label}`);
+    } catch (reason) {
+      if (reason instanceof Error && reason.name === "AbortError") return;
+      setStatus(reason instanceof Error ? reason.message : "Capture stream failed");
+    }
+  }, []);
+
+  useEffect(() => {
+    const sourceUrl = streamUrl ?? downloadUrl;
+    if (!sourceUrl) return;
+    const controller = new AbortController();
+    abort.current = controller;
+    void fetch(sourceUrl, { signal: controller.signal }).then((response) => {
+      if (!response.ok || !response.body) throw new Error(`Capture request failed (${response.status})`);
+      return appendCapture(response.body, streamUrl ? "Capturing" : "Saved capture");
+    }).catch((reason: unknown) => {
+      if (reason instanceof Error && reason.name !== "AbortError") setStatus(reason.message);
+    });
+    return () => controller.abort();
+  }, [appendCapture, downloadUrl, streamUrl]);
+
+  const filtered = useMemo(() => {
+    if (!filter.trim()) return { packets, error: "" };
+    try {
+      const predicate = compileDisplayFilter(filter);
+      return { packets: packets.filter(predicate), error: "" };
+    } catch (reason) {
+      return { packets: [] as PacketRecord[], error: reason instanceof DisplayFilterError ? reason.message : "Invalid display filter" };
+    }
+  }, [filter, packets]);
+  const selected = packets.find((packet) => packet.number === selectedNumber) ?? filtered.packets[0];
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        filterInput.current?.focus();
+        return;
+      }
+      if (event.target instanceof HTMLInputElement || !filtered.packets.length) return;
+      const current = filtered.packets.findIndex((packet) => packet.number === selectedNumber);
+      let next = current;
+      if (event.key === "ArrowDown") next = Math.min(filtered.packets.length - 1, Math.max(0, current + 1));
+      else if (event.key === "ArrowUp") next = Math.max(0, current < 0 ? 0 : current - 1);
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = filtered.packets.length - 1;
+      else return;
+      event.preventDefault();
+      setSelectedNumber(filtered.packets[next].number);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [filtered.packets, selectedNumber]);
+
+  function clearCapture() {
+    setPackets([]);
+    setSelectedNumber(null);
+    nextNumber.current = 1;
+    setStatus("Cleared");
+  }
+
+  async function loadFile(file: File) {
+    clearCapture();
+    setStatus(`Reading ${file.name}…`);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } });
+    await appendCapture(stream, file.name);
+  }
+
+  async function openDownloadedCapture() {
+    if (!downloadUrl) return;
+    setStatus("Downloading saved capture…");
+    try {
+      const response = await fetch(downloadUrl);
+      if (!response.ok || !response.body) throw new Error(`Download failed (${response.status})`);
+      clearCapture();
+      await appendCapture(response.body, "Saved capture");
+    } catch (reason) {
+      setStatus(reason instanceof Error ? reason.message : "Could not download capture");
+    }
+  }
+
+  function saveCapture() {
+    const size = 24 + packets.reduce((total, packet) => total + 16 + packet.data.length, 0);
+    const bytes = new Uint8Array(size);
+    bytes.set([0xd4, 0xc3, 0xb2, 0xa1]);
+    const data = new DataView(bytes.buffer);
+    data.setUint16(4, 2, true);
+    data.setUint16(6, 4, true);
+    data.setUint32(16, 262144, true);
+    data.setUint32(20, packets[0]?.linkType ?? 1, true);
+    let offset = 24;
+    for (const packet of packets) {
+      const seconds = Math.floor(packet.timestamp);
+      data.setUint32(offset, seconds, true);
+      data.setUint32(offset + 4, Math.round((packet.timestamp - seconds) * 1e6), true);
+      data.setUint32(offset + 8, packet.data.length, true);
+      data.setUint32(offset + 12, packet.originalLength, true);
+      bytes.set(packet.data, offset + 16);
+      offset += 16 + packet.data.length;
+    }
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/vnd.tcpdump.pcap" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "capture.pcap";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function followSelectedStream() {
+    if (!selected) return;
+    const transport = selected.decoded.layers.find((layer) => layer.name.includes("Transmission Control") || layer.name.includes("User Datagram"));
+    if (!transport) return;
+    const ports = transport.fields.filter((field) => field.label.endsWith("Port")).map((field) => field.value);
+    const peer = packets.filter((packet) => {
+      if (packet.decoded.protocol !== selected.decoded.protocol || packet.decoded.src !== selected.decoded.src && packet.decoded.dst !== selected.decoded.src) return false;
+      const currentTransport = packet.decoded.layers.find((layer) => layer.name.includes("Transmission Control") || layer.name.includes("User Datagram"));
+      const currentPorts = currentTransport?.fields.filter((field) => field.label.endsWith("Port")).map((field) => field.value) ?? [];
+      return currentPorts.length === 2 && currentPorts.includes(ports[0]) && currentPorts.includes(ports[1]);
+    });
+    setFollowPackets(peer);
+  }
+
+  return <div className="capture-viewer" onKeyDown={(event) => {
+    if (event.key === "f" && event.altKey) followSelectedStream();
+  }}>
+    <CaptureToolbar
+      title={title}
+      paused={paused}
+      autoScroll={autoScroll}
+      relativeTime={relativeTime}
+      hasDownload={Boolean(downloadUrl)}
+      fileInput={fileInput}
+      onToggleTime={() => setRelativeTime((value) => !value)}
+      onToggleScroll={() => setAutoScroll((value) => !value)}
+      onTogglePause={() => {
+        const nextPaused = !pausedRef.current;
+        pausedRef.current = nextPaused;
+        setPaused(nextPaused);
+        if (!nextPaused) pausedWaiters.current.splice(0).forEach((resolve) => resolve());
+      }}
+      onFollow={followSelectedStream}
+      onClear={clearCapture}
+      onSave={saveCapture}
+      onOpenSaved={() => void openDownloadedCapture()}
+    />
+      <input ref={fileInput} hidden type="file" accept=".pcap,.pcapng,application/vnd.tcpdump.pcap" onChange={(event) => {
+        const file = event.target.files?.[0];
+        if (file) void loadFile(file);
+        event.target.value = "";
+      }} />
+    <CaptureFilterBar value={filter} error={filtered.error} onChange={setFilter} inputRef={filterInput} />
+    <div className="capture-tabs">
+      <button onClick={() => setTab("packets")} aria-selected={tab === "packets"}>Packets</button>
+      <button onClick={() => setTab("statistics")} aria-selected={tab === "statistics"}>Statistics</button>
+    </div>
+    {tab === "packets" ? <>
+      <div className="capture-table" style={{ height: `${paneHeight}%` }}>
+        <PacketList packets={filtered.packets} selectedNumber={selected?.number ?? null} relativeTime={relativeTime} autoScroll={autoScroll} onSelect={(packet) => setSelectedNumber(packet.number)} onApplyFilter={setFilter} />
+      </div>
+      <div className="capture-splitter" role="separator" aria-orientation="horizontal" onPointerDown={(event) => {
+        const startY = event.clientY;
+        const initial = paneHeight;
+        const move = (pointer: PointerEvent) => setPaneHeight(Math.max(20, Math.min(75, initial + ((pointer.clientY - startY) / Math.max(1, innerHeight)) * 100)));
+        const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", end);
+      }} />
+      <PacketDetails packet={selected} onApplyFilter={setFilter} />
+    </> : <StatisticsPanel packets={filtered.packets} />}
+    <CaptureStatusBar status={status} displayed={filtered.packets.length} total={packets.length} />
+    {followPackets && <FollowStreamDialog packets={followPackets} onClose={() => setFollowPackets(null)} />}
+  </div>;
 }
-function HexPane({packet,highlight}:{packet?:PacketRecord;highlight:Field|null}){const b=packet?.data??new Uint8Array();return <div className="capture-hex">{Array.from({length:Math.ceil(b.length/16)},(_,row)=>{const start=row*16,chunk=b.slice(start,start+16),ascii=Array.from(chunk,x=>x>=32&&x<127?String.fromCharCode(x):".").join("");return <div key={row} className="hex-row"><span>{start.toString(16).padStart(4,"0")}</span><code>{Array.from(chunk,(x,i)=><span className={highlight&&start+i>=highlight.byteOffset&&start+i<highlight.byteOffset+highlight.length?"highlight":""} key={i}>{x.toString(16).padStart(2,"0")} </span>)}</code><code>{ascii}</code></div>})}</div>}
-function Statistics({packets}:{packets:PacketRecord[]}){const counts=new Map<string,number>();for(const p of packets)counts.set(p.decoded.protocol,(counts.get(p.decoded.protocol)??0)+1);return <div className="capture-stats"><h3>Protocol hierarchy</h3>{[...counts].map(([p,n])=><p key={p}>{p}<span>{n} packets · {(100*n/Math.max(1,packets.length)).toFixed(1)}%</span></p>)}<h3>Conversations</h3><p>Source<span>Destination · Packets</span></p>{packets.slice(0,100).map(p=><p key={p.number}>{p.decoded.src||"—"}<span>{p.decoded.dst||"—"} · #{p.number}</span></p>)}</div>}

@@ -54,6 +54,7 @@ export function dissectDns(data: Uint8Array, offset: number, transport: "UDP" | 
   let firstQuestion = "";
   let firstType = "A";
   for (let index = 0; index < questions && cursor < data.length; index += 1) {
+    const questionOffset = cursor;
     const name = readName(data, cursor);
     cursor = name.next;
     if (cursor + 4 > data.length) break;
@@ -63,7 +64,7 @@ export function dissectDns(data: Uint8Array, offset: number, transport: "UDP" | 
       firstQuestion = name.name;
       firstType = recordTypes[type] ?? String(type);
     }
-    fields.push(field(`Question ${index + 1}`, `${name.name} ${recordTypes[type] ?? type} class ${klass}`, cursor - (name.next - (cursor - name.next)), 4));
+    fields.push(field(`Question ${index + 1}`, `${name.name} ${recordTypes[type] ?? type} class ${klass}`, questionOffset, cursor + 4 - questionOffset));
     cursor += 4;
   }
   const recordCount = answers + authorities + additionals;
@@ -83,6 +84,16 @@ export function dissectDns(data: Uint8Array, offset: number, transport: "UDP" | 
     else if ([2, 5, 12].includes(type)) value = readName(data, valueOffset).name;
     else if (type === 15 && length >= 3) value = `${read16(data, valueOffset)} ${readName(data, valueOffset + 2).name}`;
     else if (type === 16) value = new TextDecoder().decode(data.subarray(valueOffset + 1, valueOffset + Math.min(length, data[valueOffset] + 1)));
+    else if (type === 6 && length >= 22) {
+      const primary = readName(data, valueOffset);
+      const responsible = readName(data, primary.next);
+      const numbersOffset = responsible.next;
+      if (numbersOffset + 20 <= valueOffset + length) {
+        const names = ["Serial", "Refresh", "Retry", "Expire", "Minimum TTL"];
+        const numbers = names.map((name, index) => `${name} ${(((data[numbersOffset + index * 4] << 24) | (data[numbersOffset + index * 4 + 1] << 16) | (data[numbersOffset + index * 4 + 2] << 8) | data[numbersOffset + index * 4 + 3]) >>> 0)}`).join(", ");
+        value = `${primary.name} ${responsible.name} ${numbers}`;
+      }
+    }
     fields.push(field(`${recordTypes[type] ?? `Type ${type}`} ${name.name}`, `${value} TTL ${ttl} class ${klass}`, cursor, 10 + length));
     cursor = valueOffset + length;
   }

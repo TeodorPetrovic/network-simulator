@@ -77,7 +77,7 @@ export async function* readPcap(
   let format: "classic" | "pcapng" | undefined;
   let classicHeader: PcapHeader | undefined;
   let sectionLittleEndian = true;
-  let interfaces: Array<{ linkType: number; timestampResolution: number }> = [];
+  let interfaces: Array<{ linkType: number; snapLength: number; timestampResolution: number }> = [];
   let sawSection = false;
 
   try {
@@ -153,10 +153,9 @@ export async function* readPcap(
             const options = block.subarray(16, blockLength - 4);
             interfaces.push({
               linkType,
+              snapLength,
               timestampResolution: readOptionResolution(options, sectionLittleEndian),
             });
-            // An interface block is metadata; its snap length is not a packet bound.
-            void snapLength;
           } else if (blockType === 6) {
             if (blockLength < 32) throw new PcapError("Invalid pcapng enhanced packet block.");
             const interfaceId = blockView.getUint32(8, sectionLittleEndian);
@@ -181,7 +180,7 @@ export async function* readPcap(
               throw new PcapError("Invalid pcapng simple packet block.");
             }
             const originalLength = blockView.getUint32(8, sectionLittleEndian);
-            const capturedLength = Math.min(originalLength, blockLength - 16);
+            const capturedLength = Math.min(originalLength, interfaces[0].snapLength || originalLength, blockLength - 16);
             if (capturedLength > MAX_PACKET_LENGTH) {
               throw new PcapError("Capture packet exceeds the 64 MiB safety limit.");
             }

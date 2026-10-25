@@ -20,5 +20,7 @@ export const linksApi = {
     stopLinkCapture: (projectId: string, linkId: string) =>
     request<void>(`/projects/${projectId}/links/${linkId}/capture/stop`, jsonBody({})),
     linkCaptureStreamUrl: (projectId: string, linkId: string) =>
-    `/v3/projects/${projectId}/links/${linkId}/capture/stream` as const
+    `/v3/projects/${projectId}/links/${linkId}/capture/stream` as const,
+    linkCaptureFileUrl: (projectId: string, linkId: string) =>
+    `/v3/projects/${projectId}/links/${linkId}/capture/file` as const
 };

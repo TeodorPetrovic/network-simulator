@@ -21,7 +21,7 @@ function classicCapture(littleEndian: boolean, nanoseconds = false): Uint8Array 
 }
 
 function pcapngCapture(): Uint8Array {
-  const bytes = new Uint8Array(100);
+  const bytes = new Uint8Array(128);
   const data = new DataView(bytes.buffer);
   let offset = 0;
   const block = (type: number, length: number, write: (view: DataView) => void) => {
@@ -54,6 +54,10 @@ function pcapngCapture(): Uint8Array {
     view.setUint32(20, 3, true);
     view.setUint32(24, 3, true);
     bytes.set([4, 5, 6], offset + 28);
+  });
+  block(3, 20, (view) => {
+    view.setUint32(8, 3, true);
+    bytes.set([7, 8, 9], offset + 12);
   });
   return bytes.slice(0, offset);
 }
@@ -89,6 +93,9 @@ describe("capture reader", () => {
     const packets = readPcap(stream([bytes.slice(0, 15), bytes.slice(15, 56), bytes.slice(56)]));
     expect(await packets.next()).toMatchObject({
       value: { timestamp: 2e-9, linkType: 1, data: new Uint8Array([4, 5, 6]) },
+    });
+    expect(await packets.next()).toMatchObject({
+      value: { timestamp: 0, linkType: 1, data: new Uint8Array([7, 8, 9]) },
     });
     expect((await packets.next()).done).toBe(true);
   });

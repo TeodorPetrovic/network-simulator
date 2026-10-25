@@ -76,8 +76,27 @@ export type SimulatorWorkspaceProps = {
 
 
 export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
-  const [captureViewer, setCaptureViewer] = useState<{url:string;title:string}|null>(null);
-  async function openCaptureViewer(link: Link, newTab=false) { const path=api.linkCaptureStreamUrl(props.project.project_id,link.link_id); const url=new URL(path,window.location.href); if(getAuthToken()) url.searchParams.set("ticket",await api.accessTicket(path)); const title=String(link.capture_file_name??link.link_id); if(newTab){window.open(`/capture?stream=${encodeURIComponent(url.toString())}&title=${encodeURIComponent(title)}`,"_blank","noopener");return;} setCaptureViewer({url:url.toString(),title:`Capture · ${title}`}); }
+  const [captureViewer, setCaptureViewer] = useState<{ url?: string; downloadUrl?: string; title: string } | null>(null);
+  async function openCaptureViewer(link: Link, newTab = false) {
+    const capturing = Boolean(link.capturing);
+    const route = capturing
+      ? api.linkCaptureStreamUrl(props.project.project_id, link.link_id)
+      : api.linkCaptureFileUrl(props.project.project_id, link.link_id);
+    const url = new URL(route, window.location.href);
+    if (getAuthToken()) url.searchParams.set("ticket", await api.accessTicket(route));
+    const title = String(link.capture_file_name ?? link.link_id);
+    const viewer = capturing
+      ? { url: url.toString(), title: `Capture · ${title}` }
+      : { downloadUrl: url.toString(), title: `Capture · ${title}` };
+    if (newTab) {
+      const params = new URLSearchParams({ title });
+      if (viewer.url) params.set("stream", viewer.url);
+      if (viewer.downloadUrl) params.set("download", viewer.downloadUrl);
+      window.open(`/capture?${params.toString()}`, "_blank", "noopener");
+      return;
+    }
+    setCaptureViewer(viewer);
+  }
   const [view, setView] = useState({ zoom: 1, centerX: 0, centerY: 0 });
   const viewKey = `ns.view.${props.project.project_id}`;
   const [savedViewLoaded, setSavedViewLoaded] = useState(false);
@@ -340,7 +359,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
       <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
       <InfoDialog project={props.project} nodeCount={topology.nodes.length} linkCount={topology.links.length} drawingCount={topology.drawings.length} eventCursor={topology.event_cursor} open={infoOpen} onOpenChange={setInfoOpen} />
       <ScreenshotDialog open={screenshotOpen} onOpenChange={setScreenshotOpen} onExport={(request) => void exportScreenshot(request)} pngAvailable={pngScreenshotAvailable()} />
-      {captureViewer&&<CaptureWindow url={captureViewer.url} title={captureViewer.title} onClose={()=>setCaptureViewer(null)}/>}
+      {captureViewer&&<CaptureWindow url={captureViewer.url} downloadUrl={captureViewer.downloadUrl} title={captureViewer.title} onClose={()=>setCaptureViewer(null)}/>}
     </section>
   );
 }

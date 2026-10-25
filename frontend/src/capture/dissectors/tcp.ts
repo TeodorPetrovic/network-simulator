@@ -10,14 +10,14 @@ export function dissectTcp(data: Uint8Array, offset: number, ttl?: number): Laye
   if (headerLength < 20 || data.length < offset + headerLength) return undefined;
   const flagByte = data[offset + 13];
   const flagNames = [
-    [0x80, "CWR"], [0x40, "ECE"], [0x20, "URG"], [0x10, "ACK"],
-    [0x08, "PSH"], [0x04, "RST"], [0x02, "SYN"], [0x01, "FIN"],
+    [0x02, "SYN"], [0x10, "ACK"], [0x01, "FIN"], [0x04, "RST"],
+    [0x08, "PSH"], [0x20, "URG"], [0x40, "ECE"], [0x80, "CWR"],
   ] as const;
   const flags = flagNames.filter(([mask]) => flagByte & mask).map(([, name]) => name);
   const payloadLength = Math.max(0, data.length - offset - headerLength);
   const source = String(sourcePort);
   const destination = String(destinationPort);
-  const info = `${sourcePort} → ${destinationPort} [${flags.join(", ")}] Seq=${sequence}${flagByte & 0x10 ? ` Ack=${acknowledgment}` : ""} Win=${read16(data, offset + 14)} Len=${payloadLength}`;
+  let info = `${sourcePort} → ${destinationPort} [${flags.join(", ")}] Seq=${sequence}${flagByte & 0x10 ? ` Ack=${acknowledgment}` : ""} Win=${read16(data, offset + 14)} Len=${payloadLength}`;
   const fields = [
     field("Source Port", source, offset, 2),
     field("Destination Port", destination, offset + 2, 2),
@@ -44,9 +44,7 @@ export function dissectTcp(data: Uint8Array, offset: number, ttl?: number): Laye
     if (optionOffset + 2 > offset + headerLength) break;
     const length = data[optionOffset + 1];
     if (length < 2 || optionOffset + length > offset + headerLength) break;
-    const optionName = data[kind === 2 ? optionOffset + 2 : optionOffset] === undefined
-      ? `TCP option ${kind}`
-      : ({ 2: "Maximum segment size", 3: "Window scale", 4: "SACK permitted", 5: "SACK", 8: "Timestamps" } as Record<number, string>)[kind] ?? `TCP option ${kind}`;
+    const optionName = ({ 2: "Maximum segment size", 3: "Window scale", 4: "SACK permitted", 5: "SACK", 8: "Timestamps" } as Record<number, string>)[kind] ?? `TCP option ${kind}`;
     const value = kind === 2 && length >= 4
       ? String(read16(data, optionOffset + 2))
       : kind === 3 && length >= 3
@@ -56,6 +54,18 @@ export function dissectTcp(data: Uint8Array, offset: number, ttl?: number): Laye
           : `${length} bytes`;
     fields.push(field(optionName, value, optionOffset, length));
     optionOffset += length;
+  }
+
+  const mss = fields.find((item) => item.label === "Maximum segment size")?.value;
+  const windowScale = fields.find((item) => item.label === "Window scale")?.value;
+  const sackPermitted = fields.some((item) => item.label === "SACK permitted");
+  const timestamps = fields.find((item) => item.label === "Timestamps")?.value;
+  if (mss) info += ` MSS=${mss}`;
+  if (windowScale) info += ` WS=${windowScale}`;
+  if (sackPermitted) info += " SACK_PERM";
+  if (timestamps) {
+    const [value, echo] = timestamps.split(" / ");
+    info += ` TSval=${value} TSecr=${echo}`;
   }
 
   return {

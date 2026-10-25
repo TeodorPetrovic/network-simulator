@@ -25,7 +25,8 @@ export function dissectIcmp(data: Uint8Array, offset: number, ttl?: number): Lay
     const sequence = read16(data, offset + 6);
     fields.push(field("Identifier", `0x${id.toString(16).padStart(4, "0")}`, offset + 4, 2));
     fields.push(field("Sequence Number", String(sequence), offset + 6, 2));
-    info += `  id=0x${id.toString(16).padStart(4, "0")}, seq=${sequence}`;
+    const payloadLength = Math.max(0, data.length - offset - 8);
+    info += `  id=0x${id.toString(16).padStart(4, "0")}, seq=${sequence}/${payloadLength}`;
   }
   if (ttl !== undefined) info += `, ttl=${ttl}`;
   return {
