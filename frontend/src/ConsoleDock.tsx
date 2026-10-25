@@ -47,7 +47,8 @@ export function ConsoleDock({
   onHide: () => void;
   onClose: (nodeId: string) => void;
 }) {
-  const [position, setPosition] = useState(() => { try { const v = JSON.parse(localStorage.getItem("ns.console.float") ?? "{}"); return { x: v.x ?? 24, y: v.y ?? 62, width: v.width ?? 620, height: v.height ?? 300 }; } catch { return { x: 24, y: 62, width: 620, height: 300 }; } });
+  const defaultPosition = () => { const width = 620, height = 300; const w = typeof window === "undefined" ? 1500 : window.innerWidth; const h = typeof window === "undefined" ? 900 : window.innerHeight; return { x: Math.max(8, w - width - 270), y: Math.max(8, h - height - 48), width, height }; };
+  const [position, setPosition] = useState(() => { const d = defaultPosition(); try { const v = JSON.parse(localStorage.getItem("ns.console.float") ?? "{}"); return { x: v.x ?? d.x, y: v.y ?? d.y, width: v.width ?? d.width, height: v.height ?? d.height }; } catch { return d; } });
   useEffect(() => { try { localStorage.setItem("ns.console.float", JSON.stringify({...position,minimized,open:true})); } catch {} }, [position, minimized]);
   const drag = useRef<{x:number;y:number;px:number;py:number}|null>(null);
   const save = (next: typeof position) => { setPosition(next); try { localStorage.setItem("ns.console.float", JSON.stringify({...next,minimized,open:true})); } catch {} };
