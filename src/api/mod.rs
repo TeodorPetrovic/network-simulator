@@ -403,7 +403,7 @@ mod batch_create;
 mod consoles;
 mod docker_node;
 mod dynamips_node;
-mod link_capture;
+pub(crate) mod link_capture;
 mod link_create;
 mod link_details;
 mod link_runtime;

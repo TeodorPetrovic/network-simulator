@@ -11,7 +11,7 @@ pub(super) struct LinkCaptureRequest {
 pub(super) async fn start_link_capture(
     State(state): State<AppState>,
     Path((project_id, link_id)): Path<(Uuid, Uuid)>,
-    axum::Extension(principal): axum::Extension<crate::api::auth::Principal>,
+    _principal: axum::Extension<crate::api::auth::Principal>,
     Json(request): Json<LinkCaptureRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     if request.data_link_type.as_deref().unwrap_or("DLT_EN10MB") != "DLT_EN10MB" {
@@ -28,11 +28,9 @@ pub(super) async fn start_link_capture(
     if link["capturing"].as_bool().unwrap_or(false) {
         return Err(ApiError::conflict("Link capture is already active"));
     }
-    let wireshark_subnet = if request.wireshark {
-        Some(configure_web_wireshark(&state).await?)
-    } else {
-        None
-    };
+    if request.wireshark {
+        configure_web_wireshark(&state).await?;
+    }
     let file_name = safe_capture_file_name(
         request
             .capture_file_name
@@ -76,7 +74,7 @@ pub(super) async fn start_link_capture(
         "wireshark": false
     });
     if request.wireshark {
-        let active = update_topology_object(
+        update_topology_object(
             state.clone(),
             project_id.clone(),
             link_id.clone(),
@@ -85,18 +83,14 @@ pub(super) async fn start_link_capture(
             patch.clone(),
         )
         .await?;
-        let path = format!("/v3/projects/{project_id}/links/{link_id}/capture/stream");
-        let ticket = crate::api::auth::mint_capture_ticket(state.store.pool(), &principal, &path)
-            .await
-            .map_err(|error| ApiError::new(StatusCode::FORBIDDEN, error))?;
-        let gateway = docker_gateway(wireshark_subnet.as_deref().unwrap_or("172.31.0.0/22"));
-        let stream_url = format!(
-            "http://{gateway}:{}/v3/projects/{project_id}/links/{link_id}/capture/stream?ticket={ticket}",
-            state.bind_address.port()
-        );
         let session_result = state
             .web_wireshark
-            .start_session(&project_id, &link_id, &stream_url)
+            .start_session(
+                &project_id,
+                &link_id,
+                path.clone(),
+                state.store.pool().clone(),
+            )
             .await;
         if let Err(error) = session_result {
             let _ = LinkEngine::new(state.ubridge.clone())
@@ -137,7 +131,6 @@ pub(super) async fn start_link_capture(
         .await?;
         tx.commit().await?;
         state.store.publish(event);
-        let _ = active;
         return Ok((StatusCode::CREATED, updated).into_response());
     }
     let updated =
@@ -202,7 +195,7 @@ pub(super) async fn download_link_capture(
 pub(super) async fn restart_web_wireshark(
     State(state): State<AppState>,
     Path((project_id, link_id)): Path<(Uuid, Uuid)>,
-    axum::Extension(principal): axum::Extension<crate::api::auth::Principal>,
+    _principal: axum::Extension<crate::api::auth::Principal>,
 ) -> Result<Json<Value>, ApiError> {
     let project_id = project_id.to_string();
     let link_id = link_id.to_string();
@@ -212,7 +205,7 @@ pub(super) async fn restart_web_wireshark(
     if !link["capturing"].as_bool().unwrap_or(false) {
         return Err(ApiError::conflict("This link has no active packet capture"));
     }
-    let subnet = configure_web_wireshark(&state).await?;
+    configure_web_wireshark(&state).await?;
     let file = link["capture_file_name"]
         .as_str()
         .ok_or_else(|| ApiError::not_found("Link has no capture file name"))?;
@@ -220,25 +213,20 @@ pub(super) async fn restart_web_wireshark(
         .as_str()
         .ok_or_else(|| ApiError::not_found("Link has no capture file"))?;
     let capture_path = canonical_capture_file_path(&project_id, file, Some(path), false)?;
-    let stream = format!("/v3/projects/{project_id}/links/{link_id}/capture/stream");
-    let ticket = crate::api::auth::mint_capture_ticket(state.store.pool(), &principal, &stream)
-        .await
-        .map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e))?;
-    let gateway = docker_gateway(&subnet);
-    let stream_url = format!(
-        "http://{gateway}:{}/v3/projects/{project_id}/links/{link_id}/capture/stream?ticket={ticket}",
-        state.bind_address.port()
-    );
-    let (_, _) = state
+    state
         .web_wireshark
-        .start_session(&project_id, &link_id, &stream_url)
+        .restart_feeder(
+            &project_id,
+            &link_id,
+            capture_path,
+            state.store.pool().clone(),
+        )
         .await
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let ws_url = format!(
         "ws://{}/v3/projects/{project_id}/links/{link_id}/capture/web-wireshark",
         state.bind_address
     );
-    let _ = capture_path;
     Ok(Json(json!({"ws_url":ws_url})))
 }
 
@@ -324,23 +312,6 @@ async fn proxy_websocket(client: WebSocket, url: String) {
         }
     };
     tokio::select! { _ = a => {}, _ = b => {} }
-}
-
-fn docker_gateway(cidr: &str) -> String {
-    let ip = cidr
-        .split('/')
-        .next()
-        .unwrap_or("172.31.0.0")
-        .parse::<std::net::Ipv4Addr>()
-        .unwrap_or(std::net::Ipv4Addr::new(172, 31, 0, 0));
-    let octets = ip.octets();
-    format!(
-        "{}.{}.{}.{}",
-        octets[0],
-        octets[1],
-        octets[2],
-        octets[3].saturating_add(1)
-    )
 }
 
 async fn configure_web_wireshark(state: &AppState) -> Result<String, ApiError> {
@@ -439,7 +410,14 @@ pub(super) fn capture_file_body(
     path: PathBuf,
     follow: Option<(SqlitePool, String, String)>,
 ) -> Body {
-    let stream = futures_util::stream::unfold(
+    Body::from_stream(capture_file_stream(path, follow))
+}
+
+pub(crate) fn capture_file_stream(
+    path: PathBuf,
+    follow: Option<(SqlitePool, String, String)>,
+) -> impl futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static {
+    futures_util::stream::unfold(
         (None::<tokio::fs::File>, false),
         move |(mut file, finished)| {
             let path = path.clone();
@@ -494,8 +472,7 @@ pub(super) fn capture_file_body(
                 }
             }
         },
-    );
-    Body::from_stream(stream)
+    )
 }
 
 pub(super) async fn capture_is_active(

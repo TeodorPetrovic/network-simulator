@@ -1,11 +1,19 @@
 use std::{
     collections::{HashMap, HashSet},
+    path::PathBuf,
     process::Stdio,
     sync::Mutex,
     time::Duration,
 };
 
-use tokio::{process::Command, time::timeout};
+use futures_util::StreamExt;
+use sqlx::SqlitePool;
+use tokio::{
+    io::AsyncWriteExt,
+    process::{Child, Command},
+    task::JoinHandle,
+    time::timeout,
+};
 
 const FIRST_PORT: u16 = 10_000;
 const LAST_PORT: u16 = 19_999;
@@ -64,6 +72,12 @@ impl SessionAllocator {
 pub struct WebWiresharkManager {
     allocator: SessionAllocator,
     config: std::sync::Arc<std::sync::RwLock<ManagerSettings>>,
+    feeders: std::sync::Arc<Mutex<HashMap<String, Feeder>>>,
+}
+
+struct Feeder {
+    task: JoinHandle<()>,
+    child: Child,
 }
 
 #[derive(Clone)]
@@ -86,6 +100,7 @@ impl Default for WebWiresharkManager {
                 cpus: "1.0".into(),
                 pids_limit: "1000".into(),
             })),
+            feeders: std::sync::Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -218,9 +233,10 @@ impl WebWiresharkManager {
         &self,
         project_id: &str,
         link_id: &str,
-        stream_url: &str,
-    ) -> Result<(XpraSession, String), String> {
-        let (container, ip) = self.ensure_container(project_id).await?;
+        capture_path: PathBuf,
+        pool: SqlitePool,
+    ) -> Result<XpraSession, String> {
+        let (container, _) = self.ensure_container(project_id).await?;
         let key = format!("{project_id}/{link_id}");
         let session = self
             .allocator
@@ -249,25 +265,114 @@ impl WebWiresharkManager {
             ),
         ])
         .await?;
-        let stream = format!(
-            "curl -N '{}' | wireshark -i - -k --fullscreen -display :{} &",
-            stream_url.replace('\'', "'\\''"),
-            session.display
-        );
-        docker(&[
+        self.spawn_feeder(
+            project_id,
+            link_id,
+            &container,
+            session.clone(),
+            capture_path,
+            pool,
+        )
+        .await?;
+        Ok(session)
+    }
+    pub async fn restart_feeder(
+        &self,
+        project_id: &str,
+        link_id: &str,
+        capture_path: PathBuf,
+        pool: SqlitePool,
+    ) -> Result<XpraSession, String> {
+        let key = format!("{project_id}/{link_id}");
+        self.cancel_feeder(&key).await;
+        let session = self
+            .allocator
+            .get(&key)
+            .ok_or("Web Wireshark session does not exist")?;
+        let container = Self::container_name(project_id);
+        let _ = docker(&[
             "exec",
-            "-e",
-            "XPRA_CLIENT_CAN_SHUTDOWN=false",
             &container,
             "sh",
             "-lc",
-            &stream,
+            &wireshark_cleanup_command(session.display),
         ])
+        .await;
+        self.spawn_feeder(
+            project_id,
+            link_id,
+            &container,
+            session.clone(),
+            capture_path,
+            pool,
+        )
         .await?;
-        Ok((session, ip))
+        Ok(session)
+    }
+    async fn spawn_feeder(
+        &self,
+        project_id: &str,
+        link_id: &str,
+        container: &str,
+        session: XpraSession,
+        capture_path: PathBuf,
+        pool: SqlitePool,
+    ) -> Result<(), String> {
+        let key = format!("{project_id}/{link_id}");
+        self.cancel_feeder(&key).await;
+        let mut child = Command::new("docker")
+            .args([
+                "exec",
+                "-i",
+                "-u",
+                "gns3",
+                "-e",
+                &format!("DISPLAY=:{}", session.display),
+                container,
+                "bash",
+                "-c",
+                "wireshark -i - -k --fullscreen -display \"$DISPLAY\"",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        let mut stdin = child.stdin.take().ok_or("docker exec stdin unavailable")?;
+        let stream = crate::api::link_capture::capture_file_stream(
+            capture_path,
+            Some((pool, project_id.to_owned(), link_id.to_owned())),
+        );
+        let task = tokio::spawn(async move {
+            tokio::pin!(stream);
+            while let Some(chunk) = stream.next().await {
+                match chunk {
+                    Ok(bytes) if stdin.write_all(&bytes).await.is_ok() => {}
+                    _ => break,
+                }
+            }
+            let _ = stdin.shutdown().await;
+        });
+        if let Ok(mut feeders) = self.feeders.lock() {
+            feeders.insert(key, Feeder { task, child });
+        }
+        Ok(())
+    }
+    async fn cancel_feeder(&self, key: &str) {
+        let feeder = self
+            .feeders
+            .lock()
+            .ok()
+            .and_then(|mut feeders| feeders.remove(key));
+        if let Some(mut feeder) = feeder {
+            feeder.task.abort();
+            let _ = feeder.child.kill().await;
+        }
     }
     pub async fn stop_session(&self, project_id: &str, link_id: &str) -> Result<(), String> {
         let key = format!("{project_id}/{link_id}");
+        self.cancel_feeder(&key).await;
         let Some(session) = self.allocator.get(&key) else {
             return Ok(());
         };
@@ -313,6 +418,20 @@ impl WebWiresharkManager {
         Ok(())
     }
     pub async fn delete_project(&self, project_id: &str) {
+        let keys = self
+            .feeders
+            .lock()
+            .map(|feeders| {
+                feeders
+                    .keys()
+                    .filter(|key| key.starts_with(&format!("{project_id}/")))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for key in keys {
+            self.cancel_feeder(&key).await;
+        }
         let _ = docker(&["rm", "-f", &Self::container_name(project_id)]).await;
     }
     pub async fn container_ip(&self, project_id: &str) -> Result<String, String> {
@@ -393,11 +512,12 @@ pub fn xpra_start_command(container: &str, display: u16, port: u16) -> Vec<Strin
 }
 fn cleanup_commands(display: u16) -> [String; 2] {
     [
-        format!(
-            "pkill -f '^wireshark .* -display :{display}([ ]|$)' || true; pkill -f '^Xvfb :{display}([ ]|$)' || true"
-        ),
+        format!("{}; pkill -f '^Xvfb :{display}([ ]|$)' || true", wireshark_cleanup_command(display)),
         format!("rm -f /tmp/.X{display}-lock /tmp/.X11-unix/X{display}"),
     ]
+}
+fn wireshark_cleanup_command(display: u16) -> String {
+    format!("pkill -f '^wireshark .* -display :{display}([ ]|$)' || true")
 }
 async fn docker(args: &[&str]) -> Result<String, String> {
     let output = timeout(
