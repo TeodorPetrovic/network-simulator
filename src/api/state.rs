@@ -388,6 +388,65 @@ impl super::AppState {
             }
         }
     }
+
+    /// Reconcile persisted runtime statuses after startup and periodically while
+    /// the controller is running. Only runtimes with an inspection hook are
+    /// considered; inspection failures leave the stored state untouched.
+    pub async fn reconcile_node_statuses(&self) {
+        let rows = match sqlx::query(
+            "SELECT project_id, object_id, object_json FROM topology_objects
+             WHERE kind = 'node' AND json_extract(object_json, '$.status') != 'stopped'",
+        ).fetch_all(self.store.pool()).await {
+            Ok(rows) => rows,
+            Err(error) => { tracing::error!(%error, "could not load nodes for runtime status reconciliation"); return; }
+        };
+        for row in rows {
+            let project_id: String = row.get("project_id");
+            let node_id: String = row.get("object_id");
+            let mut node = match decode_json(row.get::<String, _>("object_json")) {
+                Ok(node) => node,
+                Err(error) => { tracing::warn!(error = %error.message, %project_id, %node_id, "skipping invalid node during runtime status reconciliation"); continue; }
+            };
+            let status = match inspected_node_status(self, &node).await {
+                Some(Ok(status)) => status,
+                Some(Err(error)) => { tracing::debug!(error = %error.message(), %project_id, %node_id, "runtime status inspection failed"); continue; }
+                None => continue,
+            };
+            if status == "started" || status == "suspended" { continue; }
+            if node["status"].as_str() == Some("stopped") { continue; }
+            node["status"] = json!("stopped");
+            let result = async {
+                let mut tx = self.store.begin_write().await?;
+                sqlx::query("UPDATE topology_objects SET object_json = ? WHERE project_id = ? AND kind = 'node' AND object_id = ?")
+                    .bind(serde_json::to_string(&node).map_err(internal_json_error)?).bind(&project_id).bind(&node_id).execute(&mut *tx).await?;
+                let event = Store::append_event(&mut tx, &project_id, "node.updated", &node).await?;
+                tx.commit().await?;
+                Ok::<_, ApiError>(event)
+            }.await;
+            match result {
+                Ok(event) => self.store.publish(event),
+                Err(error) => tracing::error!(error = %error.message, %project_id, %node_id, "could not persist reconciled node status"),
+            }
+        }
+    }
+
+    pub async fn monitor_node_liveness(&self) {
+        loop {
+            sleep(Duration::from_secs(5)).await;
+            self.reconcile_node_statuses().await;
+        }
+    }
+}
+
+async fn inspected_node_status(state: &AppState, node: &Value) -> Option<Result<String, RuntimeError>> {
+    let id = node["node_id"].as_str().unwrap_or_default();
+    match node["node_type"].as_str()? {
+        "docker" => Some(state.runtime.container_status(node["container_id"].as_str()?).await),
+        "qemu" => Some(match state.qemu.vm_from_node(node) { Ok(vm) => state.qemu.status(&vm).await, Err(error) => return Some(Err(error)) }),
+        "vpcs" => Some(state.vpcs.status(id).await),
+        "dynamips" => Some(match state.dynamips.vm_from_node(node) { Ok(vm) => state.dynamips.status(&vm).await, Err(error) => return Some(Err(error)) }),
+        _ => None,
+    }
 }
 
 fn configured_auto_close_delay() -> Duration {

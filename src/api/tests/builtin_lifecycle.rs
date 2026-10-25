@@ -1,4 +1,38 @@
 use super::*;
+use uuid::Uuid;
+
+#[tokio::test]
+async fn reconciliation_stops_persisted_qemu_nodes_without_a_live_qmp_socket() {
+    let directory = TempDir::new().expect("temporary reconciliation directory");
+    let store = Store::connect(directory.path().join("reconcile.sqlite").to_str().unwrap()).await.unwrap();
+    let project_id = Uuid::new_v4().to_string();
+    let node_id = Uuid::new_v4().to_string();
+    let state_dir = directory.path().join("qemu-state");
+    let qmp_dir = directory.path().join("qemu-sockets");
+    std::fs::create_dir_all(directory.path().join("images")).unwrap();
+    std::fs::create_dir_all(state_dir.join(&project_id).join(&node_id)).unwrap();
+    std::fs::create_dir_all(&qmp_dir).unwrap();
+    let image = state_dir.join(&project_id).join(&node_id).join("disk.qcow2");
+    std::fs::write(&image, b"disk").unwrap();
+    sqlx::query("INSERT INTO projects (project_id,name,status,project_json) VALUES (?, 'reconcile', 'opened', '{}')")
+        .bind(&project_id).execute(store.pool()).await.unwrap();
+    let node_dir = state_dir.join(&project_id).join(&node_id);
+    let node = serde_json::json!({"node_id":node_id,"project_id":project_id,"name":"Q1","node_type":"qemu","status":"started","hda_disk_image":image,"runtime_overlay":image,"runtime_qmp_socket":qmp_dir.join(format!("{node_id}.sock")),"runtime_pid_file":node_dir.join(format!("{node_id}.pid")),"runtime_log_file":node_dir.join(format!("{node_id}.log")),"linked_clone":false});
+    sqlx::query("INSERT INTO topology_objects (project_id,kind,object_id,name,object_json) VALUES (?, 'node', ?, 'Q1', ?)")
+        .bind(&project_id).bind(&node_id).bind(node.to_string()).execute(store.pool()).await.unwrap();
+    let mut events = store.subscribe();
+    let state = AppState::with_runtimes(store.clone(), DockerRuntime::new(),
+        QemuRuntime::with_paths("missing-qemu", "missing-qemu-img", directory.path().join("images"), state_dir, qmp_dir),
+        VpcsRuntime::new(), DynamipsRuntime::new(), crate::marketplace::MarketplaceCatalog::with_directory(directory.path().join("appliances")));
+    let parsed: Value = node.clone();
+    let vm = state.qemu.vm_from_node(&parsed).expect("fake node metadata parses");
+    assert_eq!(state.qemu.status(&vm).await.unwrap(), "stopped");
+    state.reconcile_node_statuses().await;
+    let persisted: String = sqlx::query_scalar("SELECT object_json FROM topology_objects WHERE project_id=? AND kind='node' AND object_id=?")
+        .bind(&project_id).bind(&node_id).fetch_one(store.pool()).await.unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&persisted).unwrap()["status"], "stopped");
+    assert_eq!(events.recv().await.unwrap().action, "node.updated");
+}
 
 #[tokio::test]
 async fn builtin_http_lifecycle_matches_always_running_nodes() {
