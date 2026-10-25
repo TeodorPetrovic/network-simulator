@@ -1063,6 +1063,12 @@
       }
 
       function init_keyboard(client) {
+        // Local patch: the on-screen keyboard library (SimpleKeyboard) is not vendored.
+        if (!window.SimpleKeyboard) {
+          $(".simple-keyboard").hide();
+          $("#keyboard_button").hide();
+          return;
+        }
         const Keyboard = window.SimpleKeyboard.default;
         let kb = new Keyboard({
           onKeyPress: (button) => onKeyPress(button),

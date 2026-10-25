@@ -377,12 +377,25 @@ impl WebWiresharkManager {
             return Ok(());
         };
         let name = Self::container_name(project_id);
+        // Kill Wireshark first: `xpra stop` otherwise waits for it to exit gracefully.
         let _ = docker(&[
             "exec",
             &name,
-            "xpra",
-            "stop",
-            &format!(":{}", session.display),
+            "sh",
+            "-lc",
+            &wireshark_cleanup_command(session.display),
+        ])
+        .await;
+        // `xpra stop` blocks ~10s waiting for the server, so signal the server directly.
+        let _ = docker(&[
+            "exec",
+            &name,
+            "sh",
+            "-lc",
+            &format!(
+                "pkill -KILL -f '^/usr/bin/python3 /usr/bin/xpra start :{}([ ]|$)' || true",
+                session.display
+            ),
         ])
         .await;
         for command in cleanup_commands(session.display) {
@@ -512,12 +525,15 @@ pub fn xpra_start_command(container: &str, display: u16, port: u16) -> Vec<Strin
 }
 fn cleanup_commands(display: u16) -> [String; 2] {
     [
-        format!("{}; pkill -f '^Xvfb :{display}([ ]|$)' || true", wireshark_cleanup_command(display)),
+        format!(
+            "{}; pkill -f '^Xvfb :{display}([ ]|$)' || true",
+            wireshark_cleanup_command(display)
+        ),
         format!("rm -f /tmp/.X{display}-lock /tmp/.X11-unix/X{display}"),
     ]
 }
 fn wireshark_cleanup_command(display: u16) -> String {
-    format!("pkill -f '^wireshark .* -display :{display}([ ]|$)' || true")
+    format!("pkill -KILL -f '^wireshark .* -display :{display}([ ]|$)' || true")
 }
 async fn docker(args: &[&str]) -> Result<String, String> {
     let output = timeout(

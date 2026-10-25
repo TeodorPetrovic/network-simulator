@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     echo "deb [signed-by=/etc/apt/keyrings/xpra.gpg] https://xpra.org/ trixie main" > /etc/apt/sources.list.d/xpra.list && \
     apt-get update && apt-get install -y --no-install-recommends xpra xpra-x11 && \
     rm -rf /var/lib/apt/lists/* && \
+    find /usr -name 'xpra_dissector.lua' -delete && \
     useradd --create-home --uid 1000 --shell /bin/bash gns3 && \
     install -d -o 1000 -g 1000 -m 0700 /run/user/1000 && \
     install -d -o 1000 -g 1000 -m 1777 /tmp/.X11-unix

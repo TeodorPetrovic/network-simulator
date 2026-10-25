@@ -341,6 +341,7 @@ pub fn router(state: AppState) -> Router {
             ServeFile::new("frontend/dist/client/index.html"),
         )
         .nest_service("/assets", ServeDir::new("frontend/dist/client/assets"))
+        .nest_service("/xpra", ServeDir::new("frontend/dist/client/xpra"))
         .route_layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES));
     let image_upload = Router::new()
         .route(
