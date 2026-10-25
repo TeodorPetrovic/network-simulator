@@ -152,6 +152,7 @@ pub fn router(state: AppState) -> Router {
             "/v3/projects/{project_id}/nodes",
             get(topology_listing::list_nodes).post(node_templates::create_node),
         )
+        .route("/v3/projects/{project_id}/nodes/batch", post(batch_create::create_nodes))
         .route(
             "/v3/projects/{project_id}/templates/{template_id}",
             post(node_templates::create_node_from_template),
@@ -190,6 +191,7 @@ pub fn router(state: AppState) -> Router {
             "/v3/projects/{project_id}/links",
             get(topology_listing::list_links).post(link_create::create_link),
         )
+        .route("/v3/projects/{project_id}/links/batch", post(batch_create::create_links))
         .route(
             "/v3/projects/{project_id}/links/{link_id}",
             get(link_details::get_link)
@@ -333,6 +335,7 @@ mod node_handlers;
 mod node_lifecycle;
 mod node_runtime;
 mod node_templates;
+mod batch_create;
 mod notifications;
 mod objects;
 mod project_store;

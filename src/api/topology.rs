@@ -60,7 +60,7 @@ pub(super) async fn create_topology_object(
     project_id: &str,
     kind: &str,
     id_field: &str,
-    value: Value,
+    mut value: Value,
 ) -> Result<Response, ApiError> {
     let object = value
         .as_object()
@@ -89,6 +89,18 @@ pub(super) async fn create_topology_object(
         let value = decode_json(row.get::<String, _>("object_json"))?;
         tx.commit().await?;
         return Ok(Json(value).into_response());
+    }
+    if kind == "node" {
+        let strict_names = value.get("strict_names").and_then(Value::as_bool).unwrap_or(false);
+        let name = value.get("name").and_then(Value::as_str).unwrap_or_default();
+        if strict_names {
+            let duplicate: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM topology_objects WHERE project_id=? AND kind='node' AND name=?)")
+                .bind(project_id).bind(name).fetch_one(&mut *tx).await?;
+            if duplicate != 0 {
+                return Err(ApiError::conflict(format!("Node name '{name}' is already used")));
+            }
+        }
+        if let Some(object) = value.as_object_mut() { object.remove("strict_names"); }
     }
     if kind == "link" {
         validate_link_in_tx(&mut tx, project_id, &value).await?;

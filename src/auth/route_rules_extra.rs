@@ -155,6 +155,11 @@ pub const ROUTE_RULES_EXTRA: &[RouteRule] = rules![
     ),
     (
         "POST",
+        "/projects/{project_id}/nodes/batch",
+        RouteClass::Privilege("Node.Allocate")
+    ),
+    (
+        "POST",
         "/projects/{project_id}/templates/{template_id}",
         RouteClass::Privilege("Node.Allocate")
     ),
@@ -281,6 +286,11 @@ pub const ROUTE_RULES_EXTRA: &[RouteRule] = rules![
     (
         "POST",
         "/projects/{project_id}/links",
+        RouteClass::Privilege("Link.Allocate")
+    ),
+    (
+        "POST",
+        "/projects/{project_id}/links/batch",
         RouteClass::Privilege("Link.Allocate")
     ),
     (
