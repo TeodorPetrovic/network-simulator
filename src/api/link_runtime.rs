@@ -595,3 +595,38 @@ pub(super) async fn detach_node_links(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::Store;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn dynamips_link_validation_uses_each_configured_slot_port_count() {
+        let directory = TempDir::new().unwrap();
+        let store = Store::connect(directory.path().join("links.sqlite").to_str().unwrap())
+            .await
+            .unwrap();
+        let project_id = uuid::Uuid::new_v4().to_string();
+        let node_id = uuid::Uuid::new_v4().to_string();
+        let project = json!({"project_id":project_id,"name":"links","status":"opened"});
+        sqlx::query("INSERT INTO projects(project_id,name,status,project_json) VALUES(?,?,'opened',?)")
+            .bind(&project_id).bind("links").bind(project.to_string())
+            .execute(store.pool()).await.unwrap();
+        let node = json!({"node_id":node_id,"project_id":project_id,"node_type":"dynamips","slot0":"NM-1FE-TX","slot1":"NM-4T"});
+        sqlx::query("INSERT INTO topology_objects(project_id,kind,object_id,name,object_json) VALUES(?,'node',?,'R1',?)")
+            .bind(&project_id).bind(&node_id).bind(node.to_string())
+            .execute(store.pool()).await.unwrap();
+
+        let valid = json!({"nodes":[{"node_id":node_id,"adapter_number":1,"port_number":3}]});
+        let endpoints = link_runtime_endpoints(store.pool(), &project_id, &valid).await.unwrap();
+        assert_eq!(endpoints[0]["adapter_number"], 1);
+        assert_eq!(endpoints[0]["port_number"], 3);
+
+        let invalid = json!({"nodes":[{"node_id":node_id,"adapter_number":1,"port_number":4}]});
+        let error = link_runtime_endpoints(store.pool(), &project_id, &invalid).await.unwrap_err();
+        assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(error.message.contains("5 dynamips ports"));
+    }
+}
