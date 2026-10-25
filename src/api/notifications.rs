@@ -10,8 +10,10 @@ pub(super) async fn project_notifications(
     ensure_project_exists_pool(state.store.pool(), &project_id).await?;
     let activity = state.project_activity.clone();
     Ok(websocket.on_upgrade(move |socket| async move {
-        let _activity = activity.open_websocket(project_id.clone());
-        websocket_session(socket, state, project_id, query.after).await;
+        let activity_guard = activity.open_websocket(project_id.clone());
+        websocket_session(socket, state.clone(), project_id.clone(), query.after).await;
+        drop(activity_guard);
+        state.auto_close_after_disconnect(&project_id).await;
     }))
 }
 

@@ -72,6 +72,7 @@ pub struct AppState {
     project_operation_locks: Arc<StdMutex<HashMap<String, Arc<AsyncMutex<()>>>>>,
     project_activity: ProjectActivityTracker,
     idle_stop_minutes: Option<u64>,
+    auto_close_delay: Duration,
 }
 
 pub fn router(state: AppState) -> Router {

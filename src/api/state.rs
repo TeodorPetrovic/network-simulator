@@ -44,6 +44,7 @@ impl super::AppState {
             project_operation_locks: Arc::new(StdMutex::new(HashMap::new())),
             project_activity: ProjectActivityTracker::default(),
             idle_stop_minutes: configured_idle_stop_minutes(),
+            auto_close_delay: configured_auto_close_delay(),
         }
     }
 
@@ -91,12 +92,39 @@ impl super::AppState {
             project_operation_locks: Arc::new(StdMutex::new(HashMap::new())),
             project_activity: ProjectActivityTracker::default(),
             idle_stop_minutes: configured_idle_stop_minutes(),
+            auto_close_delay: configured_auto_close_delay(),
         }
     }
 
     pub fn with_bind_address(mut self, bind_address: SocketAddr) -> Self {
         self.bind_address = bind_address;
         self
+    }
+
+    pub(super) async fn auto_close_after_disconnect(&self, project_id: &str) {
+        sleep(self.auto_close_delay).await;
+        if self.project_activity.has_open_websockets(project_id) {
+            return;
+        }
+        let project = match fetch_project(self.store.pool(), project_id).await {
+            Ok(project) => project,
+            Err(error) => {
+                tracing::debug!(error = %error.message, %project_id, "project disappeared before auto-close");
+                return;
+            }
+        };
+        if !project["auto_close"].as_bool().unwrap_or(false)
+            || project["status"].as_str() != Some("opened")
+        {
+            return;
+        }
+        let Ok(project_uuid) = Uuid::parse_str(project_id) else {
+            return;
+        };
+        if let Err(error) = projects::set_project_status(self.clone(), project_uuid, "closed").await
+        {
+            tracing::error!(error = %error.message, %project_id, "could not auto-close project after notifications disconnected");
+        }
     }
 
     pub(super) async fn lock_project_operations(&self, project_id: &str) -> OwnedMutexGuard<()> {
@@ -360,4 +388,13 @@ impl super::AppState {
             }
         }
     }
+}
+
+fn configured_auto_close_delay() -> Duration {
+    let millis = std::env::var("NETWORK_SIMULATOR_AUTO_CLOSE_DELAY_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|millis| *millis <= 60_000)
+        .unwrap_or(1_000);
+    Duration::from_millis(millis)
 }

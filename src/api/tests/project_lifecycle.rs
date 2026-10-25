@@ -85,3 +85,30 @@ async fn open_project_auto_start_path_is_used() {
         "started"
     );
 }
+
+#[tokio::test]
+async fn auto_close_closes_project_after_last_notification_disconnects() {
+    let directory = TempDir::new().expect("temporary directory");
+    let store = Store::connect(directory.path().join("auto-close.sqlite").to_str().unwrap())
+        .await
+        .expect("database connects");
+    let mut state = AppState::new(store.clone());
+    state.auto_close_delay = std::time::Duration::from_millis(1);
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO projects(project_id,name,status,project_json) VALUES(?,?,'opened',?)")
+        .bind(&id)
+        .bind("Auto close")
+        .bind(serde_json::json!({"project_id":id,"name":"Auto close","status":"opened","auto_close":true}).to_string())
+        .execute(store.pool())
+        .await
+        .expect("project inserted");
+
+    state.auto_close_after_disconnect(&id).await;
+
+    let status: String = sqlx::query_scalar("SELECT status FROM projects WHERE project_id=?")
+        .bind(id)
+        .fetch_one(store.pool())
+        .await
+        .expect("project status loads");
+    assert_eq!(status, "closed");
+}
