@@ -14,6 +14,19 @@ function uptimeSeconds(text) {
   return Number(clock[1] ?? 0) * 3600 + Number(clock[2]) * 60 + Number(clock[3]);
 }
 
+async function waitInterfaceRunning(router, name, running) {
+  let latest = "";
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    latest = await router.run("/interface print");
+    const row = latest.split(/\r?\n/).find((line) => new RegExp(`\\b${name}\\b`).test(line));
+    assert.ok(row, `RouterOS lists ${name}: ${latest}`);
+    const isRunning = /(?:^|\s)R\s/.test(row.replace(/\x1b\[[0-9;]*m/g, ""));
+    if (isRunning === running) return;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  assert.fail(`${name} running=${running} did not converge; last /interface print:\n${latest}`);
+}
+
 test("MikroTik CHR accepts and removes links while running without rebooting", async (t) => {
   if (!existsSync(chrImage)) return t.skip("local MikroTik CHR image is absent");
   const lab = await scenario(t, "scenario-mikrotik-hotlink");
@@ -29,12 +42,15 @@ test("MikroTik CHR accepts and removes links while running without rebooting", a
   t.after(() => router.close());
   const initial = await router.run("/system resource print", /uptime:\s*([^\r\n]+)/i, 30000);
   const initialUptime = uptimeSeconds(initial);
+  await waitInterfaceRunning(router, "ether1", false);
+  await waitInterfaceRunning(router, "ether2", false);
 
   await Promise.all([startNode(lab.server, lab.projectId, pc1), startNode(lab.server, lab.projectId, pc2)]);
   const c1 = await lab.console(pc1), c2 = await lab.console(pc2);
   t.after(() => { c1.close(); c2.close(); });
   await Promise.all([c1.expectRegex(/VPCS>/), c2.expectRegex(/VPCS>/)]);
   await link(lab.server, lab.projectId, { node: chr }, { node: pc1 });
+  await waitInterfaceRunning(router, "ether1", true);
   await c1.sendLine("ip 10.1.1.10/24 10.1.1.1"); await c1.expectRegex(/VPCS>/);
   await router.run("/ip address add address=10.1.1.1/24 interface=ether1");
   await c1.sendLine("ping 10.1.1.1 -c 2");
@@ -52,13 +68,20 @@ test("MikroTik CHR accepts and removes links while running without rebooting", a
   await c1.expectRegex(/icmp_seq=2 timeout|100% packet loss|unreachable/i, { timeout: 15000 });
 
   await link(lab.server, lab.projectId, { node: chr }, { node: pc1 });
+  await waitInterfaceRunning(router, "ether1", true);
   await c1.sendLine("ping 10.1.1.1 -c 2");
   await c1.expectRegex(/84 bytes from 10\.1\.1\.1/, { timeout: 45000 });
   await link(lab.server, lab.projectId, { node: chr, adapter_number: 1 }, { node: pc2 });
+  await waitInterfaceRunning(router, "ether2", true);
   await c2.sendLine("ip 10.1.2.10/24 10.1.2.1"); await c2.expectRegex(/VPCS>/);
   await router.run("/ip address add address=10.1.2.1/24 interface=ether2");
   await c2.sendLine("ping 10.1.2.1 -c 2");
   await c2.expectRegex(/84 bytes from 10\.1\.2\.1/, { timeout: 45000 });
+  const linksAfterHotlink = await lab.server.api("GET", `/projects/${lab.projectId}/links`);
+  assert.equal(linksAfterHotlink.status, 200, JSON.stringify(linksAfterHotlink));
+  const deletedHotlink = await lab.server.api("DELETE", `/projects/${lab.projectId}/links/${linksAfterHotlink.json.find((item) => item.nodes.some((endpoint) => endpoint.node_id === chr.node_id && endpoint.adapter_number === 1)).link_id}`);
+  assert.equal(deletedHotlink.status, 204, JSON.stringify(deletedHotlink));
+  await waitInterfaceRunning(router, "ether2", false);
   const final = await router.run("/system resource print", /uptime:\s*([^\r\n]+)/i);
   assert.ok(uptimeSeconds(final) > initialUptime, "uptime continues increasing while links are attached");
 });
