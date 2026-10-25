@@ -151,6 +151,7 @@ button, input, textarea, select { font: inherit; }
 .pages-nav-link:hover, .pages-nav-link.is-active { color: var(--foreground); background: var(--muted); }
 .pages-nav-link.is-active { font-weight: 600; }
 .pages-main { min-height: 0; flex: 1; overflow: auto; }
+.main-area > .pages-shell { height: auto; flex: 1; }
 .pages-content { width: min(100%, 1440px); margin: 0 auto; padding: 28px clamp(16px, 3vw, 40px) 48px; }
 .pages-title-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
 .pages-title-row h1 { margin: 2px 0 0; font-size: clamp(24px, 3vw, 30px); font-weight: 680; letter-spacing: -.035em; }

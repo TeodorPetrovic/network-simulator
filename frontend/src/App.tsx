@@ -8,6 +8,7 @@ import { errorMessage, samePort, upsertLink } from "./appUtils";
 import { SimulatorWorkspace } from "./SimulatorWorkspace";
 import type { ConsoleTarget } from "./ConsoleDock";
 import { ApplianceManagerPage } from "./ApplianceManagerPage";
+import { PagesShell } from "./PagesShell";
 import { GlobalToast } from "./GlobalToast";
 import { NodeDialog } from "./NodeDialog";
 import { AppNavigationHeader } from "./AppNavigationHeader";
@@ -317,7 +318,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
         <GlobalToast error={error} notice={notice} onDismiss={() => { setError(""); setNotice(""); }} />
 
         <main className="main-area">
-          {showApplianceManager ? <ApplianceManagerPage onBack={onBackFromApplianceManager ?? (() => navigateToProject(projectId))} onOpenPreferences={onOpenPreferences} onOpenImageCatalog={() => setMarketplaceOpen(true)} onTemplatesChanged={setTemplates} /> : projectId ? (busy || !project || !topology ? <div className="sim-loading"><Activity className="animate-pulse" />Loading project topology…</div> : <SimulatorWorkspace
+          {showApplianceManager ? <PagesShell active="Appliances"><ApplianceManagerPage onBack={onBackFromApplianceManager ?? (() => navigateToProject(projectId))} onOpenPreferences={onOpenPreferences} onOpenImageCatalog={() => setMarketplaceOpen(true)} onTemplatesChanged={setTemplates} /></PagesShell> : projectId ? (busy || !project || !topology ? <div className="sim-loading"><Activity className="animate-pulse" />Loading project topology…</div> : <SimulatorWorkspace
             project={project}
             topology={topology}
             templates={templates}
