@@ -21,7 +21,7 @@ import type { Selection } from "./map/TopologyCanvas";
 
 import { WorkspaceSidebar } from "./WorkspaceSidebar";
 import { WorkspaceContextMenu } from "./WorkspaceContextMenu";
-import { WorkspaceToolbar } from "./WorkspaceToolbar";
+import { WorkspaceIconToolbar, WorkspaceToolbar } from "./WorkspaceToolbar";
 import { ProjectStatusBar } from "./ProjectStatusBar";
 import { useWorkspaceSelection } from "./useWorkspaceSelection";
 import { useWorkspaceActions } from "./useWorkspaceActions";
@@ -222,6 +222,12 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
     if (targets.length) setFeatureMessage(`${action[0]?.toUpperCase()}${action.slice(1)} requested for ${targets.length} selected device${targets.length === 1 ? "" : "s"}.`);
   }
 
+  function runAllLifecycle(action: LifecycleAction) {
+    const targets = nodesForLifecycle(topology.nodes, action);
+    targets.forEach((node) => props.onNodeLifecycle(node.node_id, action));
+    if (targets.length) setFeatureMessage(`${action[0]?.toUpperCase()}${action.slice(1)} requested for ${targets.length} device${targets.length === 1 ? "" : "s"}.`);
+  }
+
   function deleteSelectedNodes() {
     const targets = topology.nodes.filter((node) => selectedNodeIds.includes(node.node_id));
     if (targets.length === 1 && props.selection?.kind === "node") { props.onDeleteSelection(); return; }
@@ -259,7 +265,8 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
 
   return (
     <section className="sim-workspace" aria-label={`Project ${props.project.name}`}>
-      <WorkspaceToolbar workspace={props} topology={topology} selectedNodeIds={selectedNodeIds} selectedLifecycleNodes={selectedLifecycleNodes} projectLocked={projectLocked} gridVisible={gridVisible} setGridVisible={setGridVisible} snapToGrid={snapToGrid} setSnapToGrid={setSnapToGrid} selectedDrawing={selectedDrawing} runBulkLifecycle={runBulkLifecycle} deleteSelectedNodes={deleteSelectedNodes} toggleProjectLock={toggleProjectLock} startDrawingTool={startDrawingTool} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} setSnapshotsOpen={setSnapshotsOpen} setLogOpen={setLogOpen} setScreenshotOpen={setScreenshotOpen} setHelpOpen={setHelpOpen} setInfoOpen={setInfoOpen} setView={(zoom) => setView((current) => ({ ...current, zoom }))} zoomIn={() => setView((current) => ({ ...current, zoom: Math.min(maxZoom, Number((current.zoom + 0.1).toFixed(1))) }))} zoomOut={() => setView((current) => ({ ...current, zoom: Math.max(0.4, Number((current.zoom - 0.1).toFixed(1))) }))} fitTopology={fitTopology} />
+      <WorkspaceToolbar workspace={props} topology={topology} selectedNodeIds={selectedNodeIds} selectedLifecycleNodes={selectedLifecycleNodes} projectLocked={projectLocked} gridVisible={gridVisible} setGridVisible={setGridVisible} snapToGrid={snapToGrid} setSnapToGrid={setSnapToGrid} selectedDrawing={selectedDrawing} runBulkLifecycle={runBulkLifecycle} runAllLifecycle={runAllLifecycle} deleteSelectedNodes={deleteSelectedNodes} toggleProjectLock={toggleProjectLock} startDrawingTool={startDrawingTool} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} setSnapshotsOpen={setSnapshotsOpen} setLogOpen={setLogOpen} setScreenshotOpen={setScreenshotOpen} setHelpOpen={setHelpOpen} setInfoOpen={setInfoOpen} setView={(zoom) => setView((current) => ({ ...current, zoom }))} zoomIn={() => setView((current) => ({ ...current, zoom: Math.min(maxZoom, Number((current.zoom + 0.1).toFixed(1))) }))} zoomOut={() => setView((current) => ({ ...current, zoom: Math.max(0.4, Number((current.zoom - 0.1).toFixed(1))) }))} fitTopology={fitTopology} />
+      <WorkspaceIconToolbar workspace={props} startDrawingTool={startDrawingTool} runAllLifecycle={runAllLifecycle} zoomIn={() => setView((current) => ({ ...current, zoom: Math.min(maxZoom, Number((current.zoom + 0.1).toFixed(1))) }))} zoomOut={() => setView((current) => ({ ...current, zoom: Math.max(0.4, Number((current.zoom - 0.1).toFixed(1))) }))} fitTopology={fitTopology} />
 
       <div className="sim-workspace-grid">
         <WorkspaceSidebar workspace={props} topology={topology} rightPanel={rightPanel} setRightPanel={setRightPanel} deviceQuery={deviceQuery} setDeviceQuery={setDeviceQuery} groupedTemplates={groupedTemplates} openTemplateGroups={openTemplateGroups} setOpenTemplateGroups={setOpenTemplateGroups} visibleSummaryNodes={visibleSummaryNodes} summaryQuery={summaryQuery} setSummaryQuery={setSummaryQuery} summaryStatus={summaryStatus} setSummaryStatus={setSummaryStatus} setSelectedNodeIds={setSelectedNodeIds} selectedNode={selectedNode} selectedLink={selectedLink} setConfigureNode={setConfigureNode} setLinkPropertiesOpen={setLinkPropertiesOpen} toggleLinkSuspend={toggleLinkSuspend} />

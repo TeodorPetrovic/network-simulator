@@ -14,6 +14,7 @@ type Props = {
   snapToGrid: boolean; setSnapToGrid: (value: boolean | ((current: boolean) => boolean)) => void;
   selectedDrawing: TopologySnapshot["drawings"][number] | null; runBulkLifecycle: (action: "start" | "stop" | "suspend" | "reload") => void;
   deleteSelectedNodes: () => void; toggleProjectLock: () => void; startDrawingTool: (tool: DrawingTool) => void;
+  runAllLifecycle: (action: "start" | "stop" | "suspend" | "reload") => void;
   setDrawingEditTool: (tool: DrawingTool | null) => void; setDrawingEditValues: (values: DrawingValues | null) => void;
   valuesFromDrawing: (drawing: TopologySnapshot["drawings"][number]) => DrawingValues; setDrawingEditOpen: (open: boolean) => void;
   changeDrawingOrder: (direction: "front" | "back") => void; removeDrawing: () => void;
@@ -22,7 +23,7 @@ type Props = {
   setView: (zoom: number) => void; zoomIn: () => void; zoomOut: () => void; fitTopology: () => void;
 };
 
-export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, selectedLifecycleNodes, projectLocked, gridVisible, setGridVisible, snapToGrid, setSnapToGrid, selectedDrawing, runBulkLifecycle, deleteSelectedNodes, toggleProjectLock, startDrawingTool, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, setSnapshotsOpen, setLogOpen, setScreenshotOpen, setHelpOpen, setInfoOpen, setView, zoomIn, zoomOut, fitTopology }: Props) {
+export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, selectedLifecycleNodes, projectLocked, gridVisible, setGridVisible, snapToGrid, setSnapToGrid, selectedDrawing, runBulkLifecycle, runAllLifecycle, deleteSelectedNodes, toggleProjectLock, startDrawingTool, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, setSnapshotsOpen, setLogOpen, setScreenshotOpen, setHelpOpen, setInfoOpen, setView, zoomIn, zoomOut, fitTopology }: Props) {
   const supported = (label: string, action: () => void, disabled = false) => <MenubarItem disabled={disabled} onSelect={action}>{label}</MenubarItem>;
   const draw = (tool: DrawingTool, label: string) => supported(label, () => startDrawingTool(tool));
   const selected = selectedLifecycleNodes.length > 0;
@@ -45,9 +46,9 @@ export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, 
       </MenubarContent></MenubarMenu>
       <MenubarMenu><MenubarTrigger>Control</MenubarTrigger><MenubarContent>
         {supported("Start all", props.onStartAll, props.batchLifecycleRunning || !nodesForLifecycle(topology.nodes, "start").length)}
-        {supported("Suspend all", () => runBulkLifecycle("suspend"), props.batchLifecycleRunning || !nodesForLifecycle(topology.nodes, "suspend").length)}
+        {supported("Suspend all", () => runAllLifecycle("suspend"), props.batchLifecycleRunning || !nodesForLifecycle(topology.nodes, "suspend").length)}
         {supported("Stop all", props.onStopAll, props.batchLifecycleRunning || !nodesForLifecycle(topology.nodes, "stop").length)}
-        {supported("Reload all", () => runBulkLifecycle("reload"), props.batchLifecycleRunning || !nodesForLifecycle(topology.nodes, "reload").length)}
+        {supported("Reload all", () => runAllLifecycle("reload"), props.batchLifecycleRunning || !nodesForLifecycle(topology.nodes, "reload").length)}
         {supported("Console to all devices", () => {}, true)}
       </MenubarContent></MenubarMenu>
       <MenubarMenu><MenubarTrigger>Node</MenubarTrigger><MenubarContent>
@@ -68,13 +69,13 @@ export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, 
   </header>;
 }
 
-export function WorkspaceIconToolbar({ workspace, startDrawingTool, zoomIn, zoomOut, fitTopology }: { workspace: SimulatorWorkspaceProps; startDrawingTool: (tool: DrawingTool) => void; zoomIn: () => void; zoomOut: () => void; fitTopology: () => void }) {
+export function WorkspaceIconToolbar({ workspace, startDrawingTool, runAllLifecycle, zoomIn, zoomOut, fitTopology }: { workspace: SimulatorWorkspaceProps; startDrawingTool: (tool: DrawingTool) => void; runAllLifecycle: (action: "start" | "stop" | "suspend" | "reload") => void; zoomIn: () => void; zoomOut: () => void; fitTopology: () => void }) {
   return <div className="sim-icon-toolbar" role="toolbar" aria-label="Workspace tools">
-    <IconAction label="Start all" icon={<Play />} onClick={workspace.onStartAll} />
-    <IconAction label="Suspend all" icon={<Pause />} disabled />
+    <IconAction label="Start all" icon={<Play />} onClick={workspace.onStartAll} disabled={workspace.batchLifecycleRunning} />
+    <IconAction label="Suspend all" icon={<Pause />} onClick={() => runAllLifecycle("suspend")} disabled={workspace.batchLifecycleRunning || !nodesForLifecycle(workspace.topology.nodes, "suspend").length} />
     <IconAction label="Stop all" icon={<Square />} onClick={workspace.onStopAll} />
-    <IconAction label="Reload all" icon={<Activity />} disabled />
-    <IconAction label="Console all" icon={<Terminal />} disabled />
+    <IconAction label="Reload all" icon={<Activity />} onClick={() => runAllLifecycle("reload")} disabled={workspace.batchLifecycleRunning || !nodesForLifecycle(workspace.topology.nodes, "reload").length} />
+    <IconAction label="Console all" icon={<Terminal />} onClick={() => workspace.topology.nodes.filter((node) => node.status === "started").forEach((node) => workspace.onOpenConsole(node))} disabled={!workspace.topology.nodes.some((node) => node.status === "started")} />
     <span className="sim-toolbar-divider" />
     <IconAction label="Show / hide interface labels" icon={<Network />} disabled />
     <span className="sim-toolbar-divider" />
