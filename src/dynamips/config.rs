@@ -347,7 +347,13 @@ impl DynamipsRuntime {
             .state_dir
             .join(project_id.to_string())
             .join(node_id.to_string());
+        let working_dir = resolve_working_dir(&working_dir).map_err(|error| {
+            RuntimeError::Failed(format!(
+                "Could not create Dynamips router directory: {error}"
+            ))
+        })?;
         let supplied_working_dir = PathBuf::from(required_string(node, "runtime_working_dir")?);
+        let supplied_working_dir = fs::canonicalize(&supplied_working_dir).unwrap_or(supplied_working_dir);
         if supplied_working_dir != working_dir {
             return Err(RuntimeError::Failed(
                 "Dynamips runtime_working_dir must stay inside the controller runtime directory"
