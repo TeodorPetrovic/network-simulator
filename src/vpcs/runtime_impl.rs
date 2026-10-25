@@ -115,13 +115,12 @@ impl VpcsRuntime {
         action: NodeAction,
     ) -> Result<String, RuntimeError> {
         match action {
+            NodeAction::Start if self.status(node_id).await? == "suspended" => {
+                self.resume(node_id).await
+            }
             NodeAction::Start => self.start(project_id, node_id, name, startup_script).await,
             NodeAction::Stop => self.stop(node_id).await,
-            // TODO(RUNTIME-NET VPCS suspend hook): apply node suspension by
-            // dropping the connected NIO carrier; the VPCS process itself stays running.
-            NodeAction::Suspend => Err(RuntimeError::Failed(
-                "VPCS does not support process suspension".to_owned(),
-            )),
+            NodeAction::Suspend => self.suspend(node_id).await,
             NodeAction::Reload => {
                 self.stop(node_id).await?;
                 self.start(project_id, node_id, name, startup_script).await
@@ -144,7 +143,12 @@ impl VpcsRuntime {
             self.active_ports.write().await.remove(node_id);
             return Ok("stopped".to_owned());
         }
-        Ok("started".to_owned())
+        Ok(if process.suspended {
+            "suspended"
+        } else {
+            "started"
+        }
+        .to_owned())
     }
 
     pub async fn console_address(&self, node_id: &str) -> Result<SocketAddr, RuntimeError> {
@@ -166,6 +170,12 @@ impl VpcsRuntime {
             self.active_ports.write().await.remove(node_id);
             return Ok("stopped".to_owned());
         };
+        if process.suspended {
+            let Some(pid) = process.child.id() else {
+                return Err(RuntimeError::Failed("VPCS process has no PID".to_owned()));
+            };
+            signal_vpcs_tree(pid, libc::SIGCONT);
+        }
         if let Err(error) = stop_vpcs_process(&mut process).await {
             self.processes
                 .lock()
@@ -176,6 +186,38 @@ impl VpcsRuntime {
         process.kill_group();
         self.active_ports.write().await.remove(node_id);
         Ok("stopped".to_owned())
+    }
+
+    async fn suspend(&self, node_id: &str) -> Result<String, RuntimeError> {
+        let mut processes = self.processes.lock().await;
+        let process = processes.get_mut(node_id).ok_or_else(|| {
+            RuntimeError::Failed("Only a running VPCS node can be suspended".to_owned())
+        })?;
+        if !process.suspended {
+            let pid = process
+                .child
+                .id()
+                .ok_or_else(|| RuntimeError::Failed("VPCS process has no PID".to_owned()))?;
+            signal_vpcs_tree(pid, libc::SIGSTOP);
+            process.suspended = true;
+        }
+        Ok("suspended".to_owned())
+    }
+
+    async fn resume(&self, node_id: &str) -> Result<String, RuntimeError> {
+        let mut processes = self.processes.lock().await;
+        let process = processes
+            .get_mut(node_id)
+            .ok_or_else(|| RuntimeError::Failed("VPCS node is not running".to_owned()))?;
+        if process.suspended {
+            let pid = process
+                .child
+                .id()
+                .ok_or_else(|| RuntimeError::Failed("VPCS process has no PID".to_owned()))?;
+            signal_vpcs_tree(pid, libc::SIGCONT);
+            process.suspended = false;
+        }
+        Ok("started".to_owned())
     }
 
     pub async fn remove_node(&self, project_id: &str, node_id: &str) -> Result<(), RuntimeError> {
@@ -298,7 +340,14 @@ impl VpcsRuntime {
         let deadline = tokio::time::Instant::now() + START_TIMEOUT;
         loop {
             if connect_vpcs_console(console).await.is_ok() {
-                processes.insert(node_id.to_owned(), ManagedVpcs { child, console });
+                processes.insert(
+                    node_id.to_owned(),
+                    ManagedVpcs {
+                        child,
+                        console,
+                        suspended: false,
+                    },
+                );
                 return Ok("started".to_owned());
             }
             match child.try_wait() {

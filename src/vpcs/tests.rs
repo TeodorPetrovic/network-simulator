@@ -24,6 +24,51 @@ fn derives_mac_offset_from_the_node_identifier() {
     assert_eq!(mac_offset(&id), 42);
 }
 
+#[tokio::test]
+async fn vpcs_nodes_suspend_and_resume_the_emulator_process() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = VpcsRuntime::with_paths("unused-vpcs", dir.path());
+    let node_id = Uuid::new_v4().to_string();
+    let child = Command::new("sleep")
+        .arg("300")
+        .process_group(0)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    runtime.processes.lock().await.insert(
+        node_id.clone(),
+        ManagedVpcs {
+            child,
+            console: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1)),
+            suspended: false,
+        },
+    );
+
+    assert_eq!(
+        runtime
+            .lifecycle(
+                "",
+                &node_id,
+                "PC",
+                None,
+                crate::runtime::NodeAction::Suspend
+            )
+            .await
+            .unwrap(),
+        "suspended"
+    );
+    assert_eq!(runtime.status(&node_id).await.unwrap(), "suspended");
+    assert_eq!(
+        runtime
+            .lifecycle("", &node_id, "PC", None, crate::runtime::NodeAction::Start)
+            .await
+            .unwrap(),
+        "started"
+    );
+    assert_eq!(runtime.status(&node_id).await.unwrap(), "started");
+    runtime.kill_all().await;
+}
+
 #[test]
 fn startup_script_write_clears_old_content_and_expands_hostname() {
     let directory = tempfile::tempdir().unwrap();
@@ -248,6 +293,7 @@ async fn dropping_a_managed_process_kills_its_forked_children() {
     drop(ManagedVpcs {
         child,
         console: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1)),
+        suspended: false,
     });
     for _ in 0..50 {
         // SAFETY: as above.
