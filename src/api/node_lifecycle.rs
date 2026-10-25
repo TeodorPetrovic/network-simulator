@@ -61,6 +61,7 @@ pub(super) async fn change_node_runtime_state(
     let mut node = get_topology_object(state.store.pool(), &project_id, "node", &node_id)
         .await?
         .0;
+    let previous_status = node.get("status").and_then(Value::as_str).map(str::to_owned);
     let status = apply_node_lifecycle(&state, &project_id, &mut node, action).await?;
     node["status"] = json!(status);
     let mut tx = state.store.pool().begin().await?;
@@ -73,8 +74,28 @@ pub(super) async fn change_node_runtime_state(
     .bind(&node_id)
     .execute(&mut *tx)
     .await?;
-    let event = Store::append_event(&mut tx, &project_id, "node.updated", &node).await?;
+    let event = if node_status_changed(previous_status.as_deref(), &status) {
+        Some(Store::append_event(&mut tx, &project_id, "node.updated", &node).await?)
+    } else {
+        None
+    };
     tx.commit().await?;
-    state.store.publish(event);
+    if let Some(event) = event {
+        state.store.publish(event);
+    }
     Ok(Json(node))
+}
+
+fn node_status_changed(previous: Option<&str>, next: &str) -> bool {
+    previous != Some(next)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn duplicate_node_status_updates_do_not_emit_events() {
+        assert!(!super::node_status_changed(Some("started"), "started"));
+        assert!(super::node_status_changed(Some("stopped"), "started"));
+        assert!(super::node_status_changed(None, "started"));
+    }
 }
