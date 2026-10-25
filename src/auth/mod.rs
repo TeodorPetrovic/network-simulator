@@ -123,9 +123,17 @@ impl AuthError {
 
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
+        let code = match self.status {
+            StatusCode::UNPROCESSABLE_ENTITY | StatusCode::BAD_REQUEST => "invalid_request",
+            StatusCode::UNAUTHORIZED => "unauthorized",
+            StatusCode::FORBIDDEN => "forbidden",
+            StatusCode::NOT_FOUND => "not_found",
+            StatusCode::CONFLICT => "conflict",
+            _ => "auth_error",
+        };
         let mut response = (
             self.status,
-            Json(json!({"message": self.message, "detail": self.message})),
+            Json(json!({"code":code,"message": self.message, "detail": self.message})),
         )
             .into_response();
         if self.status == StatusCode::UNAUTHORIZED {
