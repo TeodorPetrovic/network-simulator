@@ -38,6 +38,7 @@ use bulk_lifecycle::*;
 mod node_resources;
 use node_resources::*;
 mod images;
+pub(crate) use images::is_qemu_image_upload;
 use images::*;
 mod symbols;
 use symbols::*;

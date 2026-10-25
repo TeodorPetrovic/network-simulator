@@ -4,6 +4,7 @@ pub(super) async fn list_api_templates(
     State(state): State<AppState>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
+    super::super::templates::sync_templates_from_images(&state).await?;
     let mut templates = available_templates(&state).await?;
     let rows = sqlx::query("SELECT template_json FROM controller_templates ORDER BY template_id")
         .fetch_all(state.store.pool())

@@ -331,7 +331,7 @@ pub(super) fn dynamips_configuration_supported(properties: &Value) -> bool {
         })
 }
 
-pub(super) fn default_dynamips_slot0(platform: &str, chassis: &str) -> &'static str {
+pub(crate) fn default_dynamips_slot0(platform: &str, chassis: &str) -> &'static str {
     match platform {
         "c7200" => "C7200-IO-FE",
         "c1700" => "C1700-MB-1FE",
@@ -351,7 +351,7 @@ pub(super) fn default_dynamips_slot0(platform: &str, chassis: &str) -> &'static 
 /// Infer a Dynamips platform from common IOS image filenames. IOS ELF headers
 /// identify the executable format, not the emulated chassis, so filenames are
 /// the available source of platform identity for standalone registered images.
-pub(super) fn detect_dynamips_platform(filename: &str) -> Option<(&'static str, &'static str)> {
+pub(crate) fn detect_dynamips_platform(filename: &str) -> Option<(&'static str, &'static str)> {
     let name = Path::new(filename)
         .file_name()
         .and_then(|name| name.to_str())?
@@ -366,7 +366,7 @@ pub(super) fn detect_dynamips_platform(filename: &str) -> Option<(&'static str, 
         "c3725" => Some(("c3725", "")),
         "c3745" => Some(("c3745", "")),
         "c7200" => Some(("c7200", "")),
-        "c1700" | "c1710" => Some(("c1700", "1710")),
+        "c1700" | "c1710" => Some(("c1700", "")),
         _ => None,
     }
 }

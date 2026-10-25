@@ -108,6 +108,7 @@ pub(super) async fn upload_image(
             let _ = tokio::fs::remove_file(&tmp).await;
             return Err(runtime_api_error(error));
         }
+        super::super::templates::sync_templates_from_images(&state).await?;
         let can_create_template = can_create_template(&state, name, &checksum);
         Ok((StatusCode::CREATED, Json(json!({"filename":name,"path":dest.to_string_lossy(),"image_type":"qemu","image_size":size,"checksum":checksum,"checksum_algorithm":"md5","availability":"available","can_create_template":can_create_template}))).into_response())
     } else {
@@ -124,6 +125,7 @@ pub(super) async fn upload_image(
             let _ = tokio::fs::remove_file(&tmp).await;
             return Err(runtime_api_error(error));
         }
+        super::super::templates::sync_templates_from_images(&state).await?;
         let can_create_template = can_create_template(&state, name, &checksum);
         Ok((StatusCode::CREATED, Json(json!({"filename":name,"path":dest.to_string_lossy(),"image_type":"ios","image_size":size,"checksum":checksum,"checksum_algorithm":"md5","availability":"available","can_create_template":can_create_template}))).into_response())
     }
@@ -173,7 +175,7 @@ async fn prepare_nested_destination(root: &str, relative: &Path) -> Result<PathB
     Ok(target)
 }
 
-pub(super) fn is_qemu_image_upload(name: &str) -> bool {
+pub(crate) fn is_qemu_image_upload(name: &str) -> bool {
     Path::new(name)
         .extension()
         .and_then(|extension| extension.to_str())
@@ -325,6 +327,7 @@ pub(super) async fn delete_image(
     tokio::fs::remove_file(target)
         .await
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    super::super::templates::sync_templates_from_images(&state).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

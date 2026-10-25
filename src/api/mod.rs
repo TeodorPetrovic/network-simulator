@@ -423,7 +423,7 @@ mod runtime_templates;
 mod template_profile_fields;
 mod template_profiles;
 use template_profile_fields::template_profile_fields;
-mod templates;
+pub(crate) mod templates;
 mod topology;
 mod topology_listing;
 mod vpcs_node;
@@ -457,6 +457,12 @@ use runtime_templates::{
 };
 use template_profiles::validate_template_profile_patch;
 use templates::{available_templates, reset_template_profile, update_template_profile};
+
+pub(crate) async fn sync_templates_from_images(state: &AppState) -> Result<(), String> {
+    templates::sync_templates_from_images(state)
+        .await
+        .map_err(|error| error.message)
+}
 use topology::{
     create_topology_object, delete_node_and_connected_links, delete_topology_object,
     get_topology_object, update_topology_object,

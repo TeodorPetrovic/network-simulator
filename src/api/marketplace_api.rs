@@ -28,12 +28,13 @@ pub(super) async fn download_ishare2_image(
     State(state): State<AppState>,
     Path((image_type, image_id)): Path<(String, u64)>,
 ) -> Result<Json<crate::marketplace::IshareDownloadResult>, ApiError> {
-    state
+    let downloaded = state
         .marketplace
         .download_ishare2(&image_type, image_id)
         .await
-        .map(Json)
-        .map_err(catalog_api_error)
+        .map_err(catalog_api_error)?;
+    templates::sync_templates_from_images(&state).await?;
+    Ok(Json(downloaded))
 }
 
 pub(super) async fn search_gns3_appliances(
@@ -283,6 +284,7 @@ pub(super) async fn upload_dynamips_image(
             return Err(runtime_api_error(error));
         }
     };
+    templates::sync_templates_from_images(&state).await?;
     Ok(Json(json!({
         "name": file_name,
         "image": image,
@@ -360,12 +362,15 @@ pub(super) async fn upload_qemu_image(
         .finalize_uploaded_image(&temporary_path, &final_path)
         .await
     {
-        Ok(image) => Ok(Json(json!({
+        Ok(image) => {
+            templates::sync_templates_from_images(&state).await?;
+            Ok(Json(json!({
             "name": file_name,
             "image": image,
             "template_type": "qemu",
             "bytes": size
-        }))),
+            })))
+        }
         Err(error) => {
             let _ = std::fs::remove_file(&temporary_path);
             Err(runtime_api_error(error))

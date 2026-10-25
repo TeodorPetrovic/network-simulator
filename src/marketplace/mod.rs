@@ -195,6 +195,7 @@ mod gns3;
 mod ishare;
 mod parsing;
 mod templates;
+pub(crate) use templates::{default_dynamips_slot0, detect_dynamips_platform};
 #[cfg(test)]
 mod tests;
 mod validation;

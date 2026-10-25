@@ -4,6 +4,7 @@ pub(super) async fn list_templates(
     State(state): State<AppState>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
+    sync_templates_from_images(&state).await?;
     let mut templates = available_templates(&state).await?;
     if let Some(name) = query.get("name") {
         templates.retain(|template| template.get("name").and_then(Value::as_str) == Some(name));
@@ -16,7 +17,7 @@ pub(super) async fn available_templates(state: &AppState) -> Result<Vec<Value>, 
     // the palette is the built-in nodes plus imported/custom appliances.
     let base = base_runtime_templates(state).await;
     let mut templates = BuiltinRuntime::templates();
-    templates.extend(state.marketplace.templates(base));
+    let marketplace_templates = state.marketplace.templates(base);
     let rows = sqlx::query("SELECT template_id, template_json FROM runtime_template_profiles")
         .fetch_all(state.store.pool())
         .await?;
@@ -33,7 +34,149 @@ pub(super) async fn available_templates(state: &AppState) -> Result<Vec<Value>, 
             }
         }
     }
+    let saved = sqlx::query("SELECT template_json FROM controller_templates")
+        .fetch_all(state.store.pool())
+        .await?;
+    let saved = saved
+        .iter()
+        .map(|row| decode_json(row.get::<String, _>("template_json")))
+        .collect::<Result<Vec<_>, _>>()?;
+    templates.extend(marketplace_templates.into_iter().filter(|candidate| {
+        !saved
+            .iter()
+            .any(|stored| same_image_reference(candidate, stored))
+    }));
     Ok(templates)
+}
+
+fn same_image_reference(left: &Value, right: &Value) -> bool {
+    let key = match left["template_type"].as_str() {
+        Some("qemu") => "hda_disk_image",
+        Some("dynamips") => "image",
+        _ => return false,
+    };
+    if right["template_type"] != left["template_type"] {
+        return false;
+    }
+    let (Some(left), Some(right)) = (left[key].as_str(), right[key].as_str()) else {
+        return false;
+    };
+    std::path::Path::new(left).file_name() == std::path::Path::new(right).file_name()
+}
+
+/// Create missing palette templates for image files in the runtime image
+/// directories. Generated records are persisted once and are never refreshed,
+/// so a user's later edits remain intact.
+pub(super) async fn sync_templates_from_images(state: &AppState) -> Result<(), ApiError> {
+    use std::path::Path;
+
+    let dirs = [
+        ("qemu", state.qemu.info().await.image_directory),
+        ("ios", state.dynamips.info().await.image_directory),
+    ];
+    let mut existing = available_templates(state).await?;
+    let stored = sqlx::query("SELECT template_json FROM controller_templates")
+        .fetch_all(state.store.pool())
+        .await?;
+    for row in stored {
+        existing.push(decode_json(row.get("template_json"))?);
+    }
+    for (kind, directory) in dirs {
+        let mut pending = vec![Path::new(&directory).to_path_buf()];
+        while let Some(dir) = pending.pop() {
+            let mut entries = match tokio::fs::read_dir(&dir).await {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(ApiError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        error.to_string(),
+                    ));
+                }
+            };
+            while let Some(entry) = entries
+                .next_entry()
+                .await
+                .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            {
+                let ty = entry
+                    .file_type()
+                    .await
+                    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                if ty.is_symlink() {
+                    continue;
+                }
+                if ty.is_dir() {
+                    pending.push(entry.path());
+                    continue;
+                }
+                if !ty.is_file() {
+                    continue;
+                }
+                let path = entry.path();
+                let filename = entry.file_name().to_string_lossy().to_string();
+                let template_type = if kind == "qemu" {
+                    if !super::controller_routes::is_qemu_image_upload(&filename) {
+                        continue;
+                    }
+                    "qemu"
+                } else {
+                    "dynamips"
+                };
+                if existing
+                    .iter()
+                    .any(|template| image_ref_matches(template, template_type, &path))
+                {
+                    continue;
+                }
+                let template = generated_image_template(template_type, &filename, &path);
+                let id = template["template_id"].as_str().unwrap().to_owned();
+                sqlx::query("INSERT OR IGNORE INTO controller_templates (template_id, template_json) VALUES (?, ?)")
+                    .bind(&id).bind(serde_json::to_string(&template).map_err(internal_json_error)?)
+                    .execute(state.store.pool()).await?;
+                existing.push(template);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn image_ref_matches(template: &Value, kind: &str, path: &std::path::Path) -> bool {
+    let key = if kind == "qemu" {
+        "hda_disk_image"
+    } else {
+        "image"
+    };
+    let Some(reference) = template.get(key).and_then(Value::as_str) else {
+        return false;
+    };
+    let reference_path = std::path::Path::new(reference);
+    reference == path.to_string_lossy() || reference_path.file_name() == path.file_name()
+}
+
+fn generated_image_template(kind: &str, filename: &str, path: &std::path::Path) -> Value {
+    let id = Uuid::new_v5(&Uuid::NAMESPACE_URL, path.to_string_lossy().as_bytes()).to_string();
+    let image_path = path.to_string_lossy();
+    if kind == "qemu" {
+        let chr = filename.to_ascii_lowercase().starts_with("mikrotik-chr-");
+        let version = if chr {
+            filename
+                .trim_start_matches("mikrotik-chr-")
+                .trim_end_matches(".qcow2")
+        } else {
+            ""
+        };
+        json!({"template_id":id,"name":if chr { format!("MikroTik CHR {version}") } else { filename.to_owned() },"template_type":"qemu","compute_id":"local","builtin":false,"auto_image_template":true,"category":"router","symbol":"/symbols/router.svg","hda_disk_image":image_path,"memory":if chr {256} else {512},"adapters":if chr {4} else {1},"cpus":1,"console_type":"telnet","platform":"x86_64","adapter_type":"e1000","hda_disk_interface":if chr {"ide"} else {"virtio"},"boot_priority":if chr {"c"} else {"c"},"linked_clone":chr})
+    } else {
+        let (platform, chassis) =
+            crate::marketplace::detect_dynamips_platform(filename).unwrap_or(("c7200", ""));
+        let model = platform.trim_start_matches('c');
+        let version = filename
+            .strip_prefix(&format!("c{model}"))
+            .unwrap_or(filename);
+        let slot0 = crate::marketplace::default_dynamips_slot0(platform, chassis);
+        json!({"template_id":id,"name":format!("Cisco {model} · {}", version.trim_matches(['-', '_', '.'])),"template_type":"dynamips","compute_id":"local","builtin":false,"auto_image_template":true,"category":"router","symbol":"/symbols/router.svg","image":image_path,"platform":platform,"chassis":if chassis.is_empty(){Value::Null}else{json!(chassis)},"slot0":slot0,"memory":256,"ram":256,"nvram":if platform == "c7200" {512}else if matches!(platform,"c2691"|"c3725"|"c3745") {256}else{128},"adapters":1,"idlepc":"","console_type":"telnet"})
+    }
 }
 
 pub(super) async fn update_template_profile(

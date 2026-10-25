@@ -55,6 +55,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let auth_enabled =
         api::auth::enforce_bind_auth_floor(store.pool(), !bind_address.ip().is_loopback()).await?;
     let state = api::AppState::new(store);
+    if let Err(error) = api::sync_templates_from_images(&state).await {
+        tracing::error!(%error, "could not sync templates from registered images");
+    }
     state.reap_orphaned_runtimes();
     state.reconcile_node_statuses().await;
     state.open_auto_open_projects().await;
