@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) async fn list_api_templates(
     State(state): State<AppState>,
+    Query(query): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
     let mut templates = available_templates(&state).await?;
     let rows = sqlx::query("SELECT template_json FROM controller_templates ORDER BY template_id")
@@ -9,6 +10,9 @@ pub(super) async fn list_api_templates(
         .await?;
     for row in rows {
         templates.push(decode_json(row.get("template_json"))?);
+    }
+    if let Some(name) = query.get("name") {
+        templates.retain(|template| template.get("name").and_then(Value::as_str) == Some(name));
     }
     Ok(Json(templates))
 }
