@@ -25,6 +25,35 @@ async fn app() -> (axum::Router, TempDir, Store) {
     (router(state), dir, store)
 }
 
+#[tokio::test]
+async fn disconnect_compute_persists_state_and_get_returns_auto_connect() {
+    let (app, _dir, store) = app().await;
+    sqlx::query("UPDATE controller_settings SET settings_json = ? WHERE singleton = 1")
+        .bind(r#"{"computes":{"local":{"auto_connect":false,"connected":true}}}"#)
+        .execute(store.pool())
+        .await
+        .unwrap();
+
+    let response = send(
+        &app,
+        Method::POST,
+        "/v3/computes/local/disconnect",
+        Body::empty(),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let disconnected = json_body(response).await;
+    assert_eq!(disconnected["connected"], false);
+    assert_eq!(disconnected["auto_connect"], false);
+
+    let response = send(&app, Method::GET, "/v3/computes", Body::empty(), None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let computes = json_body(response).await;
+    assert_eq!(computes[0]["auto_connect"], false);
+    assert_eq!(computes[0]["connected"], false);
+}
+
 async fn mock_dynamips(commands: Vec<(&'static str, &'static str)>) -> u16 {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();

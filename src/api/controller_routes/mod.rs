@@ -69,7 +69,10 @@ pub(super) fn router() -> Router<AppState> {
         .route("/v3/settings", get(get_settings).put(update_settings))
         .route("/v3/computes", get(list_computes))
         .route("/v3/computes/{compute_id}", get(get_compute))
-        .route("/v3/computes/{compute_id}/disconnect", post(disconnect_compute))
+        .route(
+            "/v3/computes/{compute_id}/disconnect",
+            post(disconnect_compute),
+        )
         .route("/v3/projects/load", post(load_project))
         .route("/v3/projects/{project_id}/stats", get(project_stats))
         .route(
@@ -289,8 +292,10 @@ async fn update_settings(
 }
 
 async fn local_compute(state: &AppState) -> Result<Value, ApiError> {
-    let stored: String = sqlx::query_scalar("SELECT settings_json FROM controller_settings WHERE singleton = 1")
-        .fetch_one(state.store.pool()).await?;
+    let stored: String =
+        sqlx::query_scalar("SELECT settings_json FROM controller_settings WHERE singleton = 1")
+            .fetch_one(state.store.pool())
+            .await?;
     let settings = decode_json(stored)?;
     Ok(json!({
         "compute_id": "local",
@@ -318,14 +323,34 @@ async fn get_compute(
     }
 }
 
-async fn disconnect_compute(State(state): State<AppState>, AxumPath(compute_id): AxumPath<String>) -> Result<Json<Value>, ApiError> {
-    if compute_id != "local" { return Err(ApiError::not_found(format!("Compute {compute_id} does not exist"))); }
-    let row: String = sqlx::query_scalar("SELECT settings_json FROM controller_settings WHERE singleton = 1").fetch_one(state.store.pool()).await?;
+async fn disconnect_compute(
+    State(state): State<AppState>,
+    AxumPath(compute_id): AxumPath<String>,
+) -> Result<Json<Value>, ApiError> {
+    if compute_id != "local" {
+        return Err(ApiError::not_found(format!(
+            "Compute {compute_id} does not exist"
+        )));
+    }
+    let row: String =
+        sqlx::query_scalar("SELECT settings_json FROM controller_settings WHERE singleton = 1")
+            .fetch_one(state.store.pool())
+            .await?;
     let mut settings = decode_json(row)?;
     let obj = as_object_mut(&mut settings, "stored settings must be an object")?;
     let computes = obj.entry("computes").or_insert(json!({}));
-    computes.as_object_mut().ok_or_else(|| ApiError::bad_request("computes settings must be an object"))?.insert("local".into(), json!({"connected":false,"auto_connect":true}));
-    sqlx::query("UPDATE controller_settings SET settings_json = ? WHERE singleton = 1").bind(serde_json::to_string(&settings).map_err(internal_json_error)?).execute(state.store.pool()).await?;
+    let local = computes
+        .as_object_mut()
+        .ok_or_else(|| ApiError::bad_request("computes settings must be an object"))?
+        .entry("local")
+        .or_insert(json!({}));
+    let local = as_object_mut(local, "local compute settings must be an object")?;
+    local.insert("connected".into(), json!(false));
+    local.entry("auto_connect").or_insert(json!(true));
+    sqlx::query("UPDATE controller_settings SET settings_json = ? WHERE singleton = 1")
+        .bind(serde_json::to_string(&settings).map_err(internal_json_error)?)
+        .execute(state.store.pool())
+        .await?;
     Ok(Json(local_compute(&state).await?))
 }
 
