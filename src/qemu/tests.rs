@@ -238,6 +238,7 @@ fn qemu_runtime_arguments_cover_disks_direct_boot_console_and_extra_options() {
         cpus: 2,
         maxcpus: 4,
         adapters: 0,
+        adapter_ports: vec![],
         adapter_type: "virtio-net-pci".to_owned(),
         disk_interface: "ide".to_owned(),
         boot_priority: "dc".to_owned(),
@@ -315,6 +316,7 @@ fn qemu_runtime_arguments_cover_disks_direct_boot_console_and_extra_options() {
     assert!(cpu_limiter_arguments(123, 75).contains(&"--limit=75".to_owned()));
     let mut network_vm = vm.clone();
     network_vm.adapters = 2;
+    network_vm.adapter_ports = vec![(20_010, 20_011), (20_000, 20_001)];
     let links = [QemuLink {
         adapter_number: 1,
         adapter_port: 20_000,
@@ -324,11 +326,11 @@ fn qemu_runtime_arguments_cover_disks_direct_boot_console_and_extra_options() {
         super::lifecycle::qemu_network_arguments(&network_vm, &links),
         [
             "-netdev",
-            "hubport,id=nsboot0,hubid=1000",
+            "socket,id=nsboot0,udp=127.0.0.1:20011,localaddr=127.0.0.1:20010",
             "-device",
             "virtio-net-pci,id=nsdev_boot0,netdev=nsboot0,mac=52:54:00:00:00:01",
             "-netdev",
-            "socket,id=nsboot1,udp=127.0.0.1:20000,localaddr=127.0.0.1:20001",
+            "socket,id=nsboot1,udp=127.0.0.1:20001,localaddr=127.0.0.1:20000",
             "-device",
             "virtio-net-pci,id=nsdev_boot1,netdev=nsboot1,mac=52:54:00:00:00:00"
         ]

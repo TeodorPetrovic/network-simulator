@@ -34,6 +34,8 @@ pub struct QemuRuntime {
     qmp_dir: PathBuf,
     tpm_processes: std::sync::Arc<Mutex<std::collections::HashMap<String, Child>>>,
     cpu_limit_processes: std::sync::Arc<Mutex<std::collections::HashMap<String, Child>>>,
+    adapter_ports:
+        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<(u16, u16)>>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +52,7 @@ pub struct QemuVm {
     pub cpus: u32,
     pub maxcpus: u32,
     pub adapters: u32,
+    pub adapter_ports: Vec<(u16, u16)>,
     pub adapter_type: String,
     pub disk_interface: String,
     pub boot_priority: String,
@@ -142,6 +145,48 @@ pub struct QemuRuntimeInfo {
 }
 
 impl QemuRuntime {
+    fn adapter_udp_ports(
+        &self,
+        node_id: &str,
+        adapters: u32,
+    ) -> Result<Vec<(u16, u16)>, RuntimeError> {
+        let mut map = self
+            .adapter_ports
+            .lock()
+            .map_err(|_| RuntimeError::Failed("QEMU adapter port map is unavailable".into()))?;
+        let ports = map.entry(node_id.to_owned()).or_insert_with(Vec::new);
+        while ports.len() < adapters as usize {
+            let bind_ephemeral = || -> std::io::Result<u16> {
+                let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+                Ok(socket.local_addr()?.port())
+            };
+            let local = bind_ephemeral().map_err(|error| {
+                RuntimeError::Failed(format!("Could not reserve QEMU adapter UDP port: {error}"))
+            })?;
+            let remote = loop {
+                let candidate = bind_ephemeral().map_err(|error| {
+                    RuntimeError::Failed(format!(
+                        "Could not reserve QEMU adapter UDP port: {error}"
+                    ))
+                })?;
+                if candidate != local {
+                    break candidate;
+                }
+            };
+            ports.push((local, remote));
+        }
+        Ok(ports[..adapters as usize].to_vec())
+    }
+
+    pub fn adapter_udp_port_pair(
+        &self,
+        node_id: &str,
+        adapter: u32,
+    ) -> Result<(u16, u16), RuntimeError> {
+        self.adapter_udp_ports(node_id, adapter.saturating_add(1))
+            .map(|ports| ports[adapter as usize])
+    }
+
     pub fn new() -> Self {
         let state_dir = std::env::var_os("NETWORK_SIMULATOR_QEMU_STATE")
             .map(PathBuf::from)
@@ -160,6 +205,9 @@ impl QemuRuntime {
             state_dir,
             tpm_processes: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
             cpu_limit_processes: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
+            adapter_ports: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
         }
     }
 
@@ -179,6 +227,9 @@ impl QemuRuntime {
             qmp_dir: qmp_dir.into(),
             tpm_processes: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
             cpu_limit_processes: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
+            adapter_ports: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
         }
     }
 
@@ -323,67 +374,17 @@ impl QemuRuntime {
                 link.adapter_number
             )));
         }
-        let netdev = qemu_adapter_netdev_id(link.adapter_number);
-        self.remove_adapter_netdev(vm, link.adapter_number).await?;
-        if let Err(error) = self
-            .qmp_execute(
-                &vm.qmp_socket,
-                "netdev_add",
-                Some(json!({
-                    "type": "socket",
-                    "id": netdev,
-                    "udp": format!("127.0.0.1:{}", link.adapter_port),
-                    "localaddr": format!("127.0.0.1:{}", link.runtime_port)
-                })),
-            )
-            .await
-        {
-            let _ = self
-                .add_disconnected_adapter_netdev(vm, link.adapter_number)
-                .await;
-            return Err(error);
+        let (local, remote) = vm.adapter_ports[link.adapter_number as usize];
+        if (link.runtime_port, link.adapter_port) != (local, remote) {
+            return Err(RuntimeError::Failed(
+                "QEMU link does not use its reserved adapter UDP ports".into(),
+            ));
         }
         Ok(())
     }
 
     pub async fn detach_nio(&self, vm: &QemuVm, link: &QemuLink) -> Result<(), RuntimeError> {
-        self.remove_adapter_netdev(vm, link.adapter_number).await?;
-        self.add_disconnected_adapter_netdev(vm, link.adapter_number)
-            .await
-    }
-
-    async fn remove_adapter_netdev(
-        &self,
-        vm: &QemuVm,
-        adapter_number: u32,
-    ) -> Result<(), RuntimeError> {
-        let id = qemu_adapter_netdev_id(adapter_number);
-        if let Err(error) = self
-            .qmp_execute(&vm.qmp_socket, "netdev_del", Some(json!({ "id": id })))
-            .await
-            && !qmp_reports_missing_id(&error)
-        {
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    async fn add_disconnected_adapter_netdev(
-        &self,
-        vm: &QemuVm,
-        adapter_number: u32,
-    ) -> Result<(), RuntimeError> {
-        self.qmp_execute(
-            &vm.qmp_socket,
-            "netdev_add",
-            Some(json!({
-                "type": "hubport",
-                "id": qemu_adapter_netdev_id(adapter_number),
-                "hubid": 1000 + adapter_number
-            })),
-        )
-        .await
-        .map(|_| ())
+        self.attach_nio(vm, link).await
     }
 
     pub async fn status(&self, vm: &QemuVm) -> Result<String, RuntimeError> {

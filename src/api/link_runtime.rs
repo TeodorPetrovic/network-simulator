@@ -154,25 +154,6 @@ pub(super) async fn attach_runtime_link_endpoint(
     endpoint: &Value,
     runtime_endpoint: &Value,
 ) -> Result<(), ApiError> {
-    attach_runtime_link_endpoint_with_qemu_backend(
-        state,
-        project_id,
-        link,
-        endpoint,
-        runtime_endpoint,
-        false,
-    )
-    .await
-}
-
-async fn attach_runtime_link_endpoint_with_qemu_backend(
-    state: &AppState,
-    project_id: &str,
-    link: &Value,
-    endpoint: &Value,
-    runtime_endpoint: &Value,
-    qemu_backend_preconfigured: bool,
-) -> Result<(), ApiError> {
     let node_id = endpoint["node_id"].as_str().unwrap_or_default();
     let node = load_topology_node(state.store.pool(), project_id, node_id).await?;
     let engine = LinkEngine::new(state.ubridge.clone());
@@ -264,40 +245,7 @@ async fn attach_runtime_link_endpoint_with_qemu_backend(
                 .qemu
                 .adapter_nio(&endpoint)
                 .map_err(runtime_api_error)?;
-            if qemu_backend_preconfigured {
-                engine
-                    .attach_endpoint(&endpoint, adapter, &filters, suspended, None)
-                    .await
-                    .map_err(runtime_api_error)?;
-                return Ok(());
-            }
             let qemu_link = qemu_link_from_endpoint(&endpoint)?;
-            if state.qemu.status(&vm).await.map_err(runtime_api_error)? == "started" {
-                // QEMU does not reconnect an already-realized NIC when a
-                // netdev with the same ID is added again. Reboot with the full
-                // adapter map so hot-attached links use the existing NIC slot.
-                let mut links = node_link_entries(state, project_id, node_id)
-                    .await?
-                    .into_iter()
-                    .map(|(_, endpoint, _)| qemu_link_from_endpoint(&endpoint))
-                    .collect::<Result<Vec<_>, _>>()?;
-                links.push(qemu_link);
-                state
-                    .qemu
-                    .lifecycle(&vm, NodeAction::Stop, &[])
-                    .await
-                    .map_err(runtime_api_error)?;
-                state
-                    .qemu
-                    .lifecycle(&vm, NodeAction::Start, &links)
-                    .await
-                    .map_err(runtime_api_error)?;
-                engine
-                    .attach_endpoint(&endpoint, adapter, &filters, suspended, None)
-                    .await
-                    .map_err(runtime_api_error)?;
-                return Ok(());
-            }
             attach_runtime_nio_with_rollback(
                 !relay_already_exists,
                 || async {
@@ -500,31 +448,8 @@ pub(super) async fn detach_runtime_link_endpoint(
                 let _ = state.ubridge.delete_veth(&host).await;
             }
         }
-        "qemu" => {
-            let node = load_topology_node(state.store.pool(), project_id, node_id).await?;
-            let vm = state.qemu.vm_from_node(&node).map_err(runtime_api_error)?;
-            if state.qemu.status(&vm).await.map_err(runtime_api_error)? == "started" {
-                let endpoint_id = endpoint["runtime_endpoint_id"].as_str();
-                let links = node_link_entries(state, project_id, node_id)
-                    .await?
-                    .into_iter()
-                    .filter(|(_, candidate, _)| {
-                        candidate["runtime_endpoint_id"].as_str() != endpoint_id
-                    })
-                    .map(|(_, candidate, _)| qemu_link_from_endpoint(&candidate))
-                    .collect::<Result<Vec<_>, _>>()?;
-                state
-                    .qemu
-                    .lifecycle(&vm, NodeAction::Stop, &[])
-                    .await
-                    .map_err(runtime_api_error)?;
-                state
-                    .qemu
-                    .lifecycle(&vm, NodeAction::Start, &links)
-                    .await
-                    .map_err(runtime_api_error)?;
-            }
-        }
+        // Like GNS3, QEMU keeps its boot-time NIC and UDP tunnel; only the relay side is torn down.
+        "qemu" => {}
         "vpcs" => {}
         "dynamips" => {
             let node = load_topology_node(state.store.pool(), project_id, node_id).await?;
@@ -633,13 +558,12 @@ pub(super) async fn attach_node_links(
                 .await?;
         }
         if !before_start && node_type != "dynamips" {
-            attach_runtime_link_endpoint_with_qemu_backend(
+            attach_runtime_link_endpoint(
                 state,
                 project_id,
                 &link,
                 &endpoint,
                 &runtime_endpoint,
-                node_type == "qemu",
             )
             .await?;
         }

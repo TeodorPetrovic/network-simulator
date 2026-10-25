@@ -166,7 +166,7 @@ export async function chrConsole(lab, node) {
   const type = async (text) => { for (const c of text) { ws.send(c); await sleep(40); } };
   const expect = async (re, timeout, label) => {
     try { await waitFor(() => re.test(output), { timeout, label }); }
-    catch (error) { console.error(`${label}; console tail:`, JSON.stringify(output.slice(-800))); throw error; }
+    catch (error) { console.error(`${label}; ws=${ws.readyState}; console tail:`, JSON.stringify(output.slice(-800))); throw error; }
   };
   const nudge = setInterval(() => { try { ws.send("\r"); } catch { /* closed */ } }, 4000);
   try { await expect(/Login:/i, 150000, `${node.name} serial login prompt`); } finally { clearInterval(nudge); }

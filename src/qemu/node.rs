@@ -139,6 +139,8 @@ impl QemuRuntime {
         if disks.first().is_none_or(|disk| disk.slot != "hda") {
             return Err(RuntimeError::Failed("QEMU node has no HDA disk".to_owned()));
         }
+        let adapters = node["adapters"].as_u64().unwrap_or(8).min(275) as u32;
+        let adapter_ports = self.adapter_udp_ports(&node_id.to_string(), adapters)?;
         Ok(QemuVm {
             node_id: node_id.to_string(),
             image,
@@ -155,7 +157,8 @@ impl QemuRuntime {
                 .and_then(|value| u32::try_from(value).ok())
                 .unwrap_or_else(|| node["cpus"].as_u64().unwrap_or(1) as u32)
                 .max(node["cpus"].as_u64().unwrap_or(1) as u32),
-            adapters: node["adapters"].as_u64().unwrap_or(8).min(275) as u32,
+            adapters,
+            adapter_ports,
             adapter_type: node["adapter_type"].as_str().unwrap_or("e1000").to_owned(),
             disk_interface,
             boot_priority: node["boot_priority"].as_str().unwrap_or("c").to_owned(),

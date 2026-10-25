@@ -69,6 +69,14 @@ pub(super) async fn create_link(
             object.retain(|key, _| !key.starts_with("runtime_"));
         }
         endpoint["node_type"] = runtime_endpoint["node_type"].clone();
+        if runtime_endpoint["node_type"] == "qemu" {
+            let node_id = runtime_endpoint["node_id"].as_str().unwrap_or_default();
+            let adapter = runtime_endpoint["adapter_number"].as_u64().unwrap_or_default() as u32;
+            // QEMU sends to `adapter_port` (the relay side) and listens on `runtime_port`.
+            let (runtime_port, adapter_port) = state.qemu.adapter_udp_port_pair(node_id, adapter).map_err(runtime_api_error)?;
+            endpoint["runtime_adapter_port"] = json!(adapter_port);
+            endpoint["runtime_udp_port"] = json!(runtime_port);
+        }
     }
     let mut should_attach = Vec::with_capacity(runtime_endpoints.len());
     for runtime_endpoint in &runtime_endpoints {

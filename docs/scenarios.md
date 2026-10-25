@@ -20,5 +20,6 @@ Scenario files:
 - `vpcs-basic.test.mjs`: point-to-point ICMP, subnet isolation, switch fanout, and peer-stop behavior.
 - `vpcs-routing.test.mjs`: c3620 single-router and static two-router routes, with ping and trace output.
 - `mikrotik.test.mjs`: CHR and VPCS ICMP over a linked interface.
+- `mikrotik-hotlink.test.mjs`: hot attach, detach, and reattach across both CHR adapters while checking the serial session and uptime remain live.
 - `docker.test.mjs`: Alpine interfaces, Docker-to-Docker and Docker-to-VPCS ICMP.
 - `mixed.test.mjs`: VPCS, Docker, CHR, and c3620 attached to one built-in Ethernet switch.

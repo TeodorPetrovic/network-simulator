@@ -359,24 +359,15 @@ impl QemuRuntime {
     }
 }
 
-pub(super) fn qemu_network_arguments(vm: &QemuVm, links: &[QemuLink]) -> Vec<String> {
-    let links_by_adapter = links
-        .iter()
-        .map(|link| (link.adapter_number, link))
-        .collect::<std::collections::HashMap<_, _>>();
+pub(super) fn qemu_network_arguments(vm: &QemuVm, _links: &[QemuLink]) -> Vec<String> {
     let mut args = Vec::with_capacity(vm.adapters as usize * 4);
     for adapter_number in 0..vm.adapters {
         let net_id = qemu_adapter_netdev_id(adapter_number);
-        if let Some(link) = links_by_adapter.get(&adapter_number) {
-            args.extend(["-netdev".to_owned(), qemu_netdev_argument(link, &net_id)]);
-        } else {
-            // An isolated hub port gives the NIC a valid, disconnected
-            // backend that can be replaced through QMP when a link appears.
-            args.extend([
-                "-netdev".to_owned(),
-                format!("hubport,id={net_id},hubid={}", 1000 + adapter_number),
-            ]);
-        }
+        let (local, remote) = vm.adapter_ports[adapter_number as usize];
+        args.extend([
+            "-netdev".to_owned(),
+            format!("socket,id={net_id},udp=127.0.0.1:{remote},localaddr=127.0.0.1:{local}"),
+        ]);
         args.extend([
             "-device".to_owned(),
             format!(
