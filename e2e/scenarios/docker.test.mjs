@@ -21,6 +21,5 @@ test("Alpine nodes use real container networking and can exchange traffic with V
   dockerExec(b.container_id,"ip link set eth0 up && ip addr add 10.9.0.2/24 dev eth0");
   assert.match(dockerExec(a.container_id,"ping -c 2 -W 2 10.9.0.2"),/2 packets transmitted, 2 packets received/);
   const pc=await lab.console(v);await pc.expectRegex(/VPCS>/);pc.sendLine("ip 10.9.0.3/24");await pc.expectRegex(/VPCS>/);
-  dockerExec(b.container_id,"ip link set eth0 up && ip addr add 10.9.0.2/24 dev eth0");
   assert.match(dockerExec(b.container_id,"ping -c 2 -W 2 10.9.0.3"),/2 packets transmitted, 2 packets received/);
 });
