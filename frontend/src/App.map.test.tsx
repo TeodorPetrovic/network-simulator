@@ -202,9 +202,10 @@ describe("map", () => {
       });
       renderWorkspace();
       fireEvent.click(await screen.findByRole("button", { name: "Connect ports" }));
-      fireEvent.click(screen.getByRole("button", { name: "Edge A eth0" }));
-      fireEvent.click(screen.getByRole("button", { name: "Edge B eth0" }));
-      fireEvent.click(screen.getByRole("button", { name: "Create link · 2" }));
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Node Edge A" }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: /eth0/ }));
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Node Edge B" }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: /eth0/ }));
   
       await waitFor(() => expect(api.createLink).toHaveBeenCalledWith("p1", [
         { node_id: "node-1", adapter_number: 0, port_number: 0 },

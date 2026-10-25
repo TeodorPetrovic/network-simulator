@@ -7,7 +7,7 @@ import { sanitizeDrawingSvg } from "../topology";
 import { selectionBoxIds } from "./helpers";
 import { useCanvasKeyboardShortcuts } from "./useCanvasKeyboardShortcuts";
 import { resolveCanvasSymbol } from "./symbols";
-import { iconForSymbolName, iconForType, kindLabel, localPortPoint, portCount, portIndex, portLabel, portPoint, sameEndpoint } from "./topologyUtils";
+import { iconForSymbolName, iconForType, localPortPoint, portCount, portIndex, portLabel, portPoint } from "./topologyUtils";
 export { deviceGroupLabel, endpointLabel, iconForSymbolName, iconForType, imageName, kindLabel, localPortPoint, messageFor, nodeHasAuxConsole, nodePorts, portCount, portIndex, portLabel, portPoint, safeFileName, sameEndpoint, templateDescription, valuesFromDrawing } from "./topologyUtils";
 
 export const scene = { width: 1440, height: 920 };
