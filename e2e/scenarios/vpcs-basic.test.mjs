@@ -21,7 +21,7 @@ test("two VPCS exchange real traffic and fail across subnets without a gateway",
   await command(cb, "ping 10.10.1.10 -c 1", /84 bytes from 10\.10\.1\.10/);
   await command(cb, "ip 10.10.2.11/24", /VPCS>/);
   ca.sendLine("ping 10.10.2.11 -c 1");
-  await ca.expectRegex(/100% packet loss|not reachable|timeout/i);
+  await ca.expectRegex(/No gateway found|100% packet loss|not reachable|timeout/i);
 });
 
 test("three VPCS exchange traffic through a built-in Ethernet switch; stopping a peer removes reachability", async (t) => {

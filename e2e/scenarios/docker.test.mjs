@@ -5,7 +5,7 @@ import { scenario, link, startNode } from "./lib.mjs";
 import { templateByType } from "../harness.mjs";
 
 function dockerExec(id, command) { return execFileSync("docker",["exec",id,"sh","-lc",command],{encoding:"utf8",timeout:30000}); }
-async function docker(lab,name,adapters=1){const r=await lab.server.api("POST",`/projects/${lab.projectId}/nodes`,{name,node_type:"docker",image:"alpine:latest",start_command:"/bin/sh -c 'sleep 3600'",adapters});assert.equal(r.status,201,JSON.stringify(r));lab.nodes.push(r.json);return r.json;}
+async function docker(lab,name,adapters=1){const r=await lab.server.api("POST",`/projects/${lab.projectId}/nodes`,{name,node_type:"docker",image:"alpine:latest",start_command:"/bin/sh -c 'sleep 3600'",adapters});assert.equal(r.status,201,JSON.stringify(r));r.json.api_base=lab.server.base;lab.nodes.push(r.json);return r.json;}
 test("Alpine nodes use real container networking and can exchange traffic with VPCS",async(t)=>{
   try{execFileSync("docker",["image","inspect","alpine:latest"],{stdio:"ignore"});}catch{return t.skip("Docker daemon or alpine:latest image is unavailable");}
   const lab=await scenario(t,"scenario-docker");

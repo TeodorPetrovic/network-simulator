@@ -14,7 +14,7 @@ test("VPCS, Docker, CHR and c3620 share a live switched Ethernet segment",async(
   const rt=(await lab.server.api("GET","/templates")).json.find(x=>x.template_type==="dynamips"&&String(x.image).includes("c3620"));assert.ok(rt,"c3620 runtime template is required");
   const v=await lab.add(await templateByType(lab.server,"vpcs"),0,0,"PC");
   const chr=await lab.add(q.json,0,0,"CHR"); const r=await lab.add(rt,0,0,"Router");
-  const dr=await lab.server.api("POST",`/projects/${lab.projectId}/nodes`,{name:"Alpine",node_type:"docker",image:"alpine:latest",start_command:"/bin/sh -c 'sleep 3600'",adapters:1});assert.equal(dr.status,201);lab.nodes.push(dr.json);
+  const dr=await lab.server.api("POST",`/projects/${lab.projectId}/nodes`,{name:"Alpine",node_type:"docker",image:"alpine:latest",start_command:"/bin/sh -c 'sleep 3600'",adapters:1});assert.equal(dr.status,201);dr.json.api_base=lab.server.base;lab.nodes.push(dr.json);
   const sw=await lab.server.api("POST",`/projects/${lab.projectId}/nodes`,{name:"Switch",node_type:"ethernet_switch"});assert.equal(sw.status,201);lab.nodes.push(sw.json);
   for(const [i,node] of [v,chr,r,dr.json].entries())await link(lab.server,lab.projectId,node.node_type==="docker"?{node,adapter_number:0}:{node},{node:sw.json,port_number:i});
   await Promise.all([v,chr,r,dr.json].map(n=>startNode(lab.server,lab.projectId,n)));

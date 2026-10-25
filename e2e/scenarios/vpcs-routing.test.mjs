@@ -9,7 +9,7 @@ async function routerTemplate(server) {
   const all = await server.api("GET", "/templates");
   const found = all.json.find((x) => x.template_type === "dynamips" && `${x.image} ${x.platform}`.toLowerCase().includes("c3620"));
   if (found) return found;
-  const created = await server.api("POST", "/templates", { name: "Scenario c3620", template_type: "dynamips", platform: "c3620", image: `${imageDir}/${ios}`, ram: 128, nvram: 128, chassis: "3620", slot0: "NM-1FE-TX" });
+  const created = await server.api("POST", "/templates", { name: "Scenario c3620", template_type: "dynamips", platform: "c3620", image: `${imageDir}/${ios}`, ram: 128, nvram: 128, chassis: "3620", slot0: "NM-1FE-TX", adapters: 2 });
   if (created.status !== 201) throw new Error(`c3620 template unavailable: ${JSON.stringify(created)}`);
   return created.json;
 }

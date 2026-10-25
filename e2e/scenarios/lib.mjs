@@ -19,9 +19,12 @@ export async function link(server, projectId, ...nodes) {
 export async function startNode(server, projectId, node) {
   const result = await server.api("POST", `/projects/${projectId}/nodes/${node.node_id}/start`, {});
   if (result.status !== 200) throw new Error(`start ${node.name} failed: ${JSON.stringify(result)}`);
+  if (result.json && typeof result.json === "object") Object.assign(node, result.json);
   await waitFor(async () => {
-    const status = await server.api("GET", `/projects/${projectId}/nodes/${node.node_id}`);
-    return status.status === 200 && status.json.status === "started";
+    const status = await server.api("GET", `/projects/${projectId}/nodes`);
+    const current = status.json?.find?.((candidate) => candidate.node_id === node.node_id);
+    if (current) Object.assign(node, current);
+    return status.status === 200 && current?.status === "started";
   }, { timeout: 30000, label: `${node.name} started` });
   return result.json;
 }
@@ -45,7 +48,37 @@ function cleanTelnet(buffer) {
 
 export async function connectConsole(node, { timeout = 30000 } = {}) {
   const host = node.console_host ?? "127.0.0.1";
-  if (!node.console) throw new Error(`${node.name} has no TCP console (Docker consoles use the API WebSocket)`);
+  if (!node.console) {
+    const kind = node.node_type === "vpcs" ? "vpcs" : node.node_type === "dynamips" ? "dynamips" : node.node_type === "qemu" ? "qemu" : "docker";
+    const route = kind === "qemu" ? "qemu" : kind;
+    const suffix = kind === "qemu" ? "/console/ws" : "/console/ws";
+    const base = new URL(node.api_base);
+    const ws = new WebSocket(`${base.protocol === "https:" ? "wss:" : "ws:"}//${base.host}/v3/compute/projects/${node.project_id}/${route}/nodes/${node.node_id}${suffix}`);
+    let output = ""; const waiters = [];
+    ws.addEventListener("message", (event) => {
+      if (typeof event.data === "string") output += event.data;
+      else if (event.data instanceof Blob) event.data.text().then((value) => { output += value; for (const wake of waiters.splice(0)) wake(); });
+      else output += new TextDecoder().decode(event.data);
+      for (const wake of waiters.splice(0)) wake();
+    });
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`console WebSocket timed out for ${node.name}`)), timeout);
+      ws.addEventListener("open", () => { clearTimeout(timer); resolve(); }, { once: true });
+      ws.addEventListener("error", () => { clearTimeout(timer); reject(new Error(`console WebSocket failed for ${node.name}`)); }, { once: true });
+    });
+    return {
+      socket: ws, get output() { return output; },
+      async expectRegex(regex, { timeout: waitTimeout = 15000 } = {}) {
+        const end = Date.now() + waitTimeout;
+        while (!regex.test(output)) {
+          if (Date.now() >= end) throw new Error(`timed out waiting for ${regex}; console output:\n${output.slice(-3000)}`);
+          await Promise.race([new Promise((resolve) => waiters.push(resolve)), sleep(Math.min(200, end - Date.now()))]);
+        }
+        return output.match(regex);
+      },
+      sendLine(line) { ws.send(`${line}\r`); }, close() { ws.close(); },
+    };
+  }
   const socket = net.createConnection({ host, port: Number(node.console) });
   socket.setEncoding("utf8");
   let output = "";
@@ -101,6 +134,7 @@ export async function scenario(t, name) {
     server, projectId, nodes, consoles,
     async add(template, x = 0, y = 0, nodeName) {
       const node = await addNode(server, projectId, template, x, y, nodeName);
+      node.api_base = server.base;
       nodes.push(node);
       return node;
     },
