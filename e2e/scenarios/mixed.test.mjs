@@ -20,6 +20,6 @@ test("VPCS, Docker, CHR and c3620 share a live switched Ethernet segment",async(
   await Promise.all([v,chr,r,dr.json].map(n=>startNode(lab.server,lab.projectId,n)));
   const pc=await lab.console(v);await pc.expectRegex(/VPCS>/);pc.sendLine("ip 10.20.0.10/24");await pc.expectRegex(/VPCS>/);
   const docker=execFileSync("docker",["exec",dr.json.container_id,"sh","-lc","ip addr"],{encoding:"utf8"});assert.match(docker,/eth0/);
-  execFileSync("docker",["exec",dr.json.container_id,"ip","addr","add","10.20.0.20/24","dev","eth0"]);
+  execFileSync("docker",["exec",dr.json.container_id,"sh","-lc","ip link set eth0 up && ip addr add 10.20.0.20/24 dev eth0"]);
   const ping=execFileSync("docker",["exec",dr.json.container_id,"ping","-c","2","-W","2","10.20.0.10"],{encoding:"utf8"});assert.match(ping,/2 packets transmitted, 2 received/);
 });

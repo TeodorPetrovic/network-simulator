@@ -17,10 +17,10 @@ test("Alpine nodes use real container networking and can exchange traffic with V
   await link(lab.server,lab.projectId,v,{node:sw.json,port_number:2});
   await Promise.all([startNode(lab.server,lab.projectId,a),startNode(lab.server,lab.projectId,b),startNode(lab.server,lab.projectId,v)]);
   const info=dockerExec(a.container_id,"ip addr");assert.match(info,/eth/);
-  dockerExec(a.container_id,"ip addr add 10.9.0.1/24 dev eth0");
-  dockerExec(b.container_id,"ip addr add 10.9.0.2/24 dev eth0");
+  dockerExec(a.container_id,"ip link set eth0 up && ip addr add 10.9.0.1/24 dev eth0");
+  dockerExec(b.container_id,"ip link set eth0 up && ip addr add 10.9.0.2/24 dev eth0");
   assert.match(dockerExec(a.container_id,"ping -c 2 -W 2 10.9.0.2"),/2 packets transmitted, 2 received/);
   const pc=await lab.console(v);await pc.expectRegex(/VPCS>/);pc.sendLine("ip 10.9.0.3/24");await pc.expectRegex(/VPCS>/);
-  dockerExec(b.container_id,"ip addr add 10.9.0.2/24 dev eth1");
+  dockerExec(b.container_id,"ip link set eth1 up && ip addr add 10.9.0.2/24 dev eth1");
   assert.match(dockerExec(b.container_id,"ping -c 2 -W 2 10.9.0.3"),/2 packets transmitted, 2 received/);
 });
