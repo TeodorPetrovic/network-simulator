@@ -329,7 +329,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
             <ContextMenuTrigger asChild>
               <div className={`sim-canvas ${props.connecting ? "is-connecting" : ""} ${pendingDrawing ? "is-drawing" : ""}`}>
                 {featureMessage && <div className="sim-map-inline-notice" role="status">{featureMessage}</div>}
-                  {props.connecting && <div className="sim-map-inline-notice sim-link-mode-banner" role="status">Link mode is on: right-click a device to pick a port. Press Esc or <button type="button" className="underline" onClick={props.onToggleConnect}>exit link mode</button> to get the normal device menu back.</div>}
+                  {props.connecting && <div className="sim-map-inline-notice sim-link-mode-banner" role="status">Link mode is on: left-click a device to pick a port. Press Esc or <button type="button" className="underline" onClick={props.onToggleConnect}>exit link mode</button> to get the normal device menu back.</div>}
                 <div className="sim-zoom-hint">Ctrl + scroll to zoom · drag with middle mouse to pan · <button type="button" onClick={() => setView({ zoom: 1, centerX: 0, centerY: 0 })}>{Math.round(view.zoom * 100)}%</button></div>
 
                 <TopologyCanvas
