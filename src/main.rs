@@ -55,8 +55,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         api::auth::enforce_bind_auth_floor(store.pool(), !bind_address.ip().is_loopback()).await?;
     let state = api::AppState::new(store);
     state.reap_orphaned_runtimes();
+    state.reconcile_node_statuses().await;
     state.open_auto_open_projects().await;
     state.reattach_running_links().await;
+    let monitor_state = state.clone();
+    tokio::spawn(async move { monitor_state.monitor_node_liveness().await; });
     let listener = tokio::net::TcpListener::bind(bind_address).await?;
     let bind_address = listener.local_addr()?;
     let state = state.with_bind_address(bind_address);

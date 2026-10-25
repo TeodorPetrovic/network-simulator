@@ -1,4 +1,5 @@
 use super::*;
+use axum::extract::ws::CloseFrame;
 
 pub(super) async fn qemu_console(
     State(state): State<AppState>,
@@ -17,9 +18,7 @@ pub(super) async fn qemu_console(
     }
     let vm = state.qemu.vm_from_node(&node).map_err(runtime_api_error)?;
     if state.qemu.status(&vm).await.map_err(runtime_api_error)? != "started" {
-        return Err(ApiError::conflict(
-            "Start the QEMU node before opening its console",
-        ));
+        return Ok(stopped_console(websocket));
     }
     let serial = UnixStream::connect(&vm.serial_socket)
         .await
@@ -72,9 +71,7 @@ pub(super) async fn docker_console(
         .map_err(runtime_api_error)?
         != "started"
     {
-        return Err(ApiError::conflict(
-            "Start the Docker node before opening its console",
-        ));
+        return Ok(stopped_console(websocket));
     }
     let process = state
         .runtime
@@ -119,9 +116,7 @@ pub(super) async fn docker_aux_console(
         .map_err(runtime_api_error)?
         != "started"
     {
-        return Err(ApiError::conflict(
-            "Start the Docker node before opening its auxiliary console",
-        ));
+        return Ok(stopped_console(websocket));
     }
     let process = state
         .runtime
@@ -174,9 +169,7 @@ pub(super) async fn vpcs_console(
         .map_err(runtime_api_error)?
         != "started"
     {
-        return Err(ApiError::conflict(
-            "Start the VPCS node before opening its console",
-        ));
+        return Ok(stopped_console(websocket));
     }
     let console = state
         .vpcs
@@ -188,6 +181,16 @@ pub(super) async fn vpcs_console(
         let _activity = activity.open_websocket(project_id);
         vpcs_console_session(socket, console).await;
     }))
+}
+
+fn stopped_console(websocket: WebSocketUpgrade) -> Response {
+    websocket.on_upgrade(|mut socket| async move {
+        let _ = socket.send(Message::Text("node is not started".into())).await;
+        let _ = socket.send(Message::Close(Some(CloseFrame {
+            code: 1008,
+            reason: "node is not started".into(),
+        }))).await;
+    })
 }
 
 pub(super) async fn dynamips_console(

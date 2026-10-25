@@ -33,10 +33,20 @@ async fn docker_console_attaches_to_the_running_container_tty_over_websocket() {
     let node_id = node["node_id"].as_str().unwrap();
     let console_path =
         format!("/v3/compute/projects/{project_id}/docker/nodes/{node_id}/console/ws");
-    assert_eq!(
-        websocket_status(&app, console_path.clone()).await,
-        StatusCode::CONFLICT
-    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("temporary HTTP listener binds");
+    let address = listener.local_addr().unwrap();
+    let server_app = app.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, server_app).await.expect("test HTTP server runs");
+    });
+    let (mut stopped_socket, _) = connect_async(format!("ws://{address}{console_path}"))
+        .await.expect("stopped-node websocket upgrade succeeds to return an error frame");
+    let stopped_message = timeout(Duration::from_secs(2), stopped_socket.next())
+        .await.expect("stopped-node error arrives")
+        .expect("stopped-node socket sends a message")
+        .expect("stopped-node websocket frame is valid");
+    assert_eq!(stopped_message.into_text().unwrap(), "node is not started");
+    stopped_socket.close(None).await.expect("stopped-node websocket closes");
 
     let (status, _) = request(
         &app,
@@ -47,15 +57,6 @@ async fn docker_console_attaches_to_the_running_container_tty_over_websocket() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("temporary HTTP listener binds");
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        axum::serve(listener, app)
-            .await
-            .expect("test HTTP server runs");
-    });
     let (mut socket, _) = connect_async(format!("ws://{address}{console_path}"))
         .await
         .expect("Docker console websocket connects");
@@ -153,7 +154,7 @@ async fn qemu_templates_create_private_disks_and_exercise_qmp_process_lifecycle(
     );
     assert_eq!(
         websocket_status(&app, console_path.clone()).await,
-        StatusCode::CONFLICT
+        StatusCode::SWITCHING_PROTOCOLS
     );
 
     let (status, node) = request(

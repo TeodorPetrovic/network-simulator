@@ -1,4 +1,52 @@
 use super::*;
+
+#[tokio::test]
+async fn concurrent_node_and_topology_updates_are_serialized() {
+    let (app, _directory) = test_router().await;
+    let (_, project) = request(&app, Method::POST, "/v3/projects".into(),
+        Some(serde_json::json!({"name":"Concurrent topology updates"}))).await;
+    let project_id = project["project_id"].as_str().unwrap().to_owned();
+    let mut node_ids = Vec::new();
+    for index in 0..30 {
+        let (status, node) = request(&app, Method::POST, format!("/v3/projects/{project_id}/nodes"),
+            Some(serde_json::json!({"name":format!("N{index}"),"node_type":"ethernet_switch"}))).await;
+        assert_eq!(status, StatusCode::CREATED);
+        node_ids.push(node["node_id"].as_str().unwrap().to_owned());
+    }
+
+    let mut drawing_ids = Vec::new();
+    for _ in 0..3 {
+        let (status, drawing) = request(&app, Method::POST, format!("/v3/projects/{project_id}/drawings"),
+            Some(serde_json::json!({"x":0,"y":0,"z":0,"rotation":0,"svg":"<svg></svg>"}))).await;
+        assert_eq!(status, StatusCode::CREATED);
+        drawing_ids.push(drawing["drawing_id"].as_str().unwrap().to_owned());
+    }
+    let mut writes: Vec<futures_util::future::BoxFuture<'static, (StatusCode, Value)>> = Vec::new();
+    for (index, node_id) in node_ids.iter().enumerate() {
+        let app = app.clone();
+        let project_id = project_id.clone();
+        let node_id = node_id.clone();
+        writes.push(Box::pin(async move { request(&app, Method::PUT,
+            format!("/v3/projects/{project_id}/nodes/{node_id}"),
+            Some(serde_json::json!({"x":index as i64 * 17,"y":index as i64 * -11}))).await }));
+    }
+    for (index, drawing_id) in drawing_ids.into_iter().enumerate() {
+        let app = app.clone();
+        let project_id = project_id.clone();
+        writes.push(Box::pin(async move { request(&app, Method::PUT,
+            format!("/v3/projects/{project_id}/drawings/{drawing_id}"),
+            Some(serde_json::json!({"x":index as i64 * 13,"y":index as i64 * 19}))).await }));
+    }
+    let results = futures_util::future::join_all(writes).await;
+    assert!(results.iter().all(|(status, _)| *status == StatusCode::OK), "statuses: {:?}", results.iter().map(|(s,_)|s).collect::<Vec<_>>());
+    let (status, nodes) = request(&app, Method::GET, format!("/v3/projects/{project_id}/nodes"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    for (index, node_id) in node_ids.iter().enumerate() {
+        let node = nodes.as_array().unwrap().iter().find(|node| node["node_id"] == *node_id).unwrap();
+        assert_eq!(node["x"], index as i64 * 17);
+        assert_eq!(node["y"], index as i64 * -11);
+    }
+}
 use serde_json::json;
 
 #[tokio::test]
