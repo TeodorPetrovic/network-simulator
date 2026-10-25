@@ -1,6 +1,31 @@
 use super::*;
 
 impl super::AppState {
+    pub async fn open_auto_open_projects(&self) {
+        let rows = match sqlx::query(
+            "SELECT project_id FROM projects WHERE json_extract(project_json, '$.auto_open') = 1 ORDER BY project_id",
+        )
+        .fetch_all(self.store.pool())
+        .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(%error, "could not load projects configured to open at startup");
+                return;
+            }
+        };
+        for row in rows {
+            let id: String = row.get("project_id");
+            let Ok(id) = Uuid::parse_str(&id) else {
+                tracing::warn!(project_id = %id, "skipping project with invalid ID during startup open");
+                continue;
+            };
+            if let Err(error) = super::projects::open_project_lifecycle(self.clone(), id).await {
+                tracing::error!(project_id = %id, error = %error.message, "could not open project configured for startup");
+            }
+        }
+    }
+
     pub fn new(store: Store) -> Self {
         Self {
             store,

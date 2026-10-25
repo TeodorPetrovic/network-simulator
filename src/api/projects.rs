@@ -178,7 +178,25 @@ pub(super) async fn open_project(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
-    set_project_status(state, project_id, "opened").await
+    Ok(Json(open_project_lifecycle(state, project_id).await?))
+}
+
+pub(super) async fn open_project_lifecycle(
+    state: AppState,
+    project_id: Uuid,
+) -> Result<Value, ApiError> {
+    let project = set_project_status(state.clone(), project_id, "opened")
+        .await?
+        .0;
+    if project["auto_start"].as_bool().unwrap_or(false) {
+        controller_routes::bulk_nodes(
+            axum::extract::State(state),
+            axum::extract::Path(project_id),
+            NodeAction::Start,
+        )
+        .await?;
+    }
+    Ok(project)
 }
 
 pub(super) async fn close_project(

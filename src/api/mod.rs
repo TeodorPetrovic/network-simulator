@@ -515,6 +515,9 @@ use json_helpers::{
 #[cfg(test)]
 #[path = "tests/project_activity_tests.rs"]
 mod project_activity_tests;
+#[cfg(test)]
+#[path = "tests/project_lifecycle.rs"]
+mod project_lifecycle;
 
 #[cfg(test)]
 #[path = "tests/mod.rs"]

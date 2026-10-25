@@ -33,6 +33,7 @@ mod snapshots;
 use snapshots::*;
 mod bulk_lifecycle;
 pub(crate) use bulk_lifecycle::bulk_node_action_applies;
+pub(crate) use bulk_lifecycle::bulk_nodes;
 use bulk_lifecycle::*;
 mod node_resources;
 use node_resources::*;

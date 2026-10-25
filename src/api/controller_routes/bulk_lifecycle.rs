@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) async fn bulk_nodes(
+pub(crate) async fn bulk_nodes(
     State(state): State<AppState>,
     AxumPath(project_id): AxumPath<Uuid>,
     action: NodeAction,
