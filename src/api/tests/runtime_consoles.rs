@@ -213,7 +213,8 @@ async fn qemu_templates_create_private_disks_and_exercise_qmp_process_lifecycle(
 
     let args = std::fs::read_to_string(directory.path().join("qemu-arguments.log"))
         .expect("QEMU launch arguments were recorded");
-    assert!(args.contains("-nic none"));
+    assert!(args.contains("-netdev hubport,id=nsboot0,hubid=1000"));
+    assert!(args.contains("-device virtio-net-pci,id=nsdev_boot1,netdev=nsboot1"));
     assert!(args.contains("-chardev socket,id=serial0,path="));
     assert!(args.contains("server=on,wait=off -serial chardev:serial0"));
     assert!(args.contains("-m 1024 -smp cpus=2,maxcpus=2,sockets=1 -boot order=dc"));
