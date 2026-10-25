@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent, PointerEvent } from "react";
+import type { DragEvent, PointerEvent, ReactNode } from "react";
 import { Network } from "lucide-react";
 import type { Drawing, Link, LinkEndpoint, Node } from "../api";
 import { api } from "../api";
@@ -353,7 +353,7 @@ export function TopologyCanvas(props: CanvasProps) {
         const suspended = node.status === "suspended" || node.status === "suspending";
         return <g key={node.node_id} transform={`translate(${x},${y})`} className={`sim-node ${selected ? "is-selected" : ""} ${props.connecting ? "is-connecting" : ""} ${node.locked || props.projectLocked ? "is-locked" : ""}`} onPointerDown={(event) => startMove(event, node)} onClick={(event) => { event.stopPropagation(); if (event.metaKey || event.ctrlKey) props.onMultiSelectNode(node.node_id); else if (!movedRef.current) props.onNodeClick(node.node_id); movedRef.current = false; }} onContextMenu={() => props.onNodeContext(node.node_id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onNodeClick(node.node_id); } }} role="button" aria-label={`Node ${node.name}`} tabIndex={0}>
           {selected && <rect className="sim-node-selection" x="-33" y="-33" width="66" height="74" rx="6" />}
-          {symbol.kind === "custom" ? <AuthenticatedSymbolImage symbolId={symbol.symbolId} /> : <Icon className="sim-node-icon" x={-24} y={-24} width={48} height={48} strokeWidth={1.5} />}
+          {symbol.kind === "custom" ? <AuthenticatedSymbolImage symbolId={symbol.symbolId} fallback={null} /> : <Icon className="sim-node-icon" x={-24} y={-24} width={48} height={48} strokeWidth={1.5} />}
           <circle className={`sim-node-status ${node.status === "started" ? "running" : suspended ? "suspended" : "stopped"}`} cx="22" cy="-21" r="4" />
           {(node.locked || props.projectLocked) && <text className="sim-node-lock" x="-22" y="-17" aria-label="Locked">🔒</text>}
           <text className="sim-node-name" data-node-label="true" x={labelPosition.x} y={labelPosition.y} onPointerDown={(event) => startLabelMove(event, node)} onClick={(event) => event.stopPropagation()}>{node.name}</text>
@@ -365,12 +365,13 @@ export function TopologyCanvas(props: CanvasProps) {
   </div>;
 }
 
-export function AuthenticatedSymbolImage({ symbolId }: { symbolId: string }) {
+export function AuthenticatedSymbolImage({ symbolId, fallback }: { symbolId: string; fallback: ReactNode }) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     let objectUrl: string | null = null;
     setUrl(null);
+    if (typeof api.symbolRaw !== "function") return;
     void api.symbolRaw(symbolId).then((blob) => {
       objectUrl = URL.createObjectURL(blob);
       if (cancelled) URL.revokeObjectURL(objectUrl);
@@ -382,7 +383,7 @@ export function AuthenticatedSymbolImage({ symbolId }: { symbolId: string }) {
     };
   }, [symbolId]);
   return url
-    ? <image className="sim-node-symbol" href={url} x="-23" y="-32" width="46" height="38" preserveAspectRatio="xMidYMid meet" />
-    : null;
+    ? <image className="sim-node-symbol" href={url} x="-32" y="-32" width="64" height="64" preserveAspectRatio="xMidYMid meet" />
+    : fallback;
 }
 
