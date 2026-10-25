@@ -24,6 +24,7 @@ impl ApiError {
             StatusCode::PRECONDITION_FAILED => "precondition_failed",
             StatusCode::NOT_IMPLEMENTED => "not_implemented",
             StatusCode::SERVICE_UNAVAILABLE => "service_unavailable",
+            StatusCode::REQUEST_TIMEOUT => "timeout",
             _ => "internal_error",
         };
         Self {
