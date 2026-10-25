@@ -89,7 +89,7 @@ export function selectionBoxIds(nodes: Node[], first: { x: number; y: number }, 
   return nodes.filter((node) => {
     const x = Number(node.x ?? 0);
     const y = Number(node.y ?? 0);
-    return x >= minX - 56 && x <= maxX + 56 && y >= minY - 36 && y <= maxY + 36;
+    return x >= minX - 56 && x <= maxX + 56 && y >= minY - 36 && y <= maxY + 60;
   }).map((node) => node.node_id);
 }
 

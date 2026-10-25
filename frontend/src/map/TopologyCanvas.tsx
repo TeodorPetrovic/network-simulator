@@ -6,12 +6,21 @@ import { api } from "../api";
 import { sanitizeDrawingSvg } from "../topology";
 import { selectionBoxIds } from "./helpers";
 import { useCanvasKeyboardShortcuts } from "./useCanvasKeyboardShortcuts";
-import { resolveCanvasSymbol } from "./symbols";
+import { defaultCanvasSymbolAsset, resolveCanvasSymbol } from "./symbols";
+import cloudSymbolUrl from "./gns3-symbols/cloud.svg?url";
+import dockerSymbolUrl from "./gns3-symbols/docker_guest.svg?url";
+import switchSymbolUrl from "./gns3-symbols/ethernet_switch.svg?url";
+import hubSymbolUrl from "./gns3-symbols/hub.svg?url";
+import natSymbolUrl from "./gns3-symbols/nat.svg?url";
+import qemuSymbolUrl from "./gns3-symbols/qemu_guest.svg?url";
+import routerSymbolUrl from "./gns3-symbols/router.svg?url";
+import vpcsSymbolUrl from "./gns3-symbols/vpcs_guest.svg?url";
 import { iconForSymbolName, iconForType, localPortPoint, portCount, portIndex, portLabel, portPoint } from "./topologyUtils";
 export { deviceGroupLabel, endpointLabel, iconForSymbolName, iconForType, imageName, kindLabel, localPortPoint, messageFor, nodeHasAuxConsole, nodePorts, portCount, portIndex, portLabel, portPoint, safeFileName, sameEndpoint, templateDescription, valuesFromDrawing } from "./topologyUtils";
 
 export const scene = { width: 1440, height: 920 };
 export const maxZoom = 3;
+const defaultSymbolUrls: Record<string, string> = { "cloud.svg": cloudSymbolUrl, "docker_guest.svg": dockerSymbolUrl, "ethernet_switch.svg": switchSymbolUrl, "hub.svg": hubSymbolUrl, "nat.svg": natSymbolUrl, "qemu_guest.svg": qemuSymbolUrl, "router.svg": routerSymbolUrl, "vpcs_guest.svg": vpcsSymbolUrl };
 
 export type Selection = { kind: "node" | "link"; id: string } | null;
 type CanvasProps = {
@@ -347,13 +356,17 @@ export function TopologyCanvas(props: CanvasProps) {
         const y = Number(node.y ?? 0);
         const selected = (props.selection?.kind === "node" && props.selection.id === node.node_id) || props.selectedNodeIds.includes(node.node_id);
         const symbol = resolveCanvasSymbol(node.node_type ?? "", node.symbol, props.symbolDefaults, props.customSymbolIds);
+        const symbolAsset = symbol.kind === "default" ? defaultCanvasSymbolAsset(node.node_type ?? "", symbol.name) : null;
         const Icon = symbol.kind === "default" ? iconForSymbolName(symbol.name, node.node_type ?? "") : iconForType(node.node_type ?? "");
         const label = node.label && typeof node.label === "object" ? node.label as Record<string, unknown> : {};
-        const labelPosition = labelPositions[node.node_id] ?? { x: Number(label.x ?? 0), y: Number(label.y ?? 36) };
+        const labelPosition = labelPositions[node.node_id] ?? { x: Number(label.x ?? 0), y: Number(label.y ?? 56) };
         const suspended = node.status === "suspended" || node.status === "suspending";
         return <g key={node.node_id} transform={`translate(${x},${y})`} className={`sim-node ${selected ? "is-selected" : ""} ${props.connecting ? "is-connecting" : ""} ${node.locked || props.projectLocked ? "is-locked" : ""}`} onPointerDown={(event) => startMove(event, node)} onClick={(event) => { event.stopPropagation(); if (event.metaKey || event.ctrlKey) props.onMultiSelectNode(node.node_id); else if (!movedRef.current) props.onNodeClick(node.node_id); movedRef.current = false; }} onContextMenu={() => props.onNodeContext(node.node_id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onNodeClick(node.node_id); } }} role="button" aria-label={`Node ${node.name}`} tabIndex={0}>
-          {selected && <rect className="sim-node-selection" x="-33" y="-33" width="66" height="74" rx="6" />}
-          {symbol.kind === "custom" ? <AuthenticatedSymbolImage symbolId={symbol.symbolId} fallback={null} /> : <Icon className="sim-node-icon" x={-24} y={-24} width={48} height={48} strokeWidth={1.5} />}
+          {selected && <rect className="sim-node-selection" x="-48" y="-36" width="96" height="101" rx="6" />}
+          {symbol.kind === "custom" ? <AuthenticatedSymbolImage symbolId={symbol.symbolId} fallback={null} /> : <>
+            <Icon className="sim-node-icon" x={-24} y={-24} width={48} height={48} strokeWidth={1.5} />
+            {symbolAsset && <image className="sim-node-symbol" href={defaultSymbolUrls[symbolAsset]} x="-32" y="-32" width="64" height="64" preserveAspectRatio="xMidYMid meet" />}
+          </>}
           <circle className={`sim-node-status ${node.status === "started" ? "running" : suspended ? "suspended" : "stopped"}`} cx="22" cy="-21" r="4" />
           {(node.locked || props.projectLocked) && <text className="sim-node-lock" x="-22" y="-17" aria-label="Locked">🔒</text>}
           <text className="sim-node-name" data-node-label="true" x={labelPosition.x} y={labelPosition.y} onPointerDown={(event) => startLabelMove(event, node)} onClick={(event) => event.stopPropagation()}>{node.name}</text>

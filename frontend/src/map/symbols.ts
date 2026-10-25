@@ -3,6 +3,14 @@ export type CanvasSymbol =
   | { kind: "default"; name: string }
   | { kind: "type" };
 
+export function defaultCanvasSymbolAsset(nodeType: string, symbolName: string) {
+  if (symbolName === "router") return "router.svg";
+  if (symbolName === "pc") return nodeType === "qemu" ? "qemu_guest.svg" : nodeType === "docker" ? "docker_guest.svg" : "vpcs_guest.svg";
+  if (symbolName === "switch") return nodeType === "ethernet_hub" ? "hub.svg" : "ethernet_switch.svg";
+  if (symbolName === "cloud") return nodeType === "nat" ? "nat.svg" : "cloud.svg";
+  return null;
+}
+
 const defaultByNodeType: Record<string, string> = {
   qemu: "router",
   dynamips: "router",
