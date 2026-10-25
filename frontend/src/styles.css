@@ -367,6 +367,7 @@ button, input, textarea, select { font: inherit; }
 .sim-project-title h1 { overflow: hidden; max-width: 340px; font-size: 14px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .sim-toolbar-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
 .sim-workspace-grid { position: relative; display: grid; min-height: 0; flex: 1; grid-template-columns: 48px minmax(0, 1fr) 260px; gap: 0; padding: 0; }
+.sim-workspace-grid.is-docks-closed { grid-template-columns: 48px minmax(0, 1fr) 0; }
 .sim-canvas-card { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; border: 0 !important; border-radius: 0 !important; background: #fff !important; box-shadow: none !important; }
 .sim-device-rail { grid-column: 1; grid-row: 1; }
 .sim-canvas-card { grid-column: 2; grid-row: 1; }
@@ -527,7 +528,7 @@ button, input, textarea, select { font: inherit; }
 .sim-console-dock.is-minimized .sim-console-tabs { height: 32px; min-height: 32px; }
 .sim-console-dock { position: fixed; z-index: 40; right: auto; bottom: auto; left: 24px; width: 620px; height: 300px; border: 1px solid #303743; border-radius: 8px; overflow: hidden; box-shadow: 0 12px 36px #0006; resize: none; }
 .sim-console-tabs { cursor: move; user-select: none; }
-.sim-console-resize { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; background: linear-gradient(135deg, transparent 50%, #697587 50%, #697587 58%, transparent 58%, transparent 70%, #697587 70%, #697587 78%, transparent 78%); }
+.sim-console-resize { position: absolute; z-index: 20; right: 0; bottom: 0; width: 18px; height: 18px; cursor: nwse-resize; touch-action: none; pointer-events: auto; background: linear-gradient(135deg, transparent 50%, #697587 50%, #697587 58%, transparent 58%, transparent 70%, #697587 70%, #697587 78%, transparent 78%); }
 .sim-console-dock.is-minimized { width: 150px; height: 42px; border-radius: 8px; }
 .sim-console-dock.is-minimized .sim-console-panes { display: none; }
 .sim-console-loading { left: auto; right: 24px; width: 620px; }
