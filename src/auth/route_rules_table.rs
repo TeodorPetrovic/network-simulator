@@ -285,11 +285,14 @@ pub const ROUTE_RULES: &[RouteRule] = rules![
     ("GET", "/settings", RouteClass::Privilege("Server.Audit")),
     ("PUT", "/settings", RouteClass::Privilege("Server.Modify")),
     ("GET", "/computes", RouteClass::Privilege("Compute.Audit")),
+    ("POST", "/computes", RouteClass::Privilege("Compute.Modify")),
     (
         "GET",
         "/computes/{compute_id}",
         RouteClass::Privilege("Compute.Audit")
     ),
+    ("PUT", "/computes/{compute_id}", RouteClass::Privilege("Compute.Modify")),
+    ("DELETE", "/computes/{compute_id}", RouteClass::Privilege("Compute.Modify")),
     (
         "POST",
         "/computes/{compute_id}/disconnect",
