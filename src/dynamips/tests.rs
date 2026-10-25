@@ -416,7 +416,7 @@ async fn exited_hypervisor_is_reported_stopped_and_reaped_during_cleanup() {
         .bindings
         .lock()
         .await
-        .insert("dead-node".to_owned(), 7202);
+        .insert(("dead-node".to_owned(), 0, 0), super::NioBinding { local_port: 7202, nio_name: "udp-deadnode-0-0".to_owned() });
     let vm = DynamipsVm {
         node_id: "dead-node".to_owned(),
         name: "R1".to_owned(),
@@ -446,7 +446,7 @@ async fn exited_hypervisor_is_reported_stopped_and_reaped_during_cleanup() {
         "stopped"
     );
     assert!(!runtime.routers.lock().await.contains_key("dead-node"));
-    assert!(!runtime.bindings.lock().await.contains_key("dead-node"));
+    assert!(!runtime.bindings.lock().await.keys().any(|(node_id, _, _)| node_id == "dead-node"));
     assert!(!log_file.exists());
     assert!(!engine_log.exists());
 }

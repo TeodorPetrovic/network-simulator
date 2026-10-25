@@ -18,7 +18,7 @@ impl DynamipsRuntime {
             let _ = fs::remove_file(&stale.log_file);
         }
         remove_transient_runtime_files(&vm.working_dir)?;
-        self.bindings.lock().await.remove(&vm.node_id);
+        self.bindings.lock().await.retain(|(node_id, _, _), _| node_id != &vm.node_id);
         self.initialize_router(vm).await
     }
 
@@ -180,7 +180,7 @@ impl DynamipsRuntime {
         if let Some(working_dir) = router.log_file.parent() {
             let _ = remove_transient_runtime_files(working_dir);
         }
-        self.bindings.lock().await.remove(node_id);
+        self.bindings.lock().await.retain(|(bound_node, _, _), _| bound_node != node_id);
         true
     }
 }

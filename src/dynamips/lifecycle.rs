@@ -11,7 +11,7 @@ impl DynamipsRuntime {
             NodeAction::Start => self.start_locked(vm).await,
             NodeAction::Stop => {
                 if self.reap_dead_hypervisor(&vm.node_id).await {
-                    self.bindings.lock().await.remove(&vm.node_id);
+                    self.bindings.lock().await.retain(|(node_id, _, _), _| node_id != &vm.node_id);
                     return Ok("stopped".to_owned());
                 }
                 self.stop_locked(vm).await
@@ -88,7 +88,7 @@ impl DynamipsRuntime {
         remove_transient_runtime_files(&vm.working_dir)?;
         remove_runtime_manifest(&vm.working_dir)?;
         remove_generated_runtime_configs(&vm.working_dir)?;
-        self.bindings.lock().await.remove(&vm.node_id);
+        self.bindings.lock().await.retain(|(node_id, _, _), _| node_id != &vm.node_id);
         if vm.options.auto_delete_disks {
             remove_auto_delete_disk_files(&vm.working_dir, &vm.platform, vm.options.dynamips_id)?;
         }

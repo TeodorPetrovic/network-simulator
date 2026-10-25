@@ -72,8 +72,14 @@ pub struct DynamipsRuntime {
     image_dir: PathBuf,
     state_dir: PathBuf,
     routers: Arc<Mutex<HashMap<String, ManagedRouter>>>,
-    bindings: Arc<Mutex<HashMap<String, u16>>>,
+    bindings: Arc<Mutex<HashMap<(String, u32, u32), NioBinding>>>,
     operation_lock: Arc<Mutex<()>>,
+}
+
+#[derive(Clone, Debug)]
+struct NioBinding {
+    local_port: u16,
+    nio_name: String,
 }
 
 struct ManagedRouter {
