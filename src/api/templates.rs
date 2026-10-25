@@ -6,6 +6,7 @@ pub(super) async fn list_templates(
 ) -> Result<Json<Vec<Value>>, ApiError> {
     sync_templates_from_images(&state).await?;
     let mut templates = available_templates(&state).await?;
+    mark_missing_images(&mut templates);
     if let Some(name) = query.get("name") {
         templates.retain(|template| template.get("name").and_then(Value::as_str) == Some(name));
     }
@@ -139,6 +140,19 @@ pub(super) async fn sync_templates_from_images(state: &AppState) -> Result<(), A
         }
     }
     Ok(())
+}
+
+pub(super) fn mark_missing_images(templates: &mut [Value]) {
+    for template in templates {
+        let key = match template["template_type"].as_str() {
+            Some("qemu") => "hda_disk_image",
+            Some("dynamips") => "image",
+            _ => continue,
+        };
+        if let Some(image) = template[key].as_str().filter(|value| !value.is_empty()) {
+            template["image_missing"] = json!(!std::path::Path::new(image).is_file());
+        }
+    }
 }
 
 fn image_ref_matches(template: &Value, kind: &str, path: &std::path::Path) -> bool {

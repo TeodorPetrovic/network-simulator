@@ -12,6 +12,7 @@ pub(super) async fn list_api_templates(
     for row in rows {
         templates.push(decode_json(row.get("template_json"))?);
     }
+    super::super::templates::mark_missing_images(&mut templates);
     if let Some(name) = query.get("name") {
         templates.retain(|template| template.get("name").and_then(Value::as_str) == Some(name));
     }
@@ -62,7 +63,9 @@ pub(super) async fn get_template(
             .fetch_optional(state.store.pool())
             .await?
     {
-        return Ok(Json(decode_json(row.get("template_json"))?));
+        let mut template = decode_json(row.get("template_json"))?;
+        super::super::templates::mark_missing_images(std::slice::from_mut(&mut template));
+        return Ok(Json(template));
     }
     let id = template_id.to_string();
     let template = available_templates(&state)
@@ -70,6 +73,8 @@ pub(super) async fn get_template(
         .into_iter()
         .find(|item| item["template_id"].as_str() == Some(id.as_str()))
         .ok_or_else(|| ApiError::not_found(format!("Template {id} does not exist")))?;
+    let mut template = template;
+    super::super::templates::mark_missing_images(std::slice::from_mut(&mut template));
     Ok(Json(template))
 }
 
