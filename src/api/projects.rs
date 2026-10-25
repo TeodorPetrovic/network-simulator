@@ -14,7 +14,9 @@ pub(super) async fn list_projects(
         let project = decode_json(row.get::<String, _>("project_json"))?;
         let project_id: String = row.get("project_id");
         if auth::can_audit_project(state.store.pool(), &principal, &project_id).await
-            && query.get("name").is_none_or(|name| project["name"] == *name)
+            && query
+                .get("name")
+                .is_none_or(|name| project["name"] == *name)
         {
             projects.push(project);
         }
@@ -73,7 +75,9 @@ pub(super) async fn get_project(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
-    Ok(etag_response(fetch_project(state.store.pool(), &project_id.to_string()).await?))
+    Ok(etag_response(
+        fetch_project(state.store.pool(), &project_id.to_string()).await?,
+    ))
 }
 
 pub(super) async fn update_project(
@@ -300,7 +304,9 @@ pub(super) async fn set_project_status(
     let object = as_object_mut(&mut project, "stored project is invalid")?;
     if object.get("status").and_then(Value::as_str) == Some(status) {
         tx.commit().await?;
-        if status == "closed" { cleanup_project_web_wireshark(&state, &project_id).await; }
+        if status == "closed" {
+            cleanup_project_web_wireshark(&state, &project_id).await;
+        }
         return Ok(Json(project));
     }
     object.insert("status".into(), json!(status));
@@ -312,7 +318,9 @@ pub(super) async fn set_project_status(
         .await?;
     let event = Store::append_event(&mut tx, &project_id, "project.updated", &project).await?;
     tx.commit().await?;
-    if status == "closed" { cleanup_project_web_wireshark(&state, &project_id).await; }
+    if status == "closed" {
+        cleanup_project_web_wireshark(&state, &project_id).await;
+    }
     for event in node_events {
         state.store.publish(event);
     }

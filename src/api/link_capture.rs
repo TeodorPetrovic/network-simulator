@@ -72,29 +72,47 @@ pub(super) async fn start_link_capture(
     });
     if request.wireshark {
         let path = format!("/v3/projects/{project_id}/links/{link_id}/capture/stream");
-        let ticket = crate::api::auth::mint_capture_ticket(state.store.pool(), &principal, &path).await
+        let ticket = crate::api::auth::mint_capture_ticket(state.store.pool(), &principal, &path)
+            .await
             .map_err(|error| ApiError::new(StatusCode::FORBIDDEN, error))?;
         let gateway = docker_gateway("172.31.0.0/22");
-        let stream_url = format!("http://{gateway}:{}/v3/projects/{project_id}/links/{link_id}/capture/stream?ticket={ticket}", state.bind_address.port());
-        let (_, _) = state.web_wireshark.start_session(&project_id, &link_id, &stream_url).await.map_err(|error| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, error))?;
-        let ws_url = format!("ws://{}/v3/projects/{project_id}/links/{link_id}/capture/web-wireshark", state.bind_address);
+        let stream_url = format!(
+            "http://{gateway}:{}/v3/projects/{project_id}/links/{link_id}/capture/stream?ticket={ticket}",
+            state.bind_address.port()
+        );
+        let (_, _) = state
+            .web_wireshark
+            .start_session(&project_id, &link_id, &stream_url)
+            .await
+            .map_err(|error| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+        let ws_url = format!(
+            "ws://{}/v3/projects/{project_id}/links/{link_id}/capture/web-wireshark",
+            state.bind_address
+        );
         patch["wireshark"] = json!(true);
-        let updated = update_topology_object(state.clone(), project_id.clone(), link_id.clone(), "link", "link_id", patch).await?;
+        let updated = update_topology_object(
+            state.clone(),
+            project_id.clone(),
+            link_id.clone(),
+            "link",
+            "link_id",
+            patch,
+        )
+        .await?;
         let mut tx = state.store.begin_write().await?;
-        let event = crate::storage::Store::append_event(&mut tx, &project_id, "link.web_wireshark_started", &json!({"link_id":link_id,"ws_url":ws_url})).await?;
+        let event = crate::storage::Store::append_event(
+            &mut tx,
+            &project_id,
+            "link.web_wireshark_started",
+            &json!({"link_id":link_id,"ws_url":ws_url}),
+        )
+        .await?;
         tx.commit().await?;
         state.store.publish(event);
         return Ok((StatusCode::CREATED, updated).into_response());
     }
-    let updated = update_topology_object(
-        state,
-        project_id,
-        link_id,
-        "link",
-        "link_id",
-        patch,
-    )
-    .await?;
+    let updated =
+        update_topology_object(state, project_id, link_id, "link", "link_id", patch).await?;
     Ok((StatusCode::CREATED, updated).into_response())
 }
 
@@ -121,7 +139,10 @@ pub(super) async fn stop_link_capture(
             .map_err(runtime_api_error)?;
     }
     if link["wireshark"].as_bool().unwrap_or(false) {
-        let _ = state.web_wireshark.stop_session(&project_id, &link_id).await;
+        let _ = state
+            .web_wireshark
+            .stop_session(&project_id, &link_id)
+            .await;
     }
     let _ = update_topology_object(
         state,
@@ -150,51 +171,146 @@ pub(super) async fn download_link_capture(
 }
 
 pub(super) async fn restart_web_wireshark(
-    State(state): State<AppState>, Path((project_id, link_id)): Path<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+    Path((project_id, link_id)): Path<(Uuid, Uuid)>,
     axum::Extension(principal): axum::Extension<crate::api::auth::Principal>,
 ) -> Result<Json<Value>, ApiError> {
-    let project_id = project_id.to_string(); let link_id = link_id.to_string();
-    let link = get_topology_object(state.store.pool(), &project_id, "link", &link_id).await?.0;
-    if !link["capturing"].as_bool().unwrap_or(false) { return Err(ApiError::conflict("This link has no active packet capture")); }
-    let file = link["capture_file_name"].as_str().ok_or_else(|| ApiError::not_found("Link has no capture file name"))?;
-    let path = link["capture_file_path"].as_str().ok_or_else(|| ApiError::not_found("Link has no capture file"))?;
+    let project_id = project_id.to_string();
+    let link_id = link_id.to_string();
+    let link = get_topology_object(state.store.pool(), &project_id, "link", &link_id)
+        .await?
+        .0;
+    if !link["capturing"].as_bool().unwrap_or(false) {
+        return Err(ApiError::conflict("This link has no active packet capture"));
+    }
+    let file = link["capture_file_name"]
+        .as_str()
+        .ok_or_else(|| ApiError::not_found("Link has no capture file name"))?;
+    let path = link["capture_file_path"]
+        .as_str()
+        .ok_or_else(|| ApiError::not_found("Link has no capture file"))?;
     let capture_path = canonical_capture_file_path(&project_id, file, Some(path), false)?;
     let stream = format!("/v3/projects/{project_id}/links/{link_id}/capture/stream");
-    let ticket = crate::api::auth::mint_capture_ticket(state.store.pool(), &principal, &stream).await.map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e))?;
+    let ticket = crate::api::auth::mint_capture_ticket(state.store.pool(), &principal, &stream)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e))?;
     let gateway = docker_gateway("172.31.0.0/22");
-    let stream_url = format!("http://{gateway}:{}/v3/projects/{project_id}/links/{link_id}/capture/stream?ticket={ticket}", state.bind_address.port());
-    let (_, _) = state.web_wireshark.start_session(&project_id, &link_id, &stream_url).await.map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let ws_url = format!("ws://{}/v3/projects/{project_id}/links/{link_id}/capture/web-wireshark", state.bind_address);
+    let stream_url = format!(
+        "http://{gateway}:{}/v3/projects/{project_id}/links/{link_id}/capture/stream?ticket={ticket}",
+        state.bind_address.port()
+    );
+    let (_, _) = state
+        .web_wireshark
+        .start_session(&project_id, &link_id, &stream_url)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let ws_url = format!(
+        "ws://{}/v3/projects/{project_id}/links/{link_id}/capture/web-wireshark",
+        state.bind_address
+    );
     let _ = capture_path;
     Ok(Json(json!({"ws_url":ws_url})))
 }
 
 pub(super) async fn web_wireshark_websocket(
-    State(state): State<AppState>, Path((project_id, link_id)): Path<(Uuid, Uuid)>, websocket: WebSocketUpgrade,
+    State(state): State<AppState>,
+    Path((project_id, link_id)): Path<(Uuid, Uuid)>,
+    websocket: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
-    let project_id = project_id.to_string(); let link_id = link_id.to_string();
-    let link = get_topology_object(state.store.pool(), &project_id, "link", &link_id).await?.0;
-    if !link["wireshark"].as_bool().unwrap_or(false) { return Err(ApiError::not_found("Web Wireshark is not active for this link")); }
-    let session = state.web_wireshark.session(&project_id, &link_id).ok_or_else(|| ApiError::not_found("Web Wireshark session does not exist"))?;
-    let ip = state.web_wireshark.container_ip(&project_id).await.map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e))?;
+    let project_id = project_id.to_string();
+    let link_id = link_id.to_string();
+    let link = get_topology_object(state.store.pool(), &project_id, "link", &link_id)
+        .await?
+        .0;
+    if !link["wireshark"].as_bool().unwrap_or(false) {
+        return Err(ApiError::not_found(
+            "Web Wireshark is not active for this link",
+        ));
+    }
+    let session = state
+        .web_wireshark
+        .session(&project_id, &link_id)
+        .ok_or_else(|| ApiError::not_found("Web Wireshark session does not exist"))?;
+    let ip = state
+        .web_wireshark
+        .container_ip(&project_id)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e))?;
     let url = format!("ws://{ip}:{}", session.port);
-    Ok(websocket.protocols(["binary"]).on_upgrade(move |client| async move { proxy_websocket(client, url).await }))
+    Ok(websocket
+        .protocols(["binary"])
+        .on_upgrade(move |client| async move { proxy_websocket(client, url).await }))
 }
 
 async fn proxy_websocket(client: WebSocket, url: String) {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-    let Ok(mut request) = url.into_client_request() else { return; };
-    request.headers_mut().insert("sec-websocket-protocol", "binary".parse().unwrap());
-    let Ok((target, _)) = tokio_tungstenite::connect_async(request).await else { return; };
-    let (mut tx, mut rx) = client.split(); let (mut target_tx, mut target_rx) = target.split();
-    let a = async { while let Some(Ok(message)) = rx.next().await { match message { Message::Binary(bytes) => { if target_tx.send(tokio_tungstenite::tungstenite::Message::Binary(bytes)).await.is_err(){break;} }, Message::Close(_) => { let _ = target_tx.send(tokio_tungstenite::tungstenite::Message::Close(None)).await; break; }, _ => {} } } };
-    let b = async { while let Some(Ok(message)) = target_rx.next().await { match message { tokio_tungstenite::tungstenite::Message::Binary(bytes) => { if tx.send(Message::Binary(bytes)).await.is_err(){break;} }, tokio_tungstenite::tungstenite::Message::Close(_) => { let _ = tx.send(Message::Close(None)).await; break; }, _ => {} } } };
+    let Ok(mut request) = url.into_client_request() else {
+        return;
+    };
+    request
+        .headers_mut()
+        .insert("sec-websocket-protocol", "binary".parse().unwrap());
+    let Ok((target, _)) = tokio_tungstenite::connect_async(request).await else {
+        return;
+    };
+    let (mut tx, mut rx) = client.split();
+    let (mut target_tx, mut target_rx) = target.split();
+    let a = async {
+        while let Some(Ok(message)) = rx.next().await {
+            match message {
+                Message::Binary(bytes) => {
+                    if target_tx
+                        .send(tokio_tungstenite::tungstenite::Message::Binary(bytes))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Message::Close(_) => {
+                    let _ = target_tx
+                        .send(tokio_tungstenite::tungstenite::Message::Close(None))
+                        .await;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    };
+    let b = async {
+        while let Some(Ok(message)) = target_rx.next().await {
+            match message {
+                tokio_tungstenite::tungstenite::Message::Binary(bytes) => {
+                    if tx.send(Message::Binary(bytes)).await.is_err() {
+                        break;
+                    }
+                }
+                tokio_tungstenite::tungstenite::Message::Close(_) => {
+                    let _ = tx.send(Message::Close(None)).await;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    };
     tokio::select! { _ = a => {}, _ = b => {} }
 }
 
 fn docker_gateway(cidr: &str) -> String {
-    let ip = cidr.split('/').next().unwrap_or("172.31.0.0").parse::<std::net::Ipv4Addr>().unwrap_or(std::net::Ipv4Addr::new(172,31,0,0));
-    let octets = ip.octets(); format!("{}.{}.{}.{}", octets[0], octets[1], octets[2], octets[3].saturating_add(1))
+    let ip = cidr
+        .split('/')
+        .next()
+        .unwrap_or("172.31.0.0")
+        .parse::<std::net::Ipv4Addr>()
+        .unwrap_or(std::net::Ipv4Addr::new(172, 31, 0, 0));
+    let octets = ip.octets();
+    format!(
+        "{}.{}.{}.{}",
+        octets[0],
+        octets[1],
+        octets[2],
+        octets[3].saturating_add(1)
+    )
 }
 
 pub(super) async fn link_capture_response(

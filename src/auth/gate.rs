@@ -181,7 +181,9 @@ pub(super) fn trust_proxy_headers_unauthenticated() -> bool {
 }
 
 pub(super) fn is_ticket_endpoint(path: &str) -> bool {
-    path.ends_with("/ws") || path.ends_with("/capture/stream") || path.ends_with("/capture/web-wireshark")
+    path.ends_with("/ws")
+        || path.ends_with("/capture/stream")
+        || path.ends_with("/capture/web-wireshark")
 }
 
 pub(super) async fn has_privilege(
