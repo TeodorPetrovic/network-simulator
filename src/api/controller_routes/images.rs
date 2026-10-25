@@ -27,8 +27,8 @@ pub(super) async fn list_images(
     }
     let mut items = Vec::new();
     for (kind, dir) in dirs {
-        let mut entries = match tokio::fs::read_dir(&dir).await {
-            Ok(entries) => entries,
+        let root = match tokio::fs::canonicalize(&dir).await {
+            Ok(root) => root,
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             Err(error) => {
                 return Err(ApiError::new(
@@ -37,28 +37,50 @@ pub(super) async fn list_images(
                 ));
             }
         };
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        {
-            if !entry
-                .file_type()
-                .await
-                .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-                .is_file()
-            {
-                continue;
-            }
-            let file_name = entry.file_name().to_string_lossy().to_string();
-            if query.name.as_deref().is_some_and(|name| name != file_name) {
-                continue;
-            }
-            let bytes = tokio::fs::read(entry.path())
+        let mut pending = vec![root.clone()];
+        while let Some(directory) = pending.pop() {
+            let mut entries = tokio::fs::read_dir(&directory)
                 .await
                 .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            let md5 = format!("{:x}", md5::Md5::digest(&bytes));
-            items.push(json!({"filename":file_name,"path":entry.path().to_string_lossy(),"image_type":kind,"image_size":bytes.len(),"checksum":md5,"checksum_algorithm":"md5","availability":"available"}));
+            while let Some(entry) = entries
+                .next_entry()
+                .await
+                .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            {
+                let file_type = entry
+                    .file_type()
+                    .await
+                    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                if file_type.is_symlink() {
+                    continue;
+                }
+                if file_type.is_dir() {
+                    pending.push(entry.path());
+                    continue;
+                }
+                if !file_type.is_file() {
+                    continue;
+                }
+                let relative = entry
+                    .path()
+                    .strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let file_name = entry.file_name().to_string_lossy().to_string();
+                if query
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| name != file_name && name != relative)
+                {
+                    continue;
+                }
+                let bytes = tokio::fs::read(entry.path())
+                    .await
+                    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                let md5 = format!("{:x}", md5::Md5::digest(&bytes));
+                items.push(json!({"filename":file_name,"path":relative,"image_type":kind,"image_size":bytes.len(),"checksum":md5,"checksum_algorithm":"md5","availability":"available"}));
+            }
         }
     }
     Ok(Json(items))
@@ -68,15 +90,18 @@ pub(super) async fn upload_image(
     AxumPath(image_path): AxumPath<String>,
     request: Request,
 ) -> Result<Response, ApiError> {
-    let name = Path::new(&image_path)
+    let relative = safe_upload_relative_path(&image_path)?;
+    let name = relative
         .file_name()
         .and_then(|s| s.to_str())
         .ok_or_else(|| ApiError::bad_request("image path must end in a filename"))?;
     if is_qemu_image_upload(name) {
-        let (tmp, dest) = state
+        let (tmp, _) = state
             .qemu
             .prepare_upload_name(name)
             .map_err(runtime_api_error)?;
+        let dest =
+            prepare_nested_destination(&state.qemu.info().await.image_directory, &relative).await?;
         let (size, checksum) =
             write_image_upload(request.into_body(), &tmp, MAX_QEMU_IMAGE_BYTES as u64).await?;
         if let Err(error) = state.qemu.finalize_uploaded_image(&tmp, &dest).await {
@@ -85,10 +110,13 @@ pub(super) async fn upload_image(
         }
         Ok((StatusCode::CREATED, Json(json!({"filename":name,"path":dest.to_string_lossy(),"image_type":"qemu","image_size":size,"checksum":checksum,"checksum_algorithm":"md5","availability":"available"}))).into_response())
     } else {
-        let (tmp, dest) = state
+        let (tmp, _) = state
             .dynamips
             .prepare_upload_name(name)
             .map_err(runtime_api_error)?;
+        let dest =
+            prepare_nested_destination(&state.dynamips.info().await.image_directory, &relative)
+                .await?;
         let (size, checksum) =
             write_image_upload(request.into_body(), &tmp, MAX_DYNAMIPS_IMAGE_BYTES as u64).await?;
         if let Err(error) = state.dynamips.finalize_uploaded_image(&tmp, &dest) {
@@ -97,6 +125,43 @@ pub(super) async fn upload_image(
         }
         Ok((StatusCode::CREATED, Json(json!({"filename":name,"path":dest.to_string_lossy(),"image_type":"ios","image_size":size,"checksum":checksum,"checksum_algorithm":"md5","availability":"available"}))).into_response())
     }
+}
+
+fn safe_upload_relative_path(value: &str) -> Result<PathBuf, ApiError> {
+    let path = Path::new(value);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(ApiError::bad_request(
+            "image path must be a relative path without traversal components",
+        ));
+    }
+    Ok(path.to_path_buf())
+}
+
+async fn prepare_nested_destination(root: &str, relative: &Path) -> Result<PathBuf, ApiError> {
+    let root = tokio::fs::canonicalize(root)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let parent = root.join(relative).parent().unwrap().to_path_buf();
+    tokio::fs::create_dir_all(&parent)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let canonical_parent = tokio::fs::canonicalize(&parent)
+        .await
+        .map_err(|e| ApiError::bad_request(format!("invalid image destination: {e}")))?;
+    if !canonical_parent.starts_with(&root) {
+        return Err(ApiError::bad_request(
+            "image destination escapes configured image directory",
+        ));
+    }
+    let target = canonical_parent.join(relative.file_name().unwrap());
+    if tokio::fs::symlink_metadata(&target).await.is_ok() {
+        return Err(ApiError::bad_request("image destination already exists"));
+    }
+    Ok(target)
 }
 
 pub(super) fn is_qemu_image_upload(name: &str) -> bool {
@@ -252,4 +317,56 @@ pub(super) async fn delete_image(
         .await
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod image_path_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn image_upload_paths_reject_traversal_and_absolute_paths() {
+        assert!(safe_upload_relative_path("../outside.qcow2").is_err());
+        assert!(safe_upload_relative_path("nested/../../outside.qcow2").is_err());
+        assert!(safe_upload_relative_path("/tmp/outside.qcow2").is_err());
+        assert_eq!(
+            safe_upload_relative_path("nested/router.qcow2")
+                .unwrap()
+                .to_str(),
+            Some("nested/router.qcow2")
+        );
+    }
+
+    #[tokio::test]
+    async fn image_listing_recurses_and_returns_relative_paths() {
+        let directory = TempDir::new().unwrap();
+        let store =
+            crate::storage::Store::connect(directory.path().join("api.sqlite").to_str().unwrap())
+                .await
+                .unwrap();
+        let images = directory.path().join("qemu");
+        let nested = images.join("vendor/router");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("disk.qcow2"), b"disk").unwrap();
+        let mut state = AppState::new(store);
+        state.qemu = crate::qemu::QemuRuntime::with_paths(
+            "qemu",
+            "qemu-img",
+            &images,
+            directory.path().join("state"),
+            directory.path().join("qmp"),
+        );
+        let result = list_images(
+            State(state),
+            Query(ImageQuery {
+                image_type: Some("qemu".into()),
+                name: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.0.len(), 1);
+        assert_eq!(result.0[0]["path"], "vendor/router/disk.qcow2");
+        assert_eq!(result.0[0]["filename"], "disk.qcow2");
+    }
 }
