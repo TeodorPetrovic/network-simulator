@@ -175,19 +175,34 @@ async fn resolve_link_port_names(
         let node = decode_json(row.get("object_json"))?;
         let ports = node["ports_mapping"].as_array().cloned().unwrap_or_default();
         let adapter = endpoint.get("adapter_number").and_then(Value::as_u64).unwrap_or(0);
-        let mut available = Vec::new();
+        let mut candidates = Vec::<(u64, u64, String)>::new();
         for (index, mapping) in ports.iter().enumerate() {
             let port_adapter = mapping.get("adapter_number").and_then(Value::as_u64).unwrap_or(0);
             let port_number = mapping.get("port_number").and_then(Value::as_u64).unwrap_or(index as u64);
-            if port_adapter != adapter { continue; }
+            if port_adapter == adapter {
+                candidates.push((port_adapter, port_number, mapping.get("name").and_then(Value::as_str).unwrap_or_default().to_owned()));
+            }
+        }
+        if ports.is_empty() {
+            let adapters = node.get("adapters").and_then(Value::as_u64).unwrap_or(1);
+            match node["node_type"].as_str().unwrap_or_default() {
+                "docker" => candidates.extend((0..adapters).map(|port| (0, port, format!("Ethernet{port}")))),
+                "qemu" => candidates.extend((0..adapters).map(|adapter| (adapter, 0, format!("Ethernet{adapter}")))),
+                "vpcs" | "dynamips" => candidates.push((0, 0, "Ethernet0".to_owned())),
+                _ => {}
+            }
+        }
+        let mut available = Vec::new();
+        for (port_adapter, port_number, port_name) in candidates {
             let used: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM link_endpoints WHERE project_id=? AND node_id=? AND adapter_number=? AND port_number=?)")
                 .bind(project_id).bind(node_id).bind(port_adapter as i64).bind(port_number as i64).fetch_one(state.store.pool()).await?;
-            if used == 0 { available.push((port_number, mapping.get("name").and_then(Value::as_str).unwrap_or_default())); }
+            if used == 0 { available.push((port_adapter, port_number, port_name)); }
         }
-        let selected = if name == "auto" { available.first().map(|entry| entry.0) }
-            else { available.iter().find(|entry| entry.1 == name).map(|entry| entry.0) };
-        let selected = selected.ok_or_else(|| ApiError::port_in_use(format!("No free port named '{name}' on node {node_id}")))?;
-        endpoint["port_number"] = json!(selected);
+        let selected = if name == "auto" { available.first() }
+            else { available.iter().find(|entry| entry.2 == name) };
+        let (selected_adapter, selected_port, _) = selected.ok_or_else(|| ApiError::port_in_use(format!("No free port named '{name}' on node {node_id}")))?;
+        endpoint["adapter_number"] = json!(selected_adapter);
+        endpoint["port_number"] = json!(selected_port);
     }
     Ok(())
 }
