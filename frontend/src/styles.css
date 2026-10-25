@@ -570,6 +570,8 @@ button, input, textarea, select { font: inherit; }
 .registry-details > div:first-child p { margin-top: 4px; color: var(--muted-foreground); font-size: 11px; line-height: 1.5; }
 .registry-details .appliance-config-meta { margin: 0; }
 .registry-version-list { min-height: 100px; flex: 1; }
+.registry-version-cards { display: grid; min-width: 0; gap: 8px; padding: 2px 8px 4px 2px; }
+.registry-version-cards > [data-slot="card"] { min-width: 0; width: 100%; }
 .registry-requirement { display: grid; grid-template-columns: minmax(80px, auto) minmax(0, 1fr); gap: 3px 8px; border-top: 1px solid var(--border); padding-top: 7px; font-size: 10px; }
 .registry-requirement code { color: var(--muted-foreground); }
 .registry-requirement small { grid-column: 2; color: var(--muted-foreground); }
