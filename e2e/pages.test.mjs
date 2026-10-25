@@ -50,6 +50,7 @@ test("projects create, rename, duplicate, export, refresh, sort, close, and dele
   for (const heading of ["Project", "Status", "Created"]) await page.getByRole("button", { name: new RegExp(heading) }).click();
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Delete Page Renamed" }).click();
+  await page.getByRole("button", { name: "Delete Page Renamed" }).waitFor({ state: "detached" });
   assert.deepEqual((await server.api("GET", "/projects")).json.map((p) => p.name).includes("Page Renamed"), false);
 });
 
