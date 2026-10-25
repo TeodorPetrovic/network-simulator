@@ -75,10 +75,6 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [view, setView] = useState({ zoom: 1, centerX: 0, centerY: 0 });
   const [topology, setTopology] = useState(props.topology);
   const [deviceQuery, setDeviceQuery] = useState("");
-  const [summaryQuery, setSummaryQuery] = useState("");
-  const [summaryStatus, setSummaryStatus] = useState("all");
-  const [rightPanel, setRightPanel] = useState("devices");
-  const [openTemplateGroups, setOpenTemplateGroups] = useState<Record<string, boolean>>({});
   const [configureNode, setConfigureNode] = useState<Node | null>(null);
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
@@ -98,11 +94,6 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [symbolDefaults, setSymbolDefaults] = useState<Record<string, string>>({});
   const [customSymbolIds, setCustomSymbolIds] = useState<string[]>([]);
   const [featureMessage, setFeatureMessage] = useState("");
-  const visibleSummaryNodes = useMemo(() => topology.nodes.filter((node) => {
-    const matchesQuery = !summaryQuery.trim() || `${node.name} ${node.node_type ?? ""}`.toLowerCase().includes(summaryQuery.trim().toLowerCase());
-    const matchesStatus = summaryStatus === "all" || (node.status ?? "stopped") === summaryStatus;
-    return matchesQuery && matchesStatus;
-  }), [summaryQuery, summaryStatus, topology.nodes]);
   const groupedTemplates = useMemo(() => {
     const query = deviceQuery.trim().toLowerCase();
     return ["dynamips", "qemu", "docker", "vpcs", "ethernet_switch", "ethernet_hub", "cloud", "nat"].map((kind) => ({
@@ -145,10 +136,6 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
     const timer = window.setTimeout(() => setFeatureMessage(""), 6000);
     return () => window.clearTimeout(timer);
   }, [featureMessage]);
-
-  useEffect(() => {
-    if (props.selection) setRightPanel("topology");
-  }, [props.selection?.id, props.selection?.kind]);
 
   function fitTopology() {
     if (topology.nodes.length === 0) {
@@ -262,7 +249,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
       <WorkspaceToolbar workspace={props} topology={topology} selectedNodeIds={selectedNodeIds} selectedLifecycleNodes={selectedLifecycleNodes} projectLocked={projectLocked} gridVisible={gridVisible} setGridVisible={setGridVisible} snapToGrid={snapToGrid} setSnapToGrid={setSnapToGrid} selectedDrawing={selectedDrawing} runBulkLifecycle={runBulkLifecycle} deleteSelectedNodes={deleteSelectedNodes} toggleProjectLock={toggleProjectLock} startDrawingTool={startDrawingTool} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} setSnapshotsOpen={setSnapshotsOpen} setLogOpen={setLogOpen} setScreenshotOpen={setScreenshotOpen} setHelpOpen={setHelpOpen} setInfoOpen={setInfoOpen} />
 
       <div className="sim-workspace-grid">
-        <WorkspaceSidebar workspace={props} topology={topology} rightPanel={rightPanel} setRightPanel={setRightPanel} deviceQuery={deviceQuery} setDeviceQuery={setDeviceQuery} groupedTemplates={groupedTemplates} openTemplateGroups={openTemplateGroups} setOpenTemplateGroups={setOpenTemplateGroups} visibleSummaryNodes={visibleSummaryNodes} summaryQuery={summaryQuery} setSummaryQuery={setSummaryQuery} summaryStatus={summaryStatus} setSummaryStatus={setSummaryStatus} setSelectedNodeIds={setSelectedNodeIds} selectedNode={selectedNode} selectedLink={selectedLink} setConfigureNode={setConfigureNode} setLinkPropertiesOpen={setLinkPropertiesOpen} toggleLinkSuspend={toggleLinkSuspend} />
+        <WorkspaceSidebar workspace={props} deviceQuery={deviceQuery} setDeviceQuery={setDeviceQuery} groupedTemplates={groupedTemplates} />
         <Card className="sim-canvas-card">
           <ContextMenu>
             <ContextMenuTrigger asChild>
