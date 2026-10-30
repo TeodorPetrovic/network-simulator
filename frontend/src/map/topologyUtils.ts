@@ -9,7 +9,9 @@ export function sameEndpoint(left: LinkEndpoint, right: LinkEndpoint) {
 }
 
 export function portCount(node: Node): number {
-  const value = Number(node.adapters ?? node.adapter_count ?? node.ports_count ?? (node.node_type === "vpcs" || node.node_type === "dynamips" ? 1 : 4));
+  const mapping = node.ports_mapping;
+  const mappedCount = Array.isArray(mapping) ? mapping.length : undefined;
+  const value = Number(mappedCount ?? node.adapters ?? node.adapter_count ?? node.ports_count ?? (node.node_type === "vpcs" || node.node_type === "dynamips" ? 1 : 4));
   return Number.isFinite(value) ? Math.max(1, Math.min(16, value)) : 4;
 }
 

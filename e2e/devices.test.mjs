@@ -210,9 +210,11 @@ test("drag from rail creates VPCS and switch devices; started VPCS to switch lin
   await portMenu.first().click();
   await ui.page.waitForTimeout(500);
   await second.click({ button: "right" });
-  await portMenu.first().waitFor();
+  const switchPorts = ui.page.getByRole("menuitem", { name: /^Ethernet\d+$/ });
+  await ui.page.getByRole("menuitem", { name: "Ethernet7", exact: true }).waitFor();
+  await switchPorts.first().waitFor();
   await ui.page.waitForTimeout(400);
-  await portMenu.first().click();
+  await switchPorts.first().click();
   await ui.page.waitForTimeout(500);
   try {
     await waitFor(async () => {

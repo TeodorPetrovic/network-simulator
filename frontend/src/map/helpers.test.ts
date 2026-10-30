@@ -21,6 +21,13 @@ describe("project map helpers", () => {
     expect(availableInterfacesForNode(node, [{ nodes: [{ node_id: "q1", adapter_number: 0, port_number: 0 }] }])).toEqual([{ node_id: "q1", adapter_number: 1, port_number: 0 }]);
   });
 
+  it("uses mapped built-in ports in the link picker and preserves their labels", () => {
+    const node: Node = { node_id: "s1", name: "Switch1", node_type: "ethernet_switch", adapters: 1, ports_mapping: Array.from({ length: 8 }, (_, index) => ({ port_number: index, name: `Ethernet${index}`, vlan: 1, type: "access" })) };
+    const ports = interfacesForNode(node);
+    expect(ports).toHaveLength(8);
+    expect(endpointName(node, ports[7]!)).toBe("Ethernet7");
+  });
+
   it("creates runtime-shaped interface choices for the picker", () => {
     const qemu: Node = { node_id: "q1", name: "QEMU", node_type: "qemu", adapters: 3 };
     const ports = interfacesForNode(qemu);

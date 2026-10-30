@@ -19,7 +19,8 @@ export function moveSelectionDelta(start: { x: number; y: number }, current: { x
 }
 
 function interfaceCount(node: Node): number {
-  const rawCount = Number(node.adapters ?? node.adapter_count ?? node.ports_count ?? (node.node_type === "vpcs" || node.node_type === "dynamips" ? 1 : 4));
+  const mappedCount = Array.isArray(node.ports_mapping) ? node.ports_mapping.length : undefined;
+  const rawCount = Number(mappedCount ?? node.adapters ?? node.adapter_count ?? node.ports_count ?? (node.node_type === "vpcs" || node.node_type === "dynamips" ? 1 : 4));
   const minimum = node.node_type === "qemu" ? 0 : 1;
   return Number.isFinite(rawCount) ? Math.max(minimum, Math.floor(rawCount)) : 4;
 }
@@ -40,6 +41,8 @@ export function endpointName(node: Node, endpoint: LinkEndpoint): string {
   const port = node.node_type === "qemu" ? endpoint.adapter_number : endpoint.port_number;
   if (node.node_type === "qemu") return `Ethernet${port}`;
   if (node.node_type === "dynamips") return `Ethernet${port}`;
+  const mappedName = Array.isArray(node.ports_mapping) ? (node.ports_mapping[port] as { name?: unknown } | undefined)?.name : undefined;
+  if (typeof mappedName === "string" && mappedName) return mappedName;
   return `eth${port}`;
 }
 
