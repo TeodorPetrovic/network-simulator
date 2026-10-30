@@ -356,19 +356,28 @@ pub(crate) fn detect_dynamips_platform(filename: &str) -> Option<(&'static str, 
         .file_name()
         .and_then(|name| name.to_str())?
         .to_ascii_lowercase();
-    let stem = name.split(['-', '_', '.']).next()?;
-    match stem {
-        "c2600" => Some(("c2600", "")),
-        "c2691" => Some(("c2691", "")),
-        "c3660" => Some(("c3600", "3660")),
-        "c3620" => Some(("c3600", "3620")),
-        "c3640" => Some(("c3600", "3640")),
-        "c3725" => Some(("c3725", "")),
-        "c3745" => Some(("c3745", "")),
-        "c7200" => Some(("c7200", "")),
-        "c1700" | "c1710" => Some(("c1700", "")),
-        _ => None,
-    }
+    // iShare names IOS files as `ishare-<id>-<original filename>`. Find the
+    // platform token anywhere in the filename instead of assuming it starts
+    // at byte zero; otherwise these registered images silently become 7200s.
+    let platforms = [
+        ("c2600", "c2600", ""),
+        ("c2691", "c2691", ""),
+        ("c3660", "c3600", "3660"),
+        ("c3620", "c3600", "3620"),
+        ("c3640", "c3600", "3640"),
+        ("c3725", "c3725", ""),
+        ("c3745", "c3745", ""),
+        ("c7200", "c7200", ""),
+        ("c1700", "c1700", ""),
+        ("c1710", "c1700", ""),
+    ];
+    platforms
+        .into_iter()
+        .find(|(model, _, _)| {
+            name.split(['-', '_', '.', '[', ']'])
+                .any(|part| part == *model)
+        })
+        .map(|(_, platform, chassis)| (platform, chassis))
 }
 
 pub(super) fn dynamips_module_supported(

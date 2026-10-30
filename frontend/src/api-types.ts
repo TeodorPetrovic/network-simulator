@@ -151,6 +151,7 @@ export type QemuTemplate = {
   adapter_type?: string;
   hda_disk_interface?: string;
   boot_priority?: string;
+  image_missing?: boolean;
 };
 
 export type VpcsTemplate = {
@@ -178,6 +179,7 @@ export type DynamipsTemplate = {
   auto_delete_disks?: boolean;
   ghost_ios?: boolean;
   console_auto_start?: boolean;
+  image_missing?: boolean;
 };
 
 export type IouTemplate = {

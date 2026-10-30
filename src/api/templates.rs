@@ -93,7 +93,19 @@ pub(super) async fn sync_templates_from_images(state: &AppState) -> Result<(), A
         .fetch_all(state.store.pool())
         .await?;
     for row in stored {
-        existing.push(decode_json(row.get("template_json"))?);
+        let mut template = decode_json(row.get("template_json"))?;
+        // Earlier releases treated iShare's `ishare-<id>-cXXXX-...` names as
+        // unknown IOS files and persisted them as generic c7200 templates.
+        // Correct only those identifiable generated fallbacks, preserving
+        // unrelated stored appliance/user templates and their custom edits.
+        if repair_ishare_platform(&mut template) {
+            sqlx::query("UPDATE controller_templates SET template_json = ? WHERE template_id = ?")
+                .bind(serde_json::to_string(&template).map_err(internal_json_error)?)
+                .bind(template["template_id"].as_str().unwrap_or_default())
+                .execute(state.store.pool())
+                .await?;
+        }
+        existing.push(template);
     }
     for (kind, directory) in dirs {
         let mut pending = vec![Path::new(&directory).to_path_buf()];
@@ -180,6 +192,43 @@ fn image_ref_matches(template: &Value, kind: &str, path: &std::path::Path) -> bo
     image_references_match(reference, &path.to_string_lossy())
 }
 
+fn repair_ishare_platform(template: &mut Value) -> bool {
+    if template["auto_image_template"] != true || template["template_type"] != "dynamips" {
+        return false;
+    }
+    let Some(image) = template["image"].as_str() else {
+        return false;
+    };
+    let Some(filename) = std::path::Path::new(image)
+        .file_name()
+        .and_then(|name| name.to_str())
+    else {
+        return false;
+    };
+    let Some((platform, chassis)) = crate::marketplace::detect_dynamips_platform(filename) else {
+        return false;
+    };
+    let chassis_label_needs_repair = !chassis.is_empty()
+        && template["name"].as_str().is_some_and(|name| {
+            name.starts_with(&format!("Cisco {} ·", platform.trim_start_matches('c')))
+        });
+    if (platform == "c7200" || template["platform"] == platform) && !chassis_label_needs_repair {
+        return false;
+    }
+    let repaired = generated_image_template("dynamips", filename, std::path::Path::new(image));
+    for key in ["platform", "chassis", "slot0", "name"] {
+        if let Some(value) = repaired.get(key) {
+            template[key] = value.clone();
+        }
+    }
+    template["chassis"] = if chassis.is_empty() {
+        Value::Null
+    } else {
+        json!(chassis)
+    };
+    true
+}
+
 fn generated_image_template(kind: &str, filename: &str, path: &std::path::Path) -> Value {
     let id = Uuid::new_v5(&Uuid::NAMESPACE_URL, path.to_string_lossy().as_bytes()).to_string();
     let image_path = path.to_string_lossy();
@@ -196,7 +245,11 @@ fn generated_image_template(kind: &str, filename: &str, path: &std::path::Path) 
     } else {
         let (platform, chassis) =
             crate::marketplace::detect_dynamips_platform(filename).unwrap_or(("c7200", ""));
-        let model = platform.trim_start_matches('c');
+        let model = if chassis.is_empty() {
+            platform.trim_start_matches('c')
+        } else {
+            chassis
+        };
         let version = filename
             .strip_prefix(&format!("c{model}"))
             .unwrap_or(filename);
@@ -294,19 +347,62 @@ mod image_template_tests {
 
         let c2600 = generated_image_template(
             "dynamips",
-            "c2600-adventerprisek9.image",
-            std::path::Path::new("/images/c2600-adventerprisek9.image"),
+            "ishare-3-c2600-[1]-adventerprisek9.image",
+            std::path::Path::new("/images/ishare-3-c2600-[1]-adventerprisek9.image"),
         );
         assert_eq!(c2600["platform"], "c2600");
         assert_eq!(c2600["slot0"], "C2600-MB-1FE");
+        let c2691 = generated_image_template(
+            "dynamips",
+            "ishare-6-c2691-[1]-adventerprisek9.image",
+            std::path::Path::new("/images/ishare-6-c2691-[1]-adventerprisek9.image"),
+        );
+        assert_eq!(c2691["platform"], "c2691");
+        assert_eq!(c2691["slot0"], "GT96100-FE");
         let c3660 = generated_image_template(
             "dynamips",
-            "c3660-adventerprisek9.image",
-            std::path::Path::new("/images/c3660-adventerprisek9.image"),
+            "ishare-10-c3660-[1]-adventerprisek9.image",
+            std::path::Path::new("/images/ishare-10-c3660-[1]-adventerprisek9.image"),
         );
         assert_eq!(c3660["platform"], "c3600");
         assert_eq!(c3660["chassis"], "3660");
+        assert!(c3660["name"].as_str().unwrap().starts_with("Cisco 3660 ·"));
         assert_eq!(c3660["slot0"], "Leopard-2FE");
+    }
+
+    #[test]
+    fn missing_images_are_reported_on_templates() {
+        let mut templates = vec![generated_image_template(
+            "dynamips",
+            "c2600.image",
+            std::path::Path::new("/definitely/missing/c2600.image"),
+        )];
+        mark_missing_images(&mut templates);
+        assert_eq!(templates[0]["image_missing"], true);
+    }
+
+    #[test]
+    fn repairs_previously_persisted_ishare_fallback_templates() {
+        let mut template = generated_image_template(
+            "dynamips",
+            "ishare-3-c2600-[1]-adventerprisek9.image",
+            std::path::Path::new("/images/ishare-3-c2600-[1]-adventerprisek9.image"),
+        );
+        template["platform"] = json!("c7200");
+        template["name"] = json!("Cisco 7200 · ishare-3-c2600-[1]-adventerprisek9.image");
+        assert!(repair_ishare_platform(&mut template));
+        assert_eq!(template["platform"], "c2600");
+        assert_eq!(template["slot0"], "C2600-MB-1FE");
+        assert!(!repair_ishare_platform(&mut template));
+
+        let mut c3660 = generated_image_template(
+            "dynamips",
+            "ishare-10-c3660-[1]-ios.image",
+            std::path::Path::new("/images/ishare-10-c3660-[1]-ios.image"),
+        );
+        c3660["name"] = json!("Cisco 3600 · ishare-10-c3660-[1]-ios.image");
+        assert!(repair_ishare_platform(&mut c3660));
+        assert!(c3660["name"].as_str().unwrap().starts_with("Cisco 3660 ·"));
     }
 
     #[test]

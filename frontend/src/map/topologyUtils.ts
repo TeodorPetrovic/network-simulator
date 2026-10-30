@@ -77,14 +77,24 @@ export function kindLabel(kind: string) {
 export function deviceGroupLabel(kind: string) { return kind === "dynamips" ? "Dynamips · Cisco IOS" : kindLabel(kind); }
 
 export function templateDescription(template: RuntimeTemplate) {
-  if (template.template_type === "qemu") return `${template.adapters} NIC${template.adapters === 1 ? "" : "s"} · ${template.memory} MB RAM`;
-  if (template.template_type === "docker") return `${template.adapters} NIC${template.adapters === 1 ? "" : "s"} · Docker image`;
-  if (template.template_type === "dynamips") return `${template.platform} · Cisco IOS`;
-  if (template.template_type === "ethernet_switch") return `${template.ports_mapping.length} Ethernet ports · VLAN switching`;
-  if (template.template_type === "ethernet_hub") return `${template.ports_mapping.length} Ethernet ports · shared medium`;
-  if (template.template_type === "cloud") return `${template.ports_mapping.length} host ports · Ethernet, TAP, or UDP`;
-  if (template.template_type === "nat") return "Host NAT network · libvirt virbr0";
-  return "Lightweight virtual PC";
+  const description = template.template_type === "qemu"
+    ? `${template.adapters} NIC${template.adapters === 1 ? "" : "s"} · ${template.memory} MB RAM`
+    : template.template_type === "docker"
+      ? `${template.adapters} NIC${template.adapters === 1 ? "" : "s"} · Docker image`
+      : template.template_type === "dynamips"
+        ? `${template.platform} · Cisco IOS`
+        : template.template_type === "ethernet_switch"
+          ? `${template.ports_mapping.length} Ethernet ports · VLAN switching`
+          : template.template_type === "ethernet_hub"
+            ? `${template.ports_mapping.length} Ethernet ports · shared medium`
+            : template.template_type === "cloud"
+              ? `${template.ports_mapping.length} host ports · Ethernet, TAP, or UDP`
+              : template.template_type === "nat"
+                ? "Host NAT network · libvirt virbr0"
+                : "Lightweight virtual PC";
+  return "image_missing" in template && template.image_missing
+    ? `Image missing · ${description}`
+    : description;
 }
 
 export function imageName(node: Node) {
