@@ -704,3 +704,10 @@ button, input, textarea, select { font: inherit; }
 }
 
 .sim-device-flyout.is-dragging { opacity: 0.25; pointer-events: none; }
+.sim-vnc-window { position: fixed; z-index: 60; inset: 7vh 7vw; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #394453; border-radius: 8px; background: #10151d; color: #e7eaf0; box-shadow: 0 18px 64px #0009; }
+.sim-vnc-window > header { display: flex; min-height: 42px; align-items: center; gap: 14px; padding: 0 12px; border-bottom: 1px solid #303743; }
+.sim-vnc-window > header span { flex: 1; color: #9aa6b5; font-size: 12px; }
+.sim-vnc-window > header button { display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }
+.sim-vnc-screen { min-height: 0; flex: 1; overflow: hidden; }
+.sim-vnc-screen canvas { display: block; }
+@media (max-width: 700px) { .sim-vnc-window { inset: 4vh 3vw; } }

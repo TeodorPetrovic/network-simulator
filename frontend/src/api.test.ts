@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { api, dockerAuxConsoleUrl, dockerConsoleUrl, dockerHttpConsoleUrl, dynamipsConsoleUrl, projectNotificationsUrl, qemuConsoleUrl, symbolRawUrl, vpcsConsoleUrl } from "./api";
+import { api, dockerAuxConsoleUrl, dockerConsoleUrl, dockerHttpConsoleUrl, dynamipsConsoleUrl, projectNotificationsUrl, qemuConsoleUrl, symbolRawUrl, vpcsConsoleUrl, vncConsoleUrl } from "./api";
 
 describe("GNS3 controller client", () => {
   beforeEach(() => {
@@ -200,6 +200,14 @@ describe("GNS3 controller client", () => {
 
     expect(url.protocol).toBe("ws:");
     expect(url.pathname).toBe("/v3/compute/projects/project-id/docker/nodes/node-id/aux_console/ws");
+  });
+
+  it("uses the controller VNC proxy for QEMU and Docker", async () => {
+    vi.mocked(fetch).mockResolvedValue({ ok: true, status: 200, json: async () => ({ ticket: "test-ticket", expires_in: 60 }) } as Response);
+    const qemu = new URL(await vncConsoleUrl("qemu", "project-id", "node-id"));
+    const docker = new URL(await vncConsoleUrl("docker", "project-id", "node-id"));
+    expect(qemu.pathname).toBe("/v3/compute/projects/project-id/qemu/nodes/node-id/vnc/ws");
+    expect(docker.pathname).toBe("/v3/compute/projects/project-id/docker/nodes/node-id/vnc/ws");
   });
 
   it("builds browser URLs for Docker HTTP(S) consoles and encodes symbol raw paths", () => {

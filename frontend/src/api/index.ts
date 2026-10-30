@@ -32,6 +32,7 @@ export function dockerHttpConsoleUrl(protocol: "http" | "https", host: string, p
 export function symbolRawUrl(symbolId: string): string { return `/v3/symbols/${encodeURIComponent(symbolId)}/raw`; }
 export function vpcsConsoleUrl(projectId: string, nodeId: string): Promise<string> { return withSocketTicket(`/v3/compute/projects/${projectId}/vpcs/nodes/${nodeId}/console/ws`); }
 export function dynamipsConsoleUrl(projectId: string, nodeId: string): Promise<string> { return withSocketTicket(`/v3/compute/projects/${projectId}/dynamips/nodes/${nodeId}/console/ws`); }
+export function vncConsoleUrl(runtime: "qemu" | "docker", projectId: string, nodeId: string): Promise<string> { return withSocketTicket(`/v3/compute/projects/${projectId}/${runtime}/nodes/${nodeId}/vnc/ws`); }
 export function webWiresharkUrl(path: string): string {
   const url = new URL(path, window.location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";

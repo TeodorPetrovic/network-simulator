@@ -413,6 +413,16 @@ pub const ROUTE_RULES_EXTRA: &[RouteRule] = rules![
         "/compute/projects/{project_id}/dynamips/nodes/{node_id}/console/ws",
         RouteClass::Privilege("Node.Console")
     ),
+    (
+        "GET",
+        "/compute/projects/{project_id}/qemu/nodes/{node_id}/vnc/ws",
+        RouteClass::Privilege("Node.Console")
+    ),
+    (
+        "GET",
+        "/compute/projects/{project_id}/docker/nodes/{node_id}/vnc/ws",
+        RouteClass::Privilege("Node.Console")
+    ),
     ("GET", "/images", RouteClass::Privilege("Image.Audit")),
     (
         "POST",

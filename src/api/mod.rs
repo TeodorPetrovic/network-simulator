@@ -345,6 +345,14 @@ fn router_with_client_dir(state: AppState, client_dir: &FsPath) -> Router {
             "/v3/compute/projects/{project_id}/dynamips/nodes/{node_id}/console/ws",
             get(consoles::dynamips_console),
         )
+        .route(
+            "/v3/compute/projects/{project_id}/qemu/nodes/{node_id}/vnc/ws",
+            get(consoles::qemu_vnc),
+        )
+        .route(
+            "/v3/compute/projects/{project_id}/docker/nodes/{node_id}/vnc/ws",
+            get(consoles::docker_vnc),
+        )
         .route("/v3", any(|| async { StatusCode::NOT_FOUND }))
         .route("/v3/{*path}", any(|| async { StatusCode::NOT_FOUND }))
         .merge(spa_fallback_router(client_dir))

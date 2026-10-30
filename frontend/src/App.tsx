@@ -6,6 +6,7 @@ import { nodesForLifecycle } from "./lifecycle";
 import { errorMessage, samePort, upsertLink } from "./appUtils";
 import { SimulatorWorkspace } from "./SimulatorWorkspace";
 import type { ConsoleTarget } from "./ConsoleDock";
+import VncConsole from "./VncConsole";
 import { ApplianceManagerPage } from "./ApplianceManagerPage";
 import { PagesShell } from "./PagesShell";
 import { GlobalToast } from "./GlobalToast";
@@ -52,6 +53,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
   const [notice, setNotice] = useState("");
   const { project, setProject, topology, setTopology, busy, connection, error, setError, templates, setTemplates } = useProjectSession(projectId, setNotice);
   const [consoleTargets, setConsoleTargets] = useState<ConsoleTarget[]>([]);
+  const [vncTarget, setVncTarget] = useState<{ runtime: "qemu" | "docker"; projectId: string; nodeId: string; nodeName: string } | null>(null);
   const [activeConsoleId, setActiveConsoleId] = useState<string | null>(null);
   const [consoleMinimized, setConsoleMinimized] = useState(() => { try { return JSON.parse(localStorage.getItem("ns.console.float") ?? "{}").minimized ?? true; } catch { return true; } });
   const [consoleDockOpen, setConsoleDockOpen] = useState(() => { try { return JSON.parse(localStorage.getItem("ns.console.float") ?? "{}").open ?? false; } catch { return false; } });
@@ -165,7 +167,11 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
       return;
     }
     if (!auxiliary && consoleType === "vnc") {
-      setNotice("The controller starts VNC on its TCP console port, but this UI has no browser VNC route.");
+      if (node.node_type === "qemu" || node.node_type === "docker") {
+        setVncTarget({ runtime: node.node_type, projectId, nodeId: node.node_id, nodeName: node.name });
+        return;
+      }
+      setNotice("Browser VNC is available for QEMU and Docker devices.");
       return;
     }
     if (!auxiliary && consoleType === "none") {
@@ -351,6 +357,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
           onHide={() => { setConsoleDockOpen(false); try { const v=JSON.parse(localStorage.getItem("ns.console.float")??"{}"); localStorage.setItem("ns.console.float",JSON.stringify({...v,open:false})); } catch {} }}
           onClose={(targetId) => { setConsoleTargets((current) => current.filter((target) => target.id !== targetId)); setActiveConsoleId((current) => current === targetId ? (consoleTargets.find((target) => target.id !== targetId)?.id ?? null) : current); }}
         /></Suspense>}
+        {vncTarget && <VncConsole {...vncTarget} onClose={() => setVncTarget(null)} />}
 
       <NodeDialog open={nodeDialogOpen} onOpenChange={setNodeDialogOpen} onSubmit={addNode} nodeName={nodeName} setNodeName={setNodeName} templates={templates} templateId={templateId} setTemplateId={setTemplateId} setNodeCommand={setNodeCommand} setNodeStartupScript={setNodeStartupScript} setNodeStartupConfig={setNodeStartupConfig} setNodeIdlePc={setNodeIdlePc} nodeCommand={nodeCommand} nodeStartupScript={nodeStartupScript} nodeStartupConfig={nodeStartupConfig} nodeIdlePc={nodeIdlePc} runtimeInfo={runtimeInfo} loadingTemplates={loadingTemplates} creatingNode={creatingNode} uploadingImage={uploadingImage} uploadingQemuImage={uploadingQemuImage} onImportImage={(file) => void importDynamipsImage(file)} onImportQemuImage={(file) => void importQemuImage(file)} />
 
