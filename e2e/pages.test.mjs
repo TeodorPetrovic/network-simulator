@@ -47,7 +47,7 @@ test("projects create, rename, duplicate, export, refresh, sort, close, and dele
   await page.getByRole("button", { name: "Duplicate Page Renamed" }).click();
   await page.locator("#duplicate-project-name").fill("Page Copy");
   await page.getByRole("button", { name: "Duplicate" }).click();
-  assert.ok((await server.api("GET", "/projects")).json.some((p) => p.name === "Page Copy"));
+  await waitFor(async () => (await server.api("GET", "/projects")).json.some((p) => p.name === "Page Copy"));
   await page.getByRole("button", { name: "Export Page Renamed" }).click();
   await page.getByRole("button", { name: "Refresh projects" }).click();
   for (const heading of ["Project", "Status", "Created"]) await page.getByRole("button", { name: new RegExp(heading) }).click();

@@ -165,6 +165,24 @@ export function TopologyCanvas(props: CanvasProps) {
     return () => svg.removeEventListener("wheel", wheel);
   }, [props.zoom, props.centerX, props.centerY, props.onCenterChange, props.onZoom, view.height, view.width, view.x, view.y]);
 
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      if (event.code !== "Space" || /^(INPUT|TEXTAREA|SELECT)$/.test((event.target as HTMLElement | null)?.tagName ?? "")) return;
+      spaceDownRef.current = true;
+      event.preventDefault();
+    };
+    const keyup = (event: KeyboardEvent) => { if (event.code === "Space") spaceDownRef.current = false; };
+    const blur = () => { spaceDownRef.current = false; };
+    window.addEventListener("keydown", keydown);
+    window.addEventListener("keyup", keyup);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("keydown", keydown);
+      window.removeEventListener("keyup", keyup);
+      window.removeEventListener("blur", blur);
+    };
+  }, [spaceDownRef]);
+
   const scenePoint = (clientX: number, clientY: number, rect: DOMRect, snap = props.snapToGrid) => {
     const scale = Math.min(rect.width / view.width, rect.height / view.height);
     const offsetX = (rect.width - view.width * scale) / 2;

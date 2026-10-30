@@ -50,8 +50,10 @@ async function templates(server) {
 }
 
 async function dragTemplate(page, template, nodeName) {
-  const category = template.template_type === "ethernet_switch" || template.template_type === "ethernet_hub" ? "Switches" : template.template_type === "dynamips" || /cisco|router|dynamips/i.test(template.name) ? "Routers" : "End devices";
-  await page.locator(`button[aria-label="${category}"]`).click();
+  const allDevicesFlyout = page.getByLabel("All devices templates");
+  if (!(await allDevicesFlyout.isVisible().catch(() => false))) {
+    await page.locator('button[aria-label="All devices"]').click();
+  }
   const card = page.locator(".sim-device-template").filter({ hasText: template.name }).first();
   await card.waitFor();
   const oldCount = await page.locator(".sim-node").count();
@@ -184,6 +186,7 @@ test("device context actions rename, duplicate, lock, change symbol, isolate, co
   const duplicate = (await nodes(server, pid)).find((item) => item.node_id !== before.node_id);
   assert.ok(duplicate);
   await ui.page.locator(`[aria-label="Node ${duplicate.name}"]`).click({ button: "right" });
+  ui.page.once("dialog", (dialog) => dialog.accept());
   await ui.page.getByRole("menuitem", { name: "Delete device" }).click();
   await waitFor(async () => !(await nodes(server, pid)).some((item) => item.node_id === duplicate.node_id), { label: "deleted duplicate node" });
 });
@@ -423,6 +426,7 @@ test("Dynamips Cisco routers start, link, suspend, resume, reload, stop, and pro
     await waitFor(async () => (await server.api("GET", `/projects/${pid}/links`)).json.length === 1, { label: "router to switch link" });
     const link = ui.page.getByRole("button", { name: /Ethernet segment connecting/ });
     await link.click({ button: "right" });
+    ui.page.once("dialog", (dialog) => dialog.accept());
     await ui.page.getByRole("menuitem", { name: "Delete link" }).click();
     await waitFor(async () => (await server.api("GET", `/projects/${pid}/links`)).json.length === 0, { label: "router switch link removal" });
 

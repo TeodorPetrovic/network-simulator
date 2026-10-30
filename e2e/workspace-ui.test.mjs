@@ -291,8 +291,9 @@ test("double-clicking a built-in switch opens its configuration dialog", async (
 test("device flyout drag adds a node on canvas and over the right dock", async (t) => {
   const { server, page, ui, pid } = await workspace(t);
   const canvas = page.locator(".sim-canvas-surface");
+  await button(page, "All devices").click();
   for (const target of [canvas, page.getByLabel("Workspace docks")]) {
-    await button(page, "All devices").click(); const row = page.locator(".sim-device-template").first(); await row.waitFor();
+    const row = page.locator(".sim-device-template").first(); await row.waitFor();
     const before = (await server.api("GET", `/projects/${pid}/nodes`)).json.length;
     await row.dragTo(target, { targetPosition: { x: target === canvas ? 600 : 220, y: 300 } });
     await waitFor(async () => (await server.api("GET", `/projects/${pid}/nodes`)).json.length > before, { label: "drag added node" });
@@ -409,10 +410,8 @@ test("keyboard shortcuts select all, clear selection, delete, escape link mode, 
   await page.keyboard.press("Escape"); await page.locator(".sim-node.is-selected").waitFor({ state: "detached" });
   await button(page, "Add a link").click(); await canvas.focus(); await page.keyboard.press("Escape"); await page.getByText("Link mode is on").waitFor({ state: "detached" });
   await canvas.focus(); await page.keyboard.press("Control+a");
-  const dialogPromise = page.waitForEvent("dialog");
-  await page.keyboard.press("Delete");
-  const dialog = await dialogPromise;
-  await dialog.accept();
+  page.once("dialog", (dialog) => dialog.accept());
+  await canvas.press("Delete");
   await waitFor(async () => (await server.api("GET", `/projects/${pid}/nodes`)).json.length === 0, { label: "Delete shortcut removed node" });
   await finish(ui);
 });
