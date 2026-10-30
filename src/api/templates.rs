@@ -19,6 +19,21 @@ pub(super) async fn available_templates(state: &AppState) -> Result<Vec<Value>, 
     let base = base_runtime_templates(state).await;
     let mut templates = BuiltinRuntime::templates();
     let marketplace_templates = state.marketplace.templates(base);
+    let saved = sqlx::query("SELECT template_json FROM controller_templates")
+        .fetch_all(state.store.pool())
+        .await?;
+    let saved = saved
+        .iter()
+        .map(|row| decode_json(row.get::<String, _>("template_json")))
+        .collect::<Result<Vec<_>, _>>()?;
+    templates.extend(marketplace_templates.into_iter().filter(|candidate| {
+        !saved
+            .iter()
+            .any(|stored| same_image_reference(candidate, stored))
+    }));
+    // Apply user profiles after combining built-ins and image-backed templates.
+    // Image-backed templates are appended below, so applying profiles earlier
+    // silently discarded edits to those templates from the list response.
     let rows = sqlx::query("SELECT template_id, template_json FROM runtime_template_profiles")
         .fetch_all(state.store.pool())
         .await?;
@@ -35,18 +50,6 @@ pub(super) async fn available_templates(state: &AppState) -> Result<Vec<Value>, 
             }
         }
     }
-    let saved = sqlx::query("SELECT template_json FROM controller_templates")
-        .fetch_all(state.store.pool())
-        .await?;
-    let saved = saved
-        .iter()
-        .map(|row| decode_json(row.get::<String, _>("template_json")))
-        .collect::<Result<Vec<_>, _>>()?;
-    templates.extend(marketplace_templates.into_iter().filter(|candidate| {
-        !saved
-            .iter()
-            .any(|stored| same_image_reference(candidate, stored))
-    }));
     Ok(templates)
 }
 
