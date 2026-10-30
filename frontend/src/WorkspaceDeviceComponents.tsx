@@ -19,6 +19,7 @@ export function DeviceTemplateCard({ template, onAdd, onSave, onDragEnd, onDragS
     event.dataTransfer.effectAllowed = "copy";
     event.dataTransfer.setData("application/x-network-simulator-template", template.template_id);
     event.dataTransfer.setData("text/plain", template.name);
+    event.dataTransfer.setDragImage(event.currentTarget, 24, 18);
     setTimeout(() => onDragStart?.(), 0);
   }} onDragEnd={onDragEnd}>
     <span className="sim-template-icon" draggable={false} style={{ pointerEvents: "none" }}><Icon size={17} /></span>

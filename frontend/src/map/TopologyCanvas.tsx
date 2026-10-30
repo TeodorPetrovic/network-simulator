@@ -19,7 +19,7 @@ import { iconForSymbolName, iconForType, localPortPoint, portCount, portIndex, p
 export { deviceGroupLabel, endpointLabel, iconForSymbolName, iconForType, imageName, kindLabel, localPortPoint, messageFor, nodeHasAuxConsole, nodePorts, portCount, portIndex, portLabel, portPoint, safeFileName, sameEndpoint, templateDescription, valuesFromDrawing } from "./topologyUtils";
 
 export const scene = { width: 1440, height: 920 };
-export const maxZoom = 3;
+export const maxZoom = 4;
 const defaultSymbolUrls: Record<string, string> = { "cloud.svg": cloudSymbolUrl, "docker_guest.svg": dockerSymbolUrl, "ethernet_switch.svg": switchSymbolUrl, "hub.svg": hubSymbolUrl, "nat.svg": natSymbolUrl, "qemu_guest.svg": qemuSymbolUrl, "router.svg": routerSymbolUrl, "vpcs_guest.svg": vpcsSymbolUrl };
 
 export type Selection = { kind: "node" | "link"; id: string } | null;
@@ -50,6 +50,7 @@ type CanvasProps = {
   onCanvasClick: (point: { x: number; y: number }) => void;
   onPortClick: (endpoint: LinkEndpoint) => void;
   onNodeContext: (id: string) => void;
+  onNodeDoubleClick: (id: string) => void;
   onNodeMove: (id: string, x: number, y: number) => void;
   onNodeMoveEnd: (positions: Array<{ id: string; x: number; y: number }>) => void;
   onNodeLabelMove: (id: string, x: number, y: number) => void;
@@ -79,6 +80,7 @@ export function TopologyCanvas(props: CanvasProps) {
   const panRef = useRef<PanState | null>(null);
   const panMovedRef = useRef(false);
   const movedRef = useRef(false);
+  const draggedNodeRef = useRef(false);
   const lastMoveRef = useRef<Map<string, { x: number; y: number }> | null>(null);
   const { spaceDownRef, onKeyDown, onKeyUp, onBlur } = useCanvasKeyboardShortcuts(props, lastMoveRef);
   const [dropActive, setDropActive] = useState(false);
@@ -134,6 +136,7 @@ export function TopologyCanvas(props: CanvasProps) {
     }
     if (props.connecting || props.projectLocked || node.locked || event.button !== 0 || (event.target as Element).closest("[data-interface-port], [data-node-label]")) return;
     if (event.metaKey || event.ctrlKey || !svgRef.current) return;
+    draggedNodeRef.current = false;
     event.stopPropagation();
     const nodeIds = props.selectedNodeIds.includes(node.node_id) ? props.selectedNodeIds : [node.node_id];
     const origins = new Map(nodeIds.map((id) => { const item = nodeMap.get(id); return [id, { x: Number(item?.x ?? 0), y: Number(item?.y ?? 0) }] as const; }));
@@ -241,6 +244,7 @@ export function TopologyCanvas(props: CanvasProps) {
     if (!drag || drag.pointerId !== event.pointerId || !svgRef.current) return;
     const point = scenePoint(event.clientX, event.clientY, svgRef.current.getBoundingClientRect(), false);
     movedRef.current = true;
+    draggedNodeRef.current = true;
     const delta = moveSelectionDelta(drag.start, point, props.snapToGrid, drag.origins.values());
     drag.nodeIds.forEach((id) => { const origin = drag.origins.get(id); if (origin) props.onNodeMove(id, origin.x + delta.x, origin.y + delta.y); });
   }
@@ -410,7 +414,45 @@ export function TopologyCanvas(props: CanvasProps) {
         const label = node.label && typeof node.label === "object" ? node.label as Record<string, unknown> : {};
         const labelPosition = labelPositions[node.node_id] ?? { x: Number(label.x ?? 0), y: Number(label.y ?? 56) };
         const suspended = node.status === "suspended" || node.status === "suspending";
-        return <g key={node.node_id} transform={`translate(${x},${y})`} className={`sim-node ${selected ? "is-selected" : ""} ${props.connecting ? "is-connecting" : ""} ${node.locked || props.projectLocked ? "is-locked" : ""}`} style={{ pointerEvents: "all" }} onPointerDown={(event) => startMove(event, node)} onClick={(event) => { event.stopPropagation(); if (event.metaKey || event.ctrlKey) props.onMultiSelectNode(node.node_id); else if (!movedRef.current) props.onNodeClick(node.node_id); movedRef.current = false; }} onContextMenu={() => props.onNodeContext(node.node_id)} onDoubleClick={(event) => { event.stopPropagation(); props.onNodeContext(node.node_id); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onNodeClick(node.node_id); } }} role="button" aria-label={`Node ${node.name}`} tabIndex={0}>
+        return <g
+          key={node.node_id}
+          transform={`translate(${x},${y})`}
+          className={`sim-node ${selected ? "is-selected" : ""} ${props.connecting ? "is-connecting" : ""} ${node.locked || props.projectLocked ? "is-locked" : ""}`}
+          style={{ pointerEvents: "all" }}
+          onPointerDown={(event) => startMove(event, node)}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (props.connecting) {
+              event.currentTarget.dispatchEvent(new MouseEvent("contextmenu", {
+                bubbles: true,
+                cancelable: true,
+                button: 2,
+                clientX: event.clientX,
+                clientY: event.clientY,
+              }));
+            } else if (event.metaKey || event.ctrlKey) {
+              props.onMultiSelectNode(node.node_id);
+            } else if (!movedRef.current) {
+              props.onNodeClick(node.node_id);
+            }
+            movedRef.current = false;
+          }}
+          onContextMenu={() => props.onNodeContext(node.node_id)}
+          onDoubleClick={(event) => {
+            event.stopPropagation();
+            if (!draggedNodeRef.current) props.onNodeDoubleClick(node.node_id);
+            draggedNodeRef.current = false;
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              props.onNodeClick(node.node_id);
+            }
+          }}
+          role="button"
+          aria-label={`Node ${node.name}`}
+          tabIndex={0}
+        >
           <rect className="sim-node-hit-area" x="-48" y="-36" width="96" height="104" fill="transparent" pointerEvents="all" />
           {selected && <rect className="sim-node-selection" x="-48" y="-36" width="96" height="101" rx="6" />}
           {symbol.kind === "custom" ? <AuthenticatedSymbolImage symbolId={symbol.symbolId} fallback={null} /> : <>

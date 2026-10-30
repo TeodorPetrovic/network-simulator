@@ -3,6 +3,7 @@ import type { Link, Node, TopologySnapshot } from "./api";
 import type { SimulatorWorkspaceProps } from "./SimulatorWorkspace";
 import type { DrawingTool } from "./map/helpers";
 import { canApplyLifecycle } from "./lifecycle";
+import type { LifecycleAction } from "./lifecycle";
 import { availableInterfacesForNode, endpointName, interfacesForNode } from "./map/helpers";
 import { nodeHasAuxConsole } from "./map/TopologyCanvas";
 import { ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator } from "@/components/ui/context-menu";
@@ -20,6 +21,15 @@ type Props = {
   setDrawingEditOpen: (open: boolean) => void; changeDrawingOrder: (direction: "front" | "back") => void; removeDrawing: () => void;
 };
 
+function canShowNodeLifecycle(node: Node, action: LifecycleAction) {
+  if (["ethernet_switch", "ethernet_hub", "hub"].includes(node.node_type ?? "")) {
+    if (action === "start") return node.status !== "started";
+    if (action === "stop") return node.status === "started" || node.status === "suspended";
+    return node.status === "started";
+  }
+  return canApplyLifecycle(node, action);
+}
+
 export function WorkspaceContextMenu({ workspace: props, selectedNode, selectedLink, selectedDrawing, setConfigureNode, setSymbolNode, toggleNodeIsolation, toggleNodeLock, setLinkPropertiesOpen, toggleLinkSuspend, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, onOpenCaptureViewer, onOpenWebWireshark, onRestartWebWireshark, onStopCapture }: Props) {
   if (props.connecting && selectedNode) {
     const ports = interfacesForNode(selectedNode);
@@ -34,14 +44,14 @@ export function WorkspaceContextMenu({ workspace: props, selectedNode, selectedL
               <ContextMenuLabel>{selectedNode?.name ?? (selectedLink ? "Ethernet link" : selectedDrawing ? "Drawing" : "Topology")}</ContextMenuLabel>
               <ContextMenuSeparator />
               {selectedNode ? <>
-                {canApplyLifecycle(selectedNode, "start") && <ContextMenuItem disabled={Boolean(selectedNode.runtime_missing)} onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "start")}><Play />{selectedNode.status === "suspended" ? "Resume device" : "Start device"}</ContextMenuItem>}
-                {canApplyLifecycle(selectedNode, "stop") && <ContextMenuItem onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "stop")}><Power />Stop device</ContextMenuItem>}
-                {canApplyLifecycle(selectedNode, "suspend") && <ContextMenuItem onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "suspend")}><Pause />Suspend device</ContextMenuItem>}
-                {canApplyLifecycle(selectedNode, "reload") && <ContextMenuItem onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "reload")}><Activity />Reload device</ContextMenuItem>}
-                {selectedNode.status === "started" && <ContextMenuItem onSelect={() => props.onOpenConsole(selectedNode)}><Terminal />Open console</ContextMenuItem>}
-                {selectedNode.status === "started" && nodeHasAuxConsole(selectedNode) && <ContextMenuItem onSelect={() => props.onOpenConsole(selectedNode, true)}><Terminal />Open auxiliary console</ContextMenuItem>}
+                {canShowNodeLifecycle(selectedNode, "start") && <ContextMenuItem disabled={Boolean(selectedNode.runtime_missing)} onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "start")}><Play />{selectedNode.status === "suspended" ? "Resume device" : "Start device"}</ContextMenuItem>}
+                {canShowNodeLifecycle(selectedNode, "stop") && <ContextMenuItem onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "stop")}><Power />Stop device</ContextMenuItem>}
+                {canShowNodeLifecycle(selectedNode, "suspend") && <ContextMenuItem onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "suspend")}><Pause />Suspend device</ContextMenuItem>}
+                {canShowNodeLifecycle(selectedNode, "reload") && <ContextMenuItem onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "reload")}><Activity />Reload device</ContextMenuItem>}
+                {selectedNode.status === "started" && ["qemu", "docker", "vpcs", "dynamips"].includes(selectedNode.node_type ?? "") && selectedNode.console_type !== "none" && <ContextMenuItem onSelect={() => props.onOpenConsole(selectedNode)}><Terminal />Open console</ContextMenuItem>}
+                {selectedNode.status === "started" && ["qemu", "docker", "vpcs", "dynamips"].includes(selectedNode.node_type ?? "") && nodeHasAuxConsole(selectedNode) && <ContextMenuItem onSelect={() => props.onOpenConsole(selectedNode, true)}><Terminal />Open auxiliary console</ContextMenuItem>}
                 <ContextMenuItem onSelect={() => { document.querySelector<HTMLButtonElement>("[data-tab=topology]")?.click(); window.setTimeout(() => document.querySelector<HTMLInputElement>("[data-rename-node]")?.focus(), 0); }}><Pencil />Edit device name</ContextMenuItem>
-                {["qemu", "docker", "vpcs", "dynamips"].includes(selectedNode.node_type ?? "") && <ContextMenuItem onSelect={() => setConfigureNode(selectedNode)}><Settings2 />Configure device</ContextMenuItem>}
+                {["qemu", "docker", "vpcs", "dynamips", "ethernet_switch", "ethernet_hub", "hub", "cloud", "nat"].includes(selectedNode.node_type ?? "") && <ContextMenuItem onSelect={() => setConfigureNode(selectedNode)}><Settings2 />Configure device</ContextMenuItem>}
                 <ContextMenuItem onSelect={() => setSymbolNode(selectedNode)}><Image />Change symbol</ContextMenuItem>
                 <ContextMenuItem onSelect={() => void toggleNodeIsolation(selectedNode)}>{selectedNode.isolated ? <Unlock /> : <Lock />}{selectedNode.isolated ? "Unisolate device" : "Isolate device"}</ContextMenuItem>
                 <ContextMenuItem onSelect={() => void toggleNodeLock(selectedNode)}>{selectedNode.locked ? <Unlock /> : <Lock />}{selectedNode.locked ? "Unlock device" : "Lock device"}</ContextMenuItem>
