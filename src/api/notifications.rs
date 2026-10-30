@@ -17,6 +17,35 @@ pub(super) async fn project_notifications(
     }))
 }
 
+/// GNS3 keeps high-volume marker matches on a separate WebSocket so they do
+/// not contend with topology notifications. ProjectEvent.action is the event
+/// discriminator used by the controller API.
+pub(super) async fn project_marker_notifications(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+    websocket: WebSocketUpgrade,
+) -> Result<Response, ApiError> {
+    let project_id = project_id.to_string();
+    ensure_project_exists_pool(state.store.pool(), &project_id).await?;
+    let mut receiver = state.store.subscribe();
+    Ok(websocket.on_upgrade(move |mut socket| async move {
+        loop {
+            match receiver.recv().await {
+                Ok(event) if event.project_id == project_id && event.action == "marker.match" => {
+                    let Ok(text) = serde_json::to_string(&event) else {
+                        continue;
+                    };
+                    if socket.send(Message::Text(text.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    }))
+}
+
 #[derive(Default, serde::Deserialize)]
 pub(super) struct NotificationQuery {
     after: Option<i64>,

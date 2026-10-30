@@ -189,7 +189,7 @@ Statuses mean:
 | `projects.py` | GET | `/v3/projects/{project_id}/markers/tags/{tag}/replay/frames` | Missing — marker API not in the requested priority list |
 | `projects.py` | GET | `/v3/projects/{project_id}/markers/tags/{tag}/replay/range` | Missing — marker API not in the requested priority list |
 | `projects.py` | GET | `/v3/projects/{project_id}/notifications` | Partial — DB-backed implementation; archive, filesystem, or event behavior is narrower than GNS3 |
-| `projects.py` | WEBSOCKET | `/v3/projects/{project_id}/notifications/markers/ws` | Missing — marker API not in the requested priority list |
+| `projects.py` | WEBSOCKET | `/v3/projects/{project_id}/notifications/markers/ws` | Partial — separate stream now filters `marker.match` from project events; marker production is not implemented |
 | `projects.py` | WEBSOCKET | `/v3/projects/{project_id}/notifications/ws` | Implemented |
 | `projects.py` | POST | `/v3/projects/{project_id}/open` | Implemented |
 | `projects.py` | GET | `/v3/projects/{project_id}/stats` | Partial |

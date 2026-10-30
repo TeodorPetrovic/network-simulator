@@ -314,6 +314,10 @@ pub fn router(state: AppState) -> Router {
             get(notifications::project_notifications),
         )
         .route(
+            "/v3/projects/{project_id}/notifications/markers/ws",
+            get(notifications::project_marker_notifications),
+        )
+        .route(
             "/v3/compute/projects/{project_id}/qemu/nodes/{node_id}/console/ws",
             get(consoles::qemu_console),
         )

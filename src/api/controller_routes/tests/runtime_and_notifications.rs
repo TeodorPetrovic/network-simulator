@@ -323,4 +323,12 @@ async fn controller_and_project_notification_websockets_upgrade_over_http() {
         websocket_status(&app, &format!("/v3/projects/{project_id}/notifications/ws")).await,
         StatusCode::SWITCHING_PROTOCOLS
     );
+    assert_eq!(
+        websocket_status(
+            &app,
+            &format!("/v3/projects/{project_id}/notifications/markers/ws")
+        )
+        .await,
+        StatusCode::SWITCHING_PROTOCOLS
+    );
 }

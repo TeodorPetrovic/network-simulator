@@ -100,6 +100,11 @@ pub const ROUTE_RULES_EXTRA: &[RouteRule] = rules![
     ),
     (
         "GET",
+        "/projects/{project_id}/notifications/markers/ws",
+        RouteClass::Privilege("Project.Audit")
+    ),
+    (
+        "GET",
         "/projects/{project_id}/snapshots",
         RouteClass::Privilege("Snapshot.Audit")
     ),
