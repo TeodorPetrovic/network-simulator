@@ -309,6 +309,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
             connecting={connecting}
             linkEndpoints={linkEndpoints}
             onBack={closeProject}
+            onApiError={setError}
             onRefreshResources={() => void refreshResourceMonitor()}
             onOpenNodeDialog={() => void openNodeDialog()}
             onOpenMarketplace={() => setMarketplaceOpen(true)}

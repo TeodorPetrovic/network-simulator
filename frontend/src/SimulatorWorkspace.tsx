@@ -46,6 +46,7 @@ export type SimulatorWorkspaceProps = {
   connecting: boolean;
   linkEndpoints: LinkEndpoint[];
   onBack: () => void;
+  onApiError?: (message: string) => void;
   onRefreshResources: () => void;
   onOpenNodeDialog: () => void;
   onOpenMarketplace: () => void;
@@ -104,6 +105,13 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   async function stopLinkCapture(link: Link) {
     try { await api.stopLinkCapture(props.project.project_id, link.link_id); setWiresharkWindows((current) => current.filter((item) => item.linkId !== link.link_id)); setTopology((current) => ({ ...current, links: current.links.map((item) => item.link_id === link.link_id ? { ...item, capturing: false, wireshark: false } : item) })); }
     catch (reason) { setFeatureMessage(reason instanceof Error ? reason.message : "Could not stop packet capture."); }
+  }
+  async function resetLink(link: Link) {
+    try {
+      const updated = await api.updateLink(props.project.project_id, link.link_id, { filters: {}, suspend: false });
+      setTopology((current) => ({ ...current, links: current.links.map((item) => item.link_id === link.link_id ? updated : item) }));
+      setFeatureMessage("Link reset: filters cleared and link resumed.");
+    } catch (reason) { const message = `Could not reset link: ${reason instanceof Error ? reason.message : "request failed"}`; setFeatureMessage(message); props.onApiError?.(message); }
   }
   async function openCaptureViewer(link: Link, newTab = false) {
     const capturing = Boolean(link.capturing);
@@ -383,7 +391,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
                 />
               </div>
             </ContextMenuTrigger>
-            <WorkspaceContextMenu workspace={props} selectedNode={selectedNode} selectedLink={selectedLink} selectedDrawing={selectedDrawing} setConfigureNode={setConfigureNode} setSymbolNode={setSymbolNode} toggleNodeIsolation={toggleNodeIsolation} toggleNodeLock={toggleNodeLock} setLinkPropertiesOpen={setLinkPropertiesOpen} toggleLinkSuspend={toggleLinkSuspend} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} onOpenCaptureViewer={openCaptureViewer} onOpenWebWireshark={openWebWireshark} onRestartWebWireshark={restartWebWireshark} onStopCapture={stopLinkCapture} />
+            <WorkspaceContextMenu workspace={props} selectedNode={selectedNode} selectedLink={selectedLink} selectedDrawing={selectedDrawing} setConfigureNode={setConfigureNode} setSymbolNode={setSymbolNode} toggleNodeIsolation={toggleNodeIsolation} toggleNodeLock={toggleNodeLock} setLinkPropertiesOpen={setLinkPropertiesOpen} toggleLinkSuspend={toggleLinkSuspend} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} onOpenCaptureViewer={openCaptureViewer} onOpenWebWireshark={openWebWireshark} onRestartWebWireshark={restartWebWireshark} onStopCapture={stopLinkCapture} onResetLink={resetLink} />
           </ContextMenu>
         </Card>
 

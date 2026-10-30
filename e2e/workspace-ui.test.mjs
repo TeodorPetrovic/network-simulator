@@ -120,7 +120,36 @@ test("Control menu enabled and disabled lifecycle actions reflect node state", a
   await waitFor(async () => (await server.api("GET", `/projects/${pid}/nodes`)).json[0]?.status === "started", { label: "node reloaded" });
   await page.getByRole("menuitem", { name: "Control" }).click(); await menu(page, "Stop all").click();
   await waitFor(async () => (await server.api("GET", `/projects/${pid}/nodes`)).json[0]?.status === "stopped", { label: "node stopped" });
-  await page.getByRole("menuitem", { name: "Control" }).click(); assert.equal(await menu(page, "Console to all devices").isDisabled(), true);
+  await waitFor(async () => { await page.getByRole("menuitem", { name: "Control" }).click(); const disabled = await menu(page, "Console to all devices").isDisabled(); await page.keyboard.press("Escape"); return disabled; }, { label: "Console to all devices disabled after stop" });
+  await page.getByRole("menuitem", { name: "Control" }).click();
+  await menu(page, "Start all").click();
+  await waitFor(async () => (await server.api("GET", `/projects/${pid}/nodes`)).json[0]?.status === "started", { label: "node started for console all" });
+  await page.getByRole("menuitem", { name: "Control" }).click(); assert.equal(await menu(page, "Console to all devices").isDisabled(), false);
+  await menu(page, "Console to all devices").click(); await page.getByRole("region", { name: "Device consoles" }).waitFor();
+  await finish(ui);
+});
+
+test("link context menu resets filters and resumes the link through the v3 link update route", async (t) => {
+  const { server, page, ui, pid } = await workspace(t, { nodes: [{ type: "vpcs", name: "LinkPC1" }, { type: "vpcs", name: "LinkPC2", x: 220 }] });
+  const nodes = (await server.api("GET", `/projects/${pid}/nodes`)).json;
+  const created = await server.api("POST", `/projects/${pid}/links`, { nodes: nodes.map((node) => ({ node_id: node.node_id, adapter_number: 0, port_number: 0 })), link_type: "ethernet" });
+  assert.equal(created.status, 201);
+  await server.api("PUT", `/projects/${pid}/links/${created.json.link_id}`, { filters: { packet_loss: [15] }, suspend: true });
+  await openProject(server, page, pid);
+  await page.locator(".sim-link").first().evaluate((element) => element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 2, clientX: 500, clientY: 400 })));
+  await menu(page, "Reset link").click();
+  await waitFor(async () => {
+    const link = (await server.api("GET", `/projects/${pid}/links`)).json.find((item) => item.link_id === created.json.link_id);
+    return link && !link.suspend && Object.keys(link.filters ?? {}).length === 0;
+  }, { label: "link reset" });
+  await page.locator(".sim-link").first().evaluate((element) => element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 2, clientX: 500, clientY: 400 })));
+  await menu(page, "Edit link style and filters…").click();
+  await page.getByRole("dialog", { name: "Link properties" }).waitFor();
+  await page.keyboard.press("Escape");
+  await page.route(`**/v3/projects/${pid}/links/${created.json.link_id}`, (route) => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ message: "simulated link update failure" }) }));
+  await page.locator(".sim-link").first().evaluate((element) => element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 2, clientX: 500, clientY: 400 })));
+  await menu(page, "Reset link").click();
+  await page.getByRole("alert").filter({ hasText: "Could not reset link" }).waitFor();
   await finish(ui);
 });
 

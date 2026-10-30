@@ -17,6 +17,7 @@ type Props = {
   onOpenWebWireshark?: (link: Link, newTab?: boolean) => void;
   onRestartWebWireshark?: (link: Link) => void;
   onStopCapture?: (link: Link) => void;
+  onResetLink?: (link: Link) => void;
   valuesFromDrawing: (drawing: TopologySnapshot["drawings"][number]) => { width: number; height: number; stroke: string; fill: string; strokeWidth: number; text: string; imageDataUrl?: string };
   setDrawingEditOpen: (open: boolean) => void; changeDrawingOrder: (direction: "front" | "back") => void; removeDrawing: () => void;
 };
@@ -30,7 +31,7 @@ function canShowNodeLifecycle(node: Node, action: LifecycleAction) {
   return canApplyLifecycle(node, action);
 }
 
-export function WorkspaceContextMenu({ workspace: props, selectedNode, selectedLink, selectedDrawing, setConfigureNode, setSymbolNode, toggleNodeIsolation, toggleNodeLock, setLinkPropertiesOpen, toggleLinkSuspend, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, onOpenCaptureViewer, onOpenWebWireshark, onRestartWebWireshark, onStopCapture }: Props) {
+export function WorkspaceContextMenu({ workspace: props, selectedNode, selectedLink, selectedDrawing, setConfigureNode, setSymbolNode, toggleNodeIsolation, toggleNodeLock, setLinkPropertiesOpen, toggleLinkSuspend, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, onOpenCaptureViewer, onOpenWebWireshark, onRestartWebWireshark, onStopCapture, onResetLink }: Props) {
   if (props.connecting && selectedNode) {
     const ports = interfacesForNode(selectedNode);
     const available = new Set(availableInterfacesForNode(selectedNode, props.topology.links).map((port) => `${port.adapter_number}:${port.port_number}`));
@@ -59,7 +60,8 @@ export function WorkspaceContextMenu({ workspace: props, selectedNode, selectedL
                 <ContextMenuSeparator />
                 <ContextMenuItem variant="destructive" onSelect={props.onDeleteSelection}><Trash2 />Delete device</ContextMenuItem>
               </> : selectedLink ? <>
-                <ContextMenuItem onSelect={() => setLinkPropertiesOpen(true)}><Settings2 />Link properties and filters</ContextMenuItem>
+                <ContextMenuItem onSelect={() => onResetLink?.(selectedLink)}><Activity />Reset link</ContextMenuItem>
+                <ContextMenuItem onSelect={() => setLinkPropertiesOpen(true)}><Settings2 />Edit link style and filters…</ContextMenuItem>
                 <ContextMenuItem onSelect={() => void toggleLinkSuspend(selectedLink)}>{selectedLink.suspend ? <Play /> : <Pause />}{selectedLink.suspend ? "Resume link" : "Suspend link"}</ContextMenuItem>
                 <ContextMenuItem onSelect={() => setLinkPropertiesOpen(true)}><Activity />Packet capture…</ContextMenuItem>
                 <ContextMenuItem onSelect={() => onOpenCaptureViewer?.(selectedLink)}><Activity />Open built-in Capture Viewer</ContextMenuItem>

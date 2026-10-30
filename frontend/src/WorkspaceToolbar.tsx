@@ -52,7 +52,7 @@ export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, 
         {supported("Suspend all", () => runAllLifecycle("suspend"), props.batchLifecycleRunning || !nodesForLifecycle(topology.nodes, "suspend").length)}
         {supported("Stop all", props.onStopAll, props.batchLifecycleRunning || !nodesForLifecycle(topology.nodes, "stop").length)}
         {supported("Reload all", () => runAllLifecycle("reload"), props.batchLifecycleRunning || !nodesForLifecycle(topology.nodes, "reload").length)}
-        {supported("Console to all devices", () => {}, true)}
+        {supported("Console to all devices", () => topology.nodes.filter((node) => node.status === "started").forEach((node) => props.onOpenConsole(node)), !topology.nodes.some((node) => node.status === "started"))}
       </MenubarContent></MenubarMenu>
       <MenubarMenu><MenubarTrigger>Node</MenubarTrigger><MenubarContent>
         {supported("Start selected", () => runBulkLifecycle("start"), !selected || !nodesForLifecycle(selectedLifecycleNodes, "start").length)}
