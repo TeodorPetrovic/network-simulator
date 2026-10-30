@@ -432,6 +432,10 @@ fn validates_only_runtime_settings_supported_by_each_runtime() {
     assert!(
         validate_node_configuration_patch("dynamips", serde_json::json!({ "ram": 512 })).is_err()
     );
+    let iou = validate_node_configuration_patch("iou", serde_json::json!({ "name": "Legacy IOU" }))
+        .expect("legacy IOU device names remain editable");
+    assert_eq!(iou["name"], "Legacy IOU");
+    assert!(validate_node_configuration_patch("iou", serde_json::json!({ "ram": 512 })).is_err());
 }
 
 #[tokio::test]

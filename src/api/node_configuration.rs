@@ -41,6 +41,10 @@ pub(super) fn validate_node_configuration_patch(
         ],
         "vpcs" => &["name", "startup_script", "console_type"],
         "dynamips" => &["name", "startup_config"],
+        // Older GNS3 projects may contain IOU nodes even though this
+        // controller does not provide an IOU runtime adapter. Keep their
+        // editable identity available without accepting runtime settings.
+        "iou" => &["name"],
         _ => return Err(ApiError::bad_request("unsupported per-device runtime")),
     };
     let mut validated = Map::new();

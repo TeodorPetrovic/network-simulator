@@ -20,7 +20,7 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const kind = node?.node_type;
-  const supported = ["qemu", "docker", "vpcs", "dynamips", "ethernet_switch", "ethernet_hub", "hub", "cloud", "nat"].includes(kind ?? "");
+  const supported = ["qemu", "docker", "vpcs", "dynamips", "iou", "ethernet_switch", "ethernet_hub", "hub", "cloud", "nat"].includes(kind ?? "");
   const requiresStopped = ["qemu", "docker", "dynamips"].includes(kind ?? "");
 
   useEffect(() => {
@@ -180,6 +180,7 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
         </div>}
         {kind === "vpcs" && <div className="template-settings-wide">{textArea("startup_script", "Startup script", "VPCS commands run when this device starts.")}</div>}
         {kind === "dynamips" && <div className="template-settings-wide">{textArea("startup_config", "Startup configuration", "IOS configuration written before the router starts.", 8)}</div>}
+        {kind === "iou" && <p className="text-sm text-muted-foreground sm:col-span-2">IOU runtime settings are managed by the connected compute. This controller can update the device name.</p>}
       </div>
       {requiresStopped && node.status !== "stopped" && <p role="status" className="text-sm text-muted-foreground">Stop this device to edit its runtime settings.</p>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}

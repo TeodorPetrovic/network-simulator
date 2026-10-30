@@ -18,6 +18,32 @@ async function finish(ui) { assert.deepEqual(ui.errors, []); }
 async function count(page, selector) { return page.locator(selector).count(); }
 async function zoom(page) { return Number((await page.locator(".sim-zoom-hint button").innerText()).replace("%", "")); }
 
+test("right-click Configure opens the device editor for every available node type", async (t) => {
+  const server = await startServer();
+  const ui = await launchPage(server);
+  t.after(async () => { const errors = [...ui.errors]; await ui.close(); await server.stop(); assert.deepEqual(errors, []); });
+  const pid = await newProject(server, "configure-context-menu-types");
+  const templates = (await server.api("GET", "/templates")).json;
+  const wanted = ["ethernet_switch", "ethernet_hub", "cloud", "nat", "vpcs", "dynamips", "qemu", "docker"];
+  const selected = wanted.map((type) => templates.find((template) => template.template_type === type)).filter(Boolean);
+  for (const type of ["ethernet_switch", "ethernet_hub", "cloud", "nat", "vpcs"]) {
+    assert.ok(selected.some((template) => template.template_type === type), `expected built-in ${type} template`);
+  }
+  for (const [index, template] of selected.entries()) {
+    await addNode(server, pid, template, ((index % 3) - 1) * 180, (Math.floor(index / 3) - 1) * 150, `Configure${index}`);
+  }
+  await openProject(server, ui.page, pid);
+  for (const [index, template] of selected.entries()) {
+    const node = ui.page.locator(`.sim-node[aria-label="Node Configure${index}"]`);
+    await node.waitFor();
+    await node.click({ button: "right" });
+    await menu(ui.page, "Configure device").click();
+    await ui.page.getByRole("dialog", { name: `Configure Configure${index}` }).waitFor();
+    await ui.page.getByRole("button", { name: "Cancel", exact: true }).click();
+  }
+  assert.deepEqual(ui.errors, []);
+});
+
 // File menu: disabled entries are intentionally unavailable; enabled entries have visible effects.
 test("File menu enabled actions open snapshots and return to projects; unavailable actions stay disabled", async (t) => {
   const { page, ui } = await workspace(t);
