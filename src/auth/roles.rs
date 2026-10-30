@@ -312,6 +312,36 @@ pub(super) async fn acl_endpoints(State(state): State<AppState>) -> Result<Json<
             }));
         }
     }
+    // Templates and image catalog entries are controller resources rather than
+    // project objects, so expose them at their API paths in the ACL picker.
+    let templates = sqlx::query(
+        "SELECT template_id, template_json FROM controller_templates ORDER BY template_id",
+    )
+    .fetch_all(state.store.pool())
+    .await
+    .map_err(db_error)?;
+    for row in templates {
+        let id: String = row.get("template_id");
+        let template: Value =
+            serde_json::from_str(&row.get::<String, _>("template_json")).unwrap_or(Value::Null);
+        let name = template["name"].as_str().unwrap_or("Template");
+        values.push(json!({"endpoint":format!("/templates/{id}"),"name":format!("Template \"{name}\""),"endpoint_type":"template"}));
+    }
+    for (kind, table) in [("QEMU", "qemu_images"), ("Dynamips", "dynamips_images")] {
+        let directory = match table {
+            "qemu_images" => crate::image_paths::qemu_images(),
+            _ => crate::image_paths::dynamips_images(),
+        };
+        if let Ok(entries) = std::fs::read_dir(directory) {
+            for entry in entries
+                .flatten()
+                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                values.push(json!({"endpoint":format!("/images/{}", name),"name":format!("{kind} image \"{name}\""),"endpoint_type":"image"}));
+            }
+        }
+    }
     for (table, id_column, name_column, base, kind) in [
         ("projects", "project_id", "name", "/projects", "project"),
         ("auth_users", "user_id", "username", "/access/users", "user"),
