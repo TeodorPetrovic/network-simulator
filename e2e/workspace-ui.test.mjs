@@ -38,7 +38,19 @@ test("right-click Configure opens the device editor for every available node typ
     await node.waitFor();
     await node.click({ button: "right" });
     await menu(ui.page, "Configure device").click();
-    await ui.page.getByRole("dialog", { name: `Configure Configure${index}` }).waitFor();
+    const dialog = ui.page.getByRole("dialog", { name: `Configure Configure${index}` });
+    await dialog.waitFor();
+    const fields = {
+      qemu: ["RAM (MB)", "vCPUs", "Network adapters", "CD-ROM image", "Boot priority", "Console type", "Additional QEMU options"],
+      dynamips: ["RAM (MB)", "NVRAM (KB)", "Idle-PC", "Slot 0", "WIC 0", "Startup configuration"],
+      docker: ["Docker image", "Start command", "Environment variables", "Network adapters"],
+      vpcs: ["Console type", "Startup script"],
+      cloud: ["Ethernet interfaces"],
+      nat: ["Allowed host interfaces"],
+      ethernet_switch: ["Port count", "Port VLANs", "Port VLAN types"],
+      ethernet_hub: ["Port count", "Port names"],
+    }[template.template_type] ?? [];
+    for (const label of fields) await dialog.getByText(label, { exact: true }).waitFor();
     await ui.page.getByRole("button", { name: "Cancel", exact: true }).click();
   }
   assert.deepEqual(ui.errors, []);

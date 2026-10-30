@@ -20,6 +20,8 @@ pub(super) fn validate_node_configuration_patch(
             "replicate_network_connection_state",
             "hda_disk_interface",
             "boot_priority",
+            "hda_disk_image", "hdb_disk_image", "hdc_disk_image", "hdd_disk_image", "cdrom_image",
+            "hdb_disk_interface", "hdc_disk_interface", "hdd_disk_interface", "console_type", "process_priority", "options", "maxcpus",
         ],
         "docker" => &[
             "name",
@@ -27,6 +29,7 @@ pub(super) fn validate_node_configuration_patch(
             "cpus",
             "adapters",
             "start_command",
+            "image",
             "environment",
             "extra_hosts",
             "extra_volumes",
@@ -40,7 +43,7 @@ pub(super) fn validate_node_configuration_patch(
             "custom_adapters",
         ],
         "vpcs" => &["name", "startup_script", "console_type"],
-        "dynamips" => &["name", "startup_config"],
+        "dynamips" => &["name", "startup_config", "ram", "nvram", "idlepc", "slot0", "slot1", "slot2", "slot3", "slot4", "slot5", "slot6", "slot7", "wic0", "wic1", "wic2", "wic3"],
         // Older GNS3 projects may contain IOU nodes even though this
         // controller does not provide an IOU runtime adapter. Keep their
         // editable identity available without accepting runtime settings.
@@ -134,7 +137,21 @@ pub(super) fn validate_node_configuration_patch(
                     .ok_or_else(|| ApiError::bad_request("unsupported QEMU boot priority"))?;
                 json!(priority)
             }
-            "start_command" | "environment" | "extra_hosts" => {
+            "hda_disk_image" | "hdb_disk_image" | "hdc_disk_image" | "hdd_disk_image" | "cdrom_image" | "options" | "idlepc" | "slot0" | "slot1" | "slot2" | "slot3" | "slot4" | "slot5" | "slot6" | "slot7" | "wic0" | "wic1" | "wic2" | "wic3" => {
+                let text = value.as_str().filter(|text| text.len() <= 65_536).ok_or_else(|| ApiError::bad_request(format!("{key} must be text under 64 KiB")))?;
+                json!(text)
+            }
+            "hdb_disk_interface" | "hdc_disk_interface" | "hdd_disk_interface" => {
+                let interface = value.as_str().filter(|v| matches!(*v, "ide" | "scsi" | "virtio" | "sd")).ok_or_else(|| ApiError::bad_request(format!("unsupported {key}")))?;
+                json!(interface)
+            }
+            "process_priority" => {
+                let priority = value.as_str().filter(|v| matches!(*v, "low" | "normal" | "high")).ok_or_else(|| ApiError::bad_request("unsupported QEMU process_priority"))?;
+                json!(priority)
+            }
+            "maxcpus" => json!(value.as_u64().filter(|v| (1..=256).contains(v)).ok_or_else(|| ApiError::bad_request("maxcpus must be from 1 to 256"))?),
+            "ram" | "nvram" => json!(value.as_u64().filter(|v| *v <= 1_048_576).ok_or_else(|| ApiError::bad_request(format!("{key} is outside the supported range")))?),
+            "start_command" | "image" | "environment" | "extra_hosts" => {
                 let text = value
                     .as_str()
                     .filter(|text| text.len() <= 65_536)
@@ -182,6 +199,8 @@ pub(super) fn validate_node_configuration_patch(
                     .filter(|value| {
                         if node_type == "vpcs" {
                             matches!(*value, "telnet" | "ssh" | "none")
+                        } else if node_type == "qemu" {
+                            matches!(*value, "telnet" | "vnc")
                         } else {
                             matches!(*value, "none" | "telnet" | "vnc" | "http" | "https")
                         }

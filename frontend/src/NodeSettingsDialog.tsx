@@ -34,8 +34,15 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
         adapter_type: String(node.adapter_type ?? "e1000"),
         hda_disk_interface: String(node.hda_disk_interface ?? "ide"),
         boot_priority: String(node.boot_priority ?? "c"),
+        hda_disk_image: String(node.hda_disk_image ?? ""), hdb_disk_image: String(node.hdb_disk_image ?? ""),
+        hdc_disk_image: String(node.hdc_disk_image ?? ""), hdd_disk_image: String(node.hdd_disk_image ?? ""),
+        cdrom_image: String(node.cdrom_image ?? ""), hdb_disk_interface: String(node.hdb_disk_interface ?? "ide"),
+        hdc_disk_interface: String(node.hdc_disk_interface ?? "ide"), hdd_disk_interface: String(node.hdd_disk_interface ?? "ide"),
+        console_type: String(node.console_type ?? "telnet"), options: String(node.options ?? ""),
+        process_priority: String(node.process_priority ?? "normal"), maxcpus: String(node.maxcpus ?? node.cpus ?? 1),
       } : {}),
       ...(kind === "docker" ? {
+        image: String(node.image ?? ""),
         start_command: String(node.start_command ?? ""),
         environment: String(node.environment ?? ""),
         extra_hosts: String(node.extra_hosts ?? ""),
@@ -48,7 +55,12 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
           : "",
       } : {}),
       ...(kind === "vpcs" ? { startup_script: String(node.startup_script ?? "") } : {}),
-      ...(kind === "dynamips" ? { startup_config: String(node.startup_config ?? "") } : {}),
+      ...(kind === "dynamips" ? {
+        startup_config: String(node.startup_config ?? ""), memory: String(node.ram ?? node.memory ?? 512),
+        nvram: String(node.nvram ?? 128), idlepc: String(node.idlepc ?? ""),
+        ...Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`slot${i}`, String(node[`slot${i}`] ?? "")])),
+        ...Object.fromEntries(Array.from({ length: 4 }, (_, i) => [`wic${i}`, String(node[`wic${i}`] ?? "")])),
+      } : {}),
       ...(["ethernet_switch", "ethernet_hub", "hub"].includes(kind ?? "") ? {
         adapters: String(Array.isArray(node.ports_mapping) ? node.ports_mapping.length : node.ports ?? node.number_of_ports ?? 8),
         port_names: (Array.isArray(node.ports_mapping) ? node.ports_mapping : []).map((item) => String((item as Record<string, unknown>).name ?? "")).join("\n"),
@@ -56,6 +68,7 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
         port_types: (Array.isArray(node.ports_mapping) ? node.ports_mapping : []).map((item) => String((item as Record<string, unknown>).type ?? "access")).join("\n"),
       } : {}),
       ...(kind === "cloud" ? { interfaces: (Array.isArray(node.ports_mapping) ? node.ports_mapping : []).map((item) => String((item as Record<string, unknown>).interface ?? "")).join("\n") } : {}),
+      ...(kind === "nat" ? { allow_host_interfaces: Array.isArray(node.allow_host_interfaces) ? node.allow_host_interfaces.join("\n") : "" } : {}),
     });
     setError("");
   }, [kind, node, open]);
@@ -91,6 +104,9 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
       patch.adapter_type = draft.adapter_type;
       patch.hda_disk_interface = draft.hda_disk_interface;
       patch.boot_priority = draft.boot_priority;
+      for (const key of ["hda_disk_image", "hdb_disk_image", "hdc_disk_image", "hdd_disk_image", "cdrom_image", "options"]) patch[key] = draft[key] ?? "";
+      for (const key of ["hdb_disk_interface", "hdc_disk_interface", "hdd_disk_interface", "console_type", "process_priority"]) patch[key] = draft[key];
+      patch.maxcpus = Number(draft.maxcpus);
     } else if (kind === "docker") {
       patch.memory = Number(draft.memory);
       patch.cpus = Number(draft.cpus);
@@ -105,10 +121,15 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
         patch.console_http_path = draft.console_http_path || "/";
       }
       patch.aux_type = draft.aux_type ?? "none";
+      patch.image = draft.image ?? "";
     } else if (kind === "vpcs") {
       patch.startup_script = draft.startup_script ?? "";
+      patch.console_type = draft.console_type ?? "telnet";
     } else if (kind === "dynamips") {
       patch.startup_config = draft.startup_config ?? "";
+      patch.ram = Number(draft.memory); patch.nvram = Number(draft.nvram); patch.idlepc = draft.idlepc ?? "";
+      for (let i = 0; i < 8; i++) patch[`slot${i}`] = draft[`slot${i}`] ?? "";
+      for (let i = 0; i < 4; i++) patch[`wic${i}`] = draft[`wic${i}`] ?? "";
     } else if (["ethernet_switch", "ethernet_hub", "hub"].includes(kind ?? "")) {
       const count = Math.max(1, Math.min(64, Number(draft.adapters) || 1));
       const names = (draft.port_names ?? "").split("\n");
@@ -117,6 +138,8 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
       patch.ports_mapping = Array.from({ length: count }, (_, index) => ({ port_number: index, name: names[index]?.trim() || `Ethernet${index + 1}`, vlan: Number(vlans[index]) || 1, type: types[index]?.trim() || "access", ethertype: "0x8100" }));
     } else if (kind === "cloud") {
       patch.ports_mapping = (draft.interfaces ?? "").split("\n").map((name, index) => name.trim() ? ({ port_number: index, name: name.trim(), type: "ethernet", interface: name.trim() }) : null).filter(Boolean);
+    } else if (kind === "nat") {
+      patch.allow_host_interfaces = (draft.allow_host_interfaces ?? "").split("\n").map((name) => name.trim()).filter(Boolean);
     }
     try {
       await onSave(node.node_id, patch);
@@ -155,14 +178,20 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
           {textArea("port_types", "Port VLAN types", "One type per port, such as access or dot1q.")}
         </>}
         {kind === "cloud" && <div className="template-settings-wide">{textArea("interfaces", "Ethernet interfaces", "One host interface per line.")}</div>}
+        {kind === "nat" && <div className="template-settings-wide">{textArea("allow_host_interfaces", "Allowed host interfaces", "Explicitly allow these host interfaces for the NAT node, one per line.")}</div>}
         {(kind === "qemu" || kind === "docker") && field("memory", kind === "qemu" ? "RAM (MB)" : "Memory limit (MB)", "number", kind === "docker" ? "0 means no Docker memory limit." : undefined)}
         {(kind === "qemu" || kind === "docker") && field("cpus", kind === "qemu" ? "vCPUs" : "CPU limit", "number", kind === "docker" ? "0 means no Docker CPU limit." : undefined, kind === "docker" ? "0.25" : "1")}
         {kind === "qemu" && <>
+          {field("hda_disk_image", "HDA disk image")}{field("hdb_disk_image", "HDB disk image")}{field("hdc_disk_image", "HDC disk image")}{field("hdd_disk_image", "HDD disk image")}{field("cdrom_image", "CD-ROM image")}
           {selectField("adapter_type", "Network adapter model", ["e1000", "virtio-net-pci", "rtl8139", "vmxnet3"])}
           {selectField("hda_disk_interface", "Primary disk interface", ["ide", "scsi", "virtio", "sd"])}
+          {selectField("hdb_disk_interface", "HDB disk interface", ["ide", "scsi", "virtio", "sd"])}{selectField("hdc_disk_interface", "HDC disk interface", ["ide", "scsi", "virtio", "sd"])}{selectField("hdd_disk_interface", "HDD disk interface", ["ide", "scsi", "virtio", "sd"])}
           {selectField("boot_priority", "Boot priority", ["c", "d", "n", "dc", "cd"])}
+          {field("maxcpus", "Maximum CPUs", "number")}{selectField("console_type", "Console type", ["telnet", "vnc"])}{selectField("process_priority", "Process priority", ["low", "normal", "high"])}
+          <div className="template-settings-wide">{textArea("options", "Additional QEMU options", "Command line options passed to QEMU.")}</div>
         </>}
         {kind === "docker" && <div className="template-settings-wide">
+          {field("image", "Docker image")}
           {selectField("console_type", "Console type", ["telnet", "vnc", "http", "https", "none"])}
           {draft.console_type === "http" || draft.console_type === "https" ? <div className="grid gap-2 rounded-md border p-3 sm:col-span-2">
             <p className="text-sm">The controller stores this console port and path but does not publish or proxy Docker ports. Open in a new tab assumes the service is reachable from your browser.</p>
@@ -178,8 +207,12 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
           {textArea("extra_hosts", "Extra hosts", "One host:address entry per line.")}
           {textArea("extra_volumes", "Persistent container paths", "One absolute path inside the container per line. Data lives in the project runtime directory.")}
         </div>}
-        {kind === "vpcs" && <div className="template-settings-wide">{textArea("startup_script", "Startup script", "VPCS commands run when this device starts.")}</div>}
-        {kind === "dynamips" && <div className="template-settings-wide">{textArea("startup_config", "Startup configuration", "IOS configuration written before the router starts.", 8)}</div>}
+        {kind === "vpcs" && <div className="template-settings-wide">{selectField("console_type", "Console type", ["telnet", "ssh", "none"])}{textArea("startup_script", "Startup script", "VPCS commands run when this device starts.")}</div>}
+        {kind === "dynamips" && <>
+          {field("memory", "RAM (MB)", "number")}{field("nvram", "NVRAM (KB)", "number")}{field("idlepc", "Idle-PC")}
+          {Array.from({ length: 8 }, (_, i) => field(`slot${i}`, `Slot ${i}`))}{Array.from({ length: 4 }, (_, i) => field(`wic${i}`, `WIC ${i}`))}
+          <div className="template-settings-wide">{textArea("startup_config", "Startup configuration", "IOS configuration written before the router starts.", 8)}</div>
+        </>}
         {kind === "iou" && <p className="text-sm text-muted-foreground sm:col-span-2">IOU runtime settings are managed by the connected compute. This controller can update the device name.</p>}
       </div>
       {requiresStopped && node.status !== "stopped" && <p role="status" className="text-sm text-muted-foreground">Stop this device to edit its runtime settings.</p>}
