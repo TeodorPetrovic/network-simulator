@@ -5,9 +5,24 @@ pub(super) fn classify_route(method: &str, path: &str) -> Option<RouteClass> {
         .iter()
         .chain(ROUTE_RULES_EXTRA.iter())
         .find(|rule| {
-            (rule.method == method || rule.method == "ANY") && route_path_matches(path, rule.path)
+            // The deny rule is a fallback and must not shadow explicit rules
+            // in ROUTE_RULES_EXTRA (including project notification sockets).
+            !(rule.method == "ANY" && rule.path == "/{*path}")
+                && (rule.method == method || rule.method == "ANY")
+                && route_path_matches(path, rule.path)
         })
         .map(|rule| rule.class)
+        .or_else(|| {
+            ROUTE_RULES
+                .iter()
+                .chain(ROUTE_RULES_EXTRA.iter())
+                .find(|rule| {
+                    rule.method == "ANY"
+                        && rule.path == "/{*path}"
+                        && route_path_matches(path, rule.path)
+                })
+                .map(|rule| rule.class)
+        })
 }
 
 fn route_path_matches(path: &str, pattern: &str) -> bool {
