@@ -38,9 +38,12 @@ test("projects create, rename, duplicate, export, refresh, sort, close, and dele
   await page.getByRole("button", { name: "Close project" }).click();
   assert.equal((await server.api("GET", `/projects/${alpha.project_id}`)).json.status, "closed");
   await page.getByRole("button", { name: `Settings for Page Alpha` }).click();
+  const projectSettings = page.getByRole("dialog", { name: "Project settings" });
+  await projectSettings.getByLabel("Show layers").check();
   await page.locator("#project-name").fill("Page Renamed");
-  await page.getByRole("button", { name: "Apply" }).click();
+  await projectSettings.getByRole("button", { name: "Apply" }).click();
   assert.equal((await server.api("GET", `/projects/${alpha.project_id}`)).json.name, "Page Renamed");
+  assert.equal((await server.api("GET", `/projects/${alpha.project_id}`)).json.show_layers, true);
   await page.getByRole("button", { name: "Duplicate Page Renamed" }).click();
   await page.locator("#duplicate-project-name").fill("Page Copy");
   await page.getByRole("button", { name: "Duplicate" }).click();

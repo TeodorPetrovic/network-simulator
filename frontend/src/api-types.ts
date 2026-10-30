@@ -6,6 +6,7 @@ export type Project = {
   auto_start?: boolean;
   auto_close?: boolean;
   show_interface_labels?: boolean;
+  show_layers?: boolean;
   scene_width?: number;
   scene_height?: number;
   grid_size?: number;
