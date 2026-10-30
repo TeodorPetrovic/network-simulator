@@ -429,13 +429,32 @@ fn validates_only_runtime_settings_supported_by_each_runtime() {
     )
     .unwrap_or_else(|_| panic!("Dynamips startup config should be configurable"));
     assert_eq!(dynamips["startup_config"], "hostname R1\n");
-    assert!(
-        validate_node_configuration_patch("dynamips", serde_json::json!({ "ram": 512 })).is_err()
-    );
+    let dynamips = validate_node_configuration_patch(
+        "dynamips",
+        serde_json::json!({ "ram": 512 }),
+    )
+    .expect("Dynamips RAM is a supported per-node setting");
+    assert_eq!(dynamips["ram"], 512);
+    assert!(validate_node_configuration_patch(
+        "dynamips",
+        serde_json::json!({ "runtime_overlay": "/tmp/router.qcow2" })
+    )
+    .is_err());
     let iou = validate_node_configuration_patch("iou", serde_json::json!({ "name": "Legacy IOU" }))
         .expect("legacy IOU device names remain editable");
     assert_eq!(iou["name"], "Legacy IOU");
-    assert!(validate_node_configuration_patch("iou", serde_json::json!({ "ram": 512 })).is_err());
+    let iou = validate_node_configuration_patch(
+        "iou",
+        serde_json::json!({ "ram": 512, "ethernet_adapters": 2 }),
+    )
+    .expect("IOU RAM and adapter counts are supported settings");
+    assert_eq!(iou["ram"], 512);
+    assert_eq!(iou["ethernet_adapters"], 2);
+    assert!(validate_node_configuration_patch(
+        "iou",
+        serde_json::json!({ "runtime_overlay": "/tmp/router.qcow2" })
+    )
+    .is_err());
 }
 
 #[tokio::test]

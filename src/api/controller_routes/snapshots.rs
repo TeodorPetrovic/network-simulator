@@ -86,14 +86,6 @@ pub(super) async fn restore_snapshot(
                 .execute(&mut *tx).await?;
         }
     }
-    if let Some(files) = snapshot["node_files"].as_array() {
-        for file in files {
-            sqlx::query("INSERT INTO node_files(project_id,node_id,file_path,contents) VALUES(?,?,?,?)")
-                .bind(&pid).bind(file["node_id"].as_str().unwrap_or_default()).bind(file["path"].as_str().unwrap_or_default())
-                .bind(file["contents"].as_array().map(|bytes| bytes.iter().filter_map(Value::as_u64).map(|b| b as u8).collect::<Vec<_>>()).unwrap_or_default())
-                .execute(&mut *tx).await?;
-        }
-    }
     sqlx::query("DELETE FROM link_endpoints WHERE project_id=?")
         .bind(&pid)
         .execute(&mut *tx)
@@ -124,6 +116,16 @@ pub(super) async fn restore_snapshot(
             if kind == "link" {
                 store_link_endpoints_in_tx(&mut tx, &pid, &id, &value).await?;
             }
+        }
+    }
+    // Node files reference topology objects with ON DELETE CASCADE, so restore
+    // them only after the snapshot's nodes have been recreated above.
+    if let Some(files) = snapshot["node_files"].as_array() {
+        for file in files {
+            sqlx::query("INSERT INTO node_files(project_id,node_id,file_path,contents) VALUES(?,?,?,?)")
+                .bind(&pid).bind(file["node_id"].as_str().unwrap_or_default()).bind(file["path"].as_str().unwrap_or_default())
+                .bind(file["contents"].as_array().map(|bytes| bytes.iter().filter_map(Value::as_u64).map(|b| b as u8).collect::<Vec<_>>()).unwrap_or_default())
+                .execute(&mut *tx).await?;
         }
     }
     let mut project = snapshot["project"].clone();
