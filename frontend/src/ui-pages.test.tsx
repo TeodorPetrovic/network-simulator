@@ -148,7 +148,8 @@ describe("PAGES parity routes", () => {
     expect(screen.getAllByText("Pending backend").length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: /IOU/ }));
-    expect(screen.getByText("IOU is unsupported")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add template" })).toBeInTheDocument();
+    expect(screen.getByText("Template and node data are saved, but this controller cannot execute IOU without its runtime binary.")).toBeInTheDocument();
   });
 
   it("renders only controller-returned settings and saves those fields", async () => {

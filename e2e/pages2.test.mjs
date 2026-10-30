@@ -17,7 +17,11 @@ test("Preferences runtime tabs include all built-ins and mark unsupported types"
     await page.getByRole("heading", { name: `${label} templates`, exact: true }).waitFor();
     await page.getByRole("button", { name: "Add template" }).waitFor();
   }
-  for (const label of ["IOU", "VirtualBox", "VMware"]) {
+  await page.getByRole("button", { name: /IOU/ }).click();
+  await page.getByRole("heading", { name: "IOU templates", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Add template" }).waitFor();
+  await page.getByText("Template and node data are saved, but this controller cannot execute IOU without its runtime binary.", { exact: true }).waitFor();
+  for (const label of ["VirtualBox", "VMware"]) {
     await page.getByRole("button", { name: new RegExp(label) }).click();
     await page.getByText(`${label} is unsupported`, { exact: true }).waitFor();
     assert.equal(await page.getByRole("button", { name: "Add template" }).count(), 0);
@@ -32,6 +36,7 @@ test("Preferences creates templates for each supported runtime and exposes its f
     ["VPCS", "VPCS template", "Startup script"], ["Dynamips (IOS routers)", "Dynamips (IOS routers) template", "Platform"],
     ["Cloud", "Cloud template", "Ethernet interface"], ["NAT", "NAT template", "Template name"],
     ["Ethernet hub", "Ethernet hub template", "Number of ports"], ["Ethernet switch", "Ethernet switch template", "Port configuration (port number, VLAN, mode, EtherType)"],
+    ["IOU", "IOU template", "NVRAM (KB)"],
   ];
   for (const [runtime, title, field] of types) {
     await page.getByRole("button", { name: runtime, exact: true }).click();
@@ -40,6 +45,7 @@ test("Preferences creates templates for each supported runtime and exposes its f
     await dialog.getByLabel("Template name").fill(`E2E ${runtime}`);
     if (runtime === "Cloud") await dialog.getByRole("tab", { name: "Ethernet interfaces" }).click();
     if (runtime === "Ethernet switch") await dialog.getByRole("tab", { name: "Ports" }).click();
+    if (runtime === "IOU") await dialog.getByRole("tab", { name: "Memory" }).click();
     await dialog.getByText(field, { exact: true }).waitFor();
     await dialog.getByRole("button", { name: "Create template" }).click();
     await page.getByText(`E2E ${runtime}`, { exact: true }).waitFor();

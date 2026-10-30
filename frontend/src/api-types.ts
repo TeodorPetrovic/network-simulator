@@ -180,6 +180,21 @@ export type DynamipsTemplate = {
   console_auto_start?: boolean;
 };
 
+export type IouTemplate = {
+  template_id: string;
+  name: string;
+  template_type: "iou";
+  path?: string;
+  image?: string;
+  ram?: number;
+  nvram?: number;
+  ethernet_adapters?: number;
+  serial_adapters?: number;
+  console_type?: string;
+  startup_config?: string;
+  private_config?: string;
+};
+
 export type EthernetSwitchPort = {
   name: string;
   port_number: number;
@@ -209,7 +224,7 @@ export type BuiltinTemplate = {
   symbol?: string;
 };
 
-export type RuntimeTemplate = DockerTemplate | QemuTemplate | VpcsTemplate | DynamipsTemplate | BuiltinTemplate;
+export type RuntimeTemplate = DockerTemplate | QemuTemplate | VpcsTemplate | DynamipsTemplate | IouTemplate | BuiltinTemplate;
 
 export type RuntimeInfo = {
   docker: {

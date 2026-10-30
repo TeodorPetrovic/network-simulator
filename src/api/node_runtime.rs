@@ -154,6 +154,10 @@ pub(super) async fn apply_node_lifecycle(
                 "Cloud and NAT nodes cannot be stopped, reloaded, or suspended",
             )),
         },
+        "iou" => Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "IOU template and node data are supported, but the IOU runtime binary is not installed",
+        )),
         _ => Err(ApiError::new(
             StatusCode::METHOD_NOT_ALLOWED,
             "This node has no implemented runtime adapter",

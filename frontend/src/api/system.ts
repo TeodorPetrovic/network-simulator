@@ -10,6 +10,8 @@ export const systemApi = {
     settings: () => request<ServerSettings>("/settings"),
     updateSettings: (settings: ServerSettings) =>
     request<ServerSettings>("/settings", { method: "PUT", body: JSON.stringify(settings) }),
+    iouLicense: () => request<Record<string, unknown>>("/iou_license"),
+    updateIouLicense: (settings: Record<string, unknown>) => request<Record<string, unknown>>("/iou_license", { method: "PUT", body: JSON.stringify(settings) }),
     pullDockerImage: (image: string) => request<{ image_id: string; template: RuntimeTemplate }>("/docker/images/pull", jsonBody({ image })),
     symbolRaw: async (symbolId: string) => {
     const path = `/symbols/${encodeURIComponent(symbolId)}/raw`;

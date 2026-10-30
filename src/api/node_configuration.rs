@@ -44,10 +44,18 @@ pub(super) fn validate_node_configuration_patch(
         ],
         "vpcs" => &["name", "startup_script", "console_type"],
         "dynamips" => &["name", "startup_config", "ram", "nvram", "idlepc", "slot0", "slot1", "slot2", "slot3", "slot4", "slot5", "slot6", "slot7", "wic0", "wic1", "wic2", "wic3"],
-        // Older GNS3 projects may contain IOU nodes even though this
-        // controller does not provide an IOU runtime adapter. Keep their
-        // editable identity available without accepting runtime settings.
-        "iou" => &["name"],
+        "iou" => &[
+            "name",
+            "path",
+            "ram",
+            "nvram",
+            "ethernet_adapters",
+            "serial_adapters",
+            "console_type",
+            "console_auto_start",
+            "startup_config",
+            "private_config",
+        ],
         _ => return Err(ApiError::bad_request("unsupported per-device runtime")),
     };
     let mut validated = Map::new();
@@ -81,6 +89,36 @@ pub(super) fn validate_node_configuration_patch(
                     })?;
                 json!(memory)
             }
+            "ram" | "nvram" | "ethernet_adapters" | "serial_adapters" if node_type == "iou" => {
+                let limit = if key == "ram" {
+                    1_048_576
+                } else if key == "nvram" {
+                    65_536
+                } else {
+                    99
+                };
+                let number = value
+                    .as_u64()
+                    .filter(|number| *number <= limit)
+                    .ok_or_else(|| {
+                        ApiError::bad_request(format!("{key} must be an integer from 0 to {limit}"))
+                    })?;
+                json!(number)
+            }
+            "path" | "startup_config" | "private_config" if node_type == "iou" => {
+                let value = value
+                    .as_str()
+                    .filter(|text| text.len() <= 1024 * 1024)
+                    .ok_or_else(|| {
+                        ApiError::bad_request(format!("{key} must be text under 1 MiB"))
+                    })?;
+                json!(value)
+            }
+            "console_auto_start" if node_type == "iou" => json!(
+                value
+                    .as_bool()
+                    .ok_or_else(|| ApiError::bad_request("console_auto_start must be boolean"))?
+            ),
             "cpus" => {
                 if node_type == "qemu" {
                     let cpus = value

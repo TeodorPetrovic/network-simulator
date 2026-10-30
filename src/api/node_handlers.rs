@@ -14,7 +14,9 @@ pub(super) async fn get_node(
     .await?
     .0;
     let mut nodes = refresh_node_statuses(&state, &project_id, vec![node]).await;
-    Ok(etag_response(nodes.pop().expect("the requested node was provided")))
+    Ok(etag_response(
+        nodes.pop().expect("the requested node was provided"),
+    ))
 }
 
 pub(super) async fn update_node(
@@ -23,8 +25,18 @@ pub(super) async fn update_node(
     headers: axum::http::HeaderMap,
     Json(patch): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let current = get_topology_object(state.store.pool(), &project_id.to_string(), "node", &node_id.to_string()).await?.0;
-    let current = refresh_node_statuses(&state, &project_id.to_string(), vec![current]).await.pop().expect("one requested node was supplied");
+    let current = get_topology_object(
+        state.store.pool(),
+        &project_id.to_string(),
+        "node",
+        &node_id.to_string(),
+    )
+    .await?
+    .0;
+    let current = refresh_node_statuses(&state, &project_id.to_string(), vec![current])
+        .await
+        .pop()
+        .expect("one requested node was supplied");
     check_if_match(&headers, &current)?;
     if let Some(idle_pc) = patch.get("idlepc").and_then(Value::as_str) {
         let node = get_topology_object(
@@ -170,6 +182,7 @@ pub(super) async fn update_node_configuration(
                 .await
                 .map_err(runtime_api_error)?
         }
+        "iou" => node["status"].as_str().unwrap_or("stopped").to_owned(),
         _ => {
             return Err(ApiError::new(
                 StatusCode::METHOD_NOT_ALLOWED,

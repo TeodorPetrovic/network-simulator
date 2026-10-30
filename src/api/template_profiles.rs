@@ -509,6 +509,39 @@ pub(super) fn validate_template_profile_patch(
                     })?;
                 validated.insert(key.clone(), json!(text));
             }
+            "ram" | "nvram" | "ethernet_adapters" | "serial_adapters" if kind == "iou" => {
+                let limit = if key == "ram" {
+                    1_048_576
+                } else if key == "nvram" {
+                    65_536
+                } else {
+                    99
+                };
+                let number = value
+                    .as_u64()
+                    .filter(|number| *number <= limit)
+                    .ok_or_else(|| {
+                        ApiError::bad_request(format!("{key} must be an integer from 0 to {limit}"))
+                    })?;
+                validated.insert(key.clone(), json!(number));
+            }
+            "console_auto_start" if kind == "iou" => {
+                let value = value
+                    .as_bool()
+                    .ok_or_else(|| ApiError::bad_request("console_auto_start must be boolean"))?;
+                validated.insert(key.clone(), json!(value));
+            }
+            "path" | "image" | "startup_config" | "private_config" | "console_type"
+                if kind == "iou" =>
+            {
+                let text = value
+                    .as_str()
+                    .filter(|text| text.len() <= 1024 * 1024)
+                    .ok_or_else(|| {
+                        ApiError::bad_request(format!("{key} must be text under 1 MiB"))
+                    })?;
+                validated.insert(key.clone(), json!(text));
+            }
             "extra_configs" if kind == "docker" => {
                 let configs = validate_docker_extra_configs_api(Some(value), None)?;
                 validated.insert(

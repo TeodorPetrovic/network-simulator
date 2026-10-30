@@ -284,6 +284,12 @@ pub const ROUTE_RULES: &[RouteRule] = rules![
     ),
     ("GET", "/settings", RouteClass::Privilege("Server.Audit")),
     ("PUT", "/settings", RouteClass::Privilege("Server.Modify")),
+    ("GET", "/iou_license", RouteClass::Privilege("Server.Audit")),
+    (
+        "PUT",
+        "/iou_license",
+        RouteClass::Privilege("Server.Modify")
+    ),
     ("GET", "/computes", RouteClass::Privilege("Compute.Audit")),
     ("POST", "/computes", RouteClass::Privilege("Compute.Modify")),
     (

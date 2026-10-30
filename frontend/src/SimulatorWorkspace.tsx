@@ -182,7 +182,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [featureMessage, setFeatureMessage] = useState("");
   const groupedTemplates = useMemo(() => {
     const query = deviceQuery.trim().toLowerCase();
-    return ["dynamips", "qemu", "docker", "vpcs", "ethernet_switch", "ethernet_hub", "cloud", "nat"].map((kind) => ({
+    return ["dynamips", "qemu", "docker", "vpcs", "iou", "ethernet_switch", "ethernet_hub", "cloud", "nat"].map((kind) => ({
       kind,
       templates: props.templates.filter((template) => template.template_type === kind && (!query || `${template.name} ${template.template_type}`.toLowerCase().includes(query))),
     }));

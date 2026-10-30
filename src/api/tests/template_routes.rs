@@ -376,3 +376,100 @@ async fn node_batch_obeys_strict_names_and_continues_after_conflict() {
     assert_eq!(results[3]["node"]["name"], "SW3");
     assert_eq!(results[1]["error"]["code"], "conflict");
 }
+
+#[tokio::test]
+async fn iou_templates_and_nodes_persist_without_an_iou_runtime() {
+    let (app, _directory) = test_router().await;
+    let (_, project) = request(
+        &app,
+        Method::POST,
+        "/v3/projects".into(),
+        Some(serde_json::json!({"name":"IOU metadata"})),
+    )
+    .await;
+    let project_id = project["project_id"].as_str().unwrap();
+    let (status, template) = request(&app, Method::POST, "/v3/templates".into(), Some(serde_json::json!({
+        "name":"IOU L2", "template_type":"iou", "path":"/images/iou.bin", "ram":512, "nvram":384,
+        "ethernet_adapters":4, "serial_adapters":1, "console_type":"telnet", "startup_config":"hostname %h"
+    }))).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let template_id = template["template_id"].as_str().unwrap();
+    let (status, updated) = request(
+        &app,
+        Method::PUT,
+        format!("/v3/templates/{template_id}"),
+        Some(serde_json::json!({"nvram":512})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["nvram"], 512);
+    let (status, node) = request(
+        &app,
+        Method::POST,
+        format!("/v3/projects/{project_id}/templates/{template_id}"),
+        Some(serde_json::json!({"name":"R1", "x":20, "startup_config":"hostname R1"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(node["node_type"], "iou");
+    assert_eq!(node["path"], "/images/iou.bin");
+    assert_eq!(node["nvram"], 512);
+    assert_eq!(node["startup_config"], "hostname R1");
+    assert_eq!(node["runtime_supported"], false);
+    let node_id = node["node_id"].as_str().unwrap();
+    let (status, updated_node) = request(
+        &app,
+        Method::PUT,
+        format!("/v3/projects/{project_id}/nodes/{node_id}/config"),
+        Some(serde_json::json!({"nvram":768,"private_config":"enable secret test"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated_node["nvram"], 768);
+    assert_eq!(updated_node["private_config"], "enable secret test");
+    let (status, unavailable) = request(
+        &app,
+        Method::POST,
+        format!("/v3/projects/{project_id}/nodes/{node_id}/start"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        unavailable["message"]
+            .as_str()
+            .unwrap()
+            .contains("IOU runtime binary is not installed")
+    );
+    let (status, _) = request(
+        &app,
+        Method::DELETE,
+        format!("/v3/projects/{project_id}/nodes/{node_id}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn iou_license_settings_store_the_iourc_content_and_license_check_flag() {
+    let (app, _directory) = test_router().await;
+    let (status, defaults) = request(&app, Method::GET, "/v3/iou_license".into(), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(defaults["license_check"], false);
+    let (status, updated) = request(
+        &app,
+        Method::PUT,
+        "/v3/iou_license".into(),
+        Some(serde_json::json!({
+            "iourc_content":"[license]\n gnsi = 0123456789abcdef;",
+            "license_check":true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["license_check"], true);
+    assert_eq!(updated["iourc_content"], "[license]\n gnsi = 0123456789abcdef;");
+    let (_, stored) = request(&app, Method::GET, "/v3/iou_license".into(), None).await;
+    assert_eq!(stored, updated);
+}

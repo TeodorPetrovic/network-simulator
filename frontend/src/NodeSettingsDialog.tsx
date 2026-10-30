@@ -61,6 +61,12 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
         ...Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`slot${i}`, String(node[`slot${i}`] ?? "")])),
         ...Object.fromEntries(Array.from({ length: 4 }, (_, i) => [`wic${i}`, String(node[`wic${i}`] ?? "")])),
       } : {}),
+      ...(kind === "iou" ? {
+        path: String(node.path ?? ""), ram: String(node.ram ?? 256), nvram: String(node.nvram ?? 256),
+        ethernet_adapters: String(node.ethernet_adapters ?? 2), serial_adapters: String(node.serial_adapters ?? 0),
+        console_type: String(node.console_type ?? "telnet"), startup_config: String(node.startup_config ?? ""),
+        private_config: String(node.private_config ?? ""),
+      } : {}),
       ...(["ethernet_switch", "ethernet_hub", "hub"].includes(kind ?? "") ? {
         adapters: String(Array.isArray(node.ports_mapping) ? node.ports_mapping.length : node.ports ?? node.number_of_ports ?? 8),
         port_names: (Array.isArray(node.ports_mapping) ? node.ports_mapping : []).map((item) => String((item as Record<string, unknown>).name ?? "")).join("\n"),
@@ -130,6 +136,15 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
       patch.ram = Number(draft.memory); patch.nvram = Number(draft.nvram); patch.idlepc = draft.idlepc ?? "";
       for (let i = 0; i < 8; i++) patch[`slot${i}`] = draft[`slot${i}`] ?? "";
       for (let i = 0; i < 4; i++) patch[`wic${i}`] = draft[`wic${i}`] ?? "";
+    } else if (kind === "iou") {
+      patch.path = draft.path ?? "";
+      patch.ram = Number(draft.ram);
+      patch.nvram = Number(draft.nvram);
+      patch.ethernet_adapters = Number(draft.ethernet_adapters);
+      patch.serial_adapters = Number(draft.serial_adapters);
+      patch.console_type = draft.console_type ?? "telnet";
+      patch.startup_config = draft.startup_config ?? "";
+      patch.private_config = draft.private_config ?? "";
     } else if (["ethernet_switch", "ethernet_hub", "hub"].includes(kind ?? "")) {
       const count = Math.max(1, Math.min(64, Number(draft.adapters) || 1));
       const names = (draft.port_names ?? "").split("\n");
@@ -198,7 +213,7 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
             <div className="grid gap-3 sm:grid-cols-2">{field("console_http_port", "HTTP port in the container", "number", undefined, "1")}{field("console_http_path", "HTTP path", "text", "Must begin with a slash.")}</div>
             <Button type="button" variant="outline" className="w-fit" onClick={openHttpConsole}><ExternalLink />Open in new tab</Button>
           </div> : null}
-          {draft.console_type === "vnc" && <p role="status" className="text-sm text-muted-foreground sm:col-span-2">The controller can start VNC on its TCP console port, but this UI has no browser VNC route.</p>}
+          {draft.console_type === "vnc" && <p role="status" className="text-sm text-muted-foreground sm:col-span-2">Open the device console from its context menu to use the browser VNC window.</p>}
           {draft.console_type === "none" && <p role="status" className="text-sm text-muted-foreground sm:col-span-2">The controller does not accept Docker console type “none” yet. Select another type to save.</p>}
           {selectField("aux_type", "Auxiliary console type", ["none", "telnet", "ssh"])}
           {draft.aux_type !== "none" && <p role="status" className="text-sm text-muted-foreground sm:col-span-2">When the device is running, open its context menu and choose “Open auxiliary console”.</p>}
@@ -213,7 +228,14 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
           {Array.from({ length: 8 }, (_, i) => field(`slot${i}`, `Slot ${i}`))}{Array.from({ length: 4 }, (_, i) => field(`wic${i}`, `WIC ${i}`))}
           <div className="template-settings-wide">{textArea("startup_config", "Startup configuration", "IOS configuration written before the router starts.", 8)}</div>
         </>}
-        {kind === "iou" && <p className="text-sm text-muted-foreground sm:col-span-2">IOU runtime settings are managed by the connected compute. This controller can update the device name.</p>}
+        {kind === "iou" && <div className="template-settings-wide grid gap-3 sm:grid-cols-2">
+          <p role="status" className="text-sm text-amber-700 sm:col-span-2">IOU runtime is unavailable here. These settings are still saved with the project node.</p>
+          {field("path", "IOU image path")}{field("ram", "RAM (MB)", "number")}{field("nvram", "NVRAM (KB)", "number")}
+          {field("ethernet_adapters", "Ethernet adapters", "number")}{field("serial_adapters", "Serial adapters", "number")}
+          {selectField("console_type", "Console type", ["telnet", "none"])}
+          <div className="sm:col-span-2">{textArea("startup_config", "Startup configuration", "Configuration content loaded from the IOU NVRAM.", 7)}</div>
+          <div className="sm:col-span-2">{textArea("private_config", "Private configuration", "Private configuration content stored in the IOU NVRAM.", 5)}</div>
+        </div>}
       </div>
       {requiresStopped && node.status !== "stopped" && <p role="status" className="text-sm text-muted-foreground">Stop this device to edit its runtime settings.</p>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}

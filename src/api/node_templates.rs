@@ -18,6 +18,7 @@ pub(super) async fn create_node(
         Some("dynamips") => {
             super::dynamips_node::create_dynamips_node(state, project_id.to_string(), node).await
         }
+        Some("iou") => create_iou_node(state, project_id.to_string(), node).await,
         Some(node_type) if BuiltinRuntime::is_type(node_type) => {
             create_builtin_node(state, project_id.to_string(), node).await
         }
@@ -51,6 +52,39 @@ pub(super) async fn create_builtin_node(
     object.insert("project_id".into(), json!(project_id.clone()));
     let node = BuiltinRuntime::normalize_node(node).map_err(ApiError::bad_request)?;
     BuiltinRuntime::validate_host_interfaces(&node).map_err(ApiError::bad_request)?;
+    create_topology_object(state, &project_id, "node", "node_id", node).await
+}
+
+pub(super) async fn create_iou_node(
+    state: AppState,
+    project_id: String,
+    mut node: Value,
+) -> Result<Response, ApiError> {
+    let object = as_object_mut(&mut node, "node body must be an object")?;
+    let name = required_string(object, "name")?.trim().to_owned();
+    if name.is_empty() {
+        return Err(ApiError::bad_request("node name must not be empty"));
+    }
+    let node_id = parse_or_generate_uuid(object.get("node_id"), "node_id")?;
+    ensure_project_exists_pool(state.store.pool(), &project_id).await?;
+    object.insert("name".into(), json!(name));
+    object.insert("node_id".into(), json!(node_id));
+    object.insert("project_id".into(), json!(project_id.clone()));
+    object.insert("node_type".into(), json!("iou"));
+    object.entry("compute_id").or_insert(json!("local"));
+    object.entry("status").or_insert(json!("stopped"));
+    object.entry("x").or_insert(json!(0));
+    object.entry("y").or_insert(json!(0));
+    object.entry("z").or_insert(json!(1));
+    object.entry("locked").or_insert(json!(false));
+    object.entry("nvram").or_insert(json!(256));
+    object.entry("ram").or_insert(json!(256));
+    object.entry("ethernet_adapters").or_insert(json!(2));
+    object.entry("serial_adapters").or_insert(json!(0));
+    object.entry("console_type").or_insert(json!("telnet"));
+    object.entry("startup_config").or_insert(json!(""));
+    object.entry("private_config").or_insert(json!(""));
+    object.insert("runtime_supported".into(), json!(false));
     create_topology_object(state, &project_id, "node", "node_id", node).await
 }
 
@@ -276,6 +310,22 @@ pub(super) async fn create_node_from_template(
             "x": usage.get("x").cloned().unwrap_or(json!(0)),
             "y": usage.get("y").cloned().unwrap_or(json!(0))
         })
+    } else if node_type == "iou" {
+        json!({
+            "name": name,
+            "node_type": "iou",
+            "template_id": template_id,
+            "path": template.get("path").cloned().unwrap_or_else(|| template.get("image").cloned().unwrap_or(Value::Null)),
+            "ram": template.get("ram").cloned().unwrap_or(json!(256)),
+            "nvram": template.get("nvram").cloned().unwrap_or(json!(256)),
+            "ethernet_adapters": template.get("ethernet_adapters").cloned().unwrap_or(json!(2)),
+            "serial_adapters": template.get("serial_adapters").cloned().unwrap_or(json!(0)),
+            "console_type": template.get("console_type").cloned().unwrap_or(json!("telnet")),
+            "startup_config": usage.get("startup_config").cloned().or_else(|| template.get("startup_config").cloned()).unwrap_or(json!("")),
+            "private_config": usage.get("private_config").cloned().or_else(|| template.get("private_config").cloned()).unwrap_or(json!("")),
+            "x": usage.get("x").cloned().unwrap_or(json!(0)),
+            "y": usage.get("y").cloned().unwrap_or(json!(0))
+        })
     } else {
         return Err(ApiError::bad_request(format!(
             "Template runtime '{node_type}' is not supported"
@@ -301,6 +351,7 @@ pub(super) async fn create_node_from_template(
         "dynamips" => {
             super::dynamips_node::create_dynamips_node(state, project_id.to_string(), node).await
         }
+        "iou" => create_iou_node(state, project_id.to_string(), node).await,
         _ => unreachable!("template runtime was validated"),
     }
 }

@@ -62,14 +62,15 @@ export function NodeInspector({ node, links, nodes, onLifecycle, onOpenConsole, 
   return <Card className="mx-3 mb-3 p-3">
     <div className="flex items-start justify-between gap-2">
       <div className="min-w-0 flex-1">
-        <div className="mb-2 flex items-center gap-2"><Badge variant="outline" className="capitalize">{node.node_type ?? "device"}</Badge><Badge variant={node.status === "started" ? "default" : "secondary"} className="capitalize">{node.status ?? "stopped"}</Badge></div>
+        <div className="mb-2 flex flex-wrap items-center gap-2"><Badge variant="outline" className="capitalize">{node.node_type ?? "device"}</Badge><Badge variant={node.status === "started" ? "default" : "secondary"} className="capitalize">{node.status ?? "stopped"}</Badge>{node.runtime_supported === false && <Badge variant="destructive">Runtime unavailable</Badge>}</div>
+        {node.node_type === "iou" && node.runtime_supported === false && <p role="status" className="mb-2 text-xs text-amber-700">IOU configuration is saved with this project. Install an IOU runtime binary to start this node.</p>}
         {editing ? <div className="flex gap-1"><Input data-rename-node autoFocus value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void saveName(); if (event.key === "Escape") { setEditing(false); setName(node.name); } }} aria-label="Device name" /><Button size="icon" disabled={saving || !name.trim()} onClick={() => void saveName()} aria-label="Save device name"><Check /></Button></div> : <div className="flex items-center gap-1"><h3 className="truncate text-sm font-semibold" title={node.name}>{node.name}</h3><Button variant="ghost" size="icon-xs" onClick={() => { setName(node.name); setEditing(true); }} aria-label="Rename device"><Pencil /></Button></div>}
         <p className="mt-1 truncate text-xs text-muted-foreground">{imageName(node)}</p>
       </div>
       <Button variant="ghost" size="icon-xs" onClick={onDelete} aria-label="Delete device"><Trash2 /></Button>
     </div>
     <div className="mt-3 flex flex-wrap gap-2">
-      {["qemu", "docker", "vpcs", "dynamips"].includes(node.node_type ?? "") && <Button variant="outline" size="sm" onClick={onConfigure}><Settings2 />Configure</Button>}
+      {["qemu", "docker", "vpcs", "dynamips", "iou"].includes(node.node_type ?? "") && <Button variant="outline" size="sm" onClick={onConfigure}><Settings2 />Configure</Button>}
       {canApplyLifecycle(node, "start") && <Button size="sm" disabled={Boolean(node.runtime_missing)} onClick={() => onLifecycle(node.node_id, "start")}><Play />Start</Button>}
       {canApplyLifecycle(node, "stop") && <Button variant="outline" size="sm" onClick={() => onLifecycle(node.node_id, "stop")}><Power />Stop</Button>}
       {canOpenConsole && <Button variant="outline" size="sm" onClick={() => onOpenConsole(node)}><Terminal />Open console</Button>}

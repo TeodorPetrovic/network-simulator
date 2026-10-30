@@ -68,6 +68,10 @@ pub(super) fn router() -> Router<AppState> {
         .route("/v3/notifications", get(controller_notifications))
         .route("/v3/notifications/ws", get(controller_notifications_ws))
         .route("/v3/settings", get(get_settings).put(update_settings))
+        .route(
+            "/v3/iou_license",
+            get(get_iou_license).put(update_iou_license),
+        )
         .route("/v3/computes", get(list_computes).post(create_compute))
         .route(
             "/v3/computes/{compute_id}",
@@ -269,7 +273,68 @@ async fn get_settings(State(state): State<AppState>) -> Result<Json<Value>, ApiE
     if settings.get("WebWireshark").is_none() {
         settings["WebWireshark"] = json!({"enabled":true,"image":"gns3/web-wireshark:latest","network_subnet":"172.31.0.0/22","memory":"2g","cpus":1.0,"pids_limit":1000});
     }
+    if settings.get("IOU").is_none() {
+        settings["IOU"] = json!({"iourc_content":"","license_check":false,"ethernet_adapters":2,"ram":256,"nvram":256,"l1_keepalives":true,"use_default_iou_values":true,"startup_config_content":"","private_config_content":""});
+    }
     Ok(Json(settings))
+}
+
+async fn get_iou_license(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let settings: String =
+        sqlx::query_scalar("SELECT settings_json FROM controller_settings WHERE singleton = 1")
+            .fetch_one(state.store.pool())
+            .await?;
+    let mut value = decode_json(settings)?;
+    if value.get("IOU").is_none() {
+        value["IOU"] = json!({"iourc_content":"","license_check":false,"ethernet_adapters":2,"ram":256,"nvram":256,"l1_keepalives":true,"use_default_iou_values":true,"startup_config_content":"","private_config_content":""});
+    }
+    Ok(Json(value["IOU"].clone()))
+}
+
+async fn update_iou_license(
+    State(state): State<AppState>,
+    Json(patch): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    let patch = patch
+        .as_object()
+        .ok_or_else(|| ApiError::bad_request("IOU license settings must be an object"))?;
+    if let Some(content) = patch.get("iourc_content")
+        && (content.as_str().is_none()
+            || content
+                .as_str()
+                .is_some_and(|text| text.len() > 1024 * 1024))
+    {
+        return Err(ApiError::bad_request(
+            "iourc_content must be text under 1 MiB",
+        ));
+    }
+    if patch
+        .get("license_check")
+        .is_some_and(|value| value.as_bool().is_none())
+    {
+        return Err(ApiError::bad_request("license_check must be boolean"));
+    }
+    let raw: String =
+        sqlx::query_scalar("SELECT settings_json FROM controller_settings WHERE singleton = 1")
+            .fetch_one(state.store.pool())
+            .await?;
+    let mut settings = decode_json(raw)?;
+    if settings.get("IOU").is_none() {
+        settings["IOU"] = json!({"iourc_content":"","license_check":false,"ethernet_adapters":2,"ram":256,"nvram":256,"l1_keepalives":true,"use_default_iou_values":true,"startup_config_content":"","private_config_content":""});
+    }
+    let target = as_object_mut(
+        &mut settings["IOU"],
+        "stored IOU license settings must be an object",
+    )?;
+    for (key, value) in patch {
+        target.insert(key.clone(), value.clone());
+    }
+    let result = settings["IOU"].clone();
+    sqlx::query("UPDATE controller_settings SET settings_json = ? WHERE singleton = 1")
+        .bind(serde_json::to_string(&settings).map_err(internal_json_error)?)
+        .execute(state.store.pool())
+        .await?;
+    Ok(Json(result))
 }
 
 async fn update_settings(
