@@ -21,11 +21,12 @@ type Props = {
   setSnapshotsOpen: (open: boolean) => void; setLogOpen: (open: boolean) => void; setScreenshotOpen: (open: boolean) => void; setLinkPropertiesOpen: (open: boolean) => void; selectedLink: Link | null | undefined;
   setHelpOpen: (open: boolean) => void; setInfoOpen: (open: boolean) => void;
   onToggleConsoleDock: () => void; consoleDockOpen: boolean;
+  onSelectAll: () => void; onSelectNone: () => void;
   topologyDockOpen: boolean; serversDockOpen: boolean; onToggleTopologyDock: () => void; onToggleServersDock: () => void;
   zoom: number; onZoom: (delta: number) => void; onResetZoom: () => void; onFitTopology: () => void; onZoomToSelection: () => void; showInterfaceLabels: boolean; onToggleInterfaceLabels: () => void;
 };
 
-export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, selectedLifecycleNodes, projectLocked, gridVisible, setGridVisible, snapToGrid, setSnapToGrid, selectedDrawing, selectedLink, runBulkLifecycle, runAllLifecycle, deleteSelectedNodes, toggleProjectLock, startDrawingTool, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, setSnapshotsOpen, setLogOpen, setScreenshotOpen, setLinkPropertiesOpen, setHelpOpen, setInfoOpen, onToggleConsoleDock, consoleDockOpen, topologyDockOpen, serversDockOpen, onToggleTopologyDock, onToggleServersDock, zoom, onZoom, onResetZoom, onFitTopology, onZoomToSelection, showInterfaceLabels, onToggleInterfaceLabels }: Props) {
+export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, selectedLifecycleNodes, projectLocked, gridVisible, setGridVisible, snapToGrid, setSnapToGrid, selectedDrawing, selectedLink, runBulkLifecycle, runAllLifecycle, deleteSelectedNodes, toggleProjectLock, startDrawingTool, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, setSnapshotsOpen, setLogOpen, setScreenshotOpen, setLinkPropertiesOpen, setHelpOpen, setInfoOpen, onToggleConsoleDock, consoleDockOpen, onSelectAll, onSelectNone, topologyDockOpen, serversDockOpen, onToggleTopologyDock, onToggleServersDock, zoom, onZoom, onResetZoom, onFitTopology, onZoomToSelection, showInterfaceLabels, onToggleInterfaceLabels }: Props) {
   const supported = (label: string, action: () => void, disabled = false) => <MenubarItem disabled={disabled} onSelect={action}>{label}</MenubarItem>;
   const draw = (tool: DrawingTool, label: string) => supported(label, () => startDrawingTool(tool));
   const selected = selectedLifecycleNodes.length > 0;
@@ -38,7 +39,7 @@ export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, 
         <MenubarSeparator />{supported("Snapshots…", () => setSnapshotsOpen(true))}{supported("Close project / Back to projects", props.onBack)}
       </MenubarContent></MenubarMenu>
       <MenubarMenu><MenubarTrigger>Edit</MenubarTrigger><MenubarContent>
-        {supported("Select all", () => {}, true)}{supported("Select none", () => {}, true)}<MenubarSeparator />{supported("Preferences…", props.onOpenPreferences)}
+        {supported("Select all", onSelectAll, !topology.nodes.length)}{supported("Select none", onSelectNone, !selectedNodeIds.length)}<MenubarSeparator />{supported("Preferences…", props.onOpenPreferences)}
       </MenubarContent></MenubarMenu>
       <MenubarMenu><MenubarTrigger>View</MenubarTrigger><MenubarContent>
         {supported(`Zoom in · ${Math.round(zoom * 100)}%`, () => onZoom(0.1))}{supported("Zoom out", () => onZoom(-0.1))}{supported("Reset zoom", onResetZoom)}{supported("Fit to window", onFitTopology)}{supported("Zoom to selection", onZoomToSelection)}

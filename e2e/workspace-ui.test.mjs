@@ -58,11 +58,18 @@ test("File menu enabled actions open snapshots and return to projects; unavailab
   await finish(ui);
 });
 
-test("Edit menu disabled selection items and Preferences opens settings", async (t) => {
-  const { page, ui } = await workspace(t);
+test("Edit menu selects all nodes, clears selection, and Preferences opens settings", async (t) => {
+  const { page, ui } = await workspace(t, { nodes: [{ type: "vpcs", name: "SelectPC1" }, { type: "vpcs", name: "SelectPC2", x: 200 }] });
   await page.getByRole("menuitem", { name: "Edit" }).click();
-  assert.equal(await menu(page, "Select all").isDisabled(), true);
+  assert.equal(await menu(page, "Select all").isDisabled(), false);
   assert.equal(await menu(page, "Select none").isDisabled(), true);
+  await menu(page, "Select all").click();
+  assert.equal(await page.locator(".sim-node.is-selected").count(), 2);
+  await page.getByRole("menuitem", { name: "Edit" }).click();
+  assert.equal(await menu(page, "Select none").isDisabled(), false);
+  await menu(page, "Select none").click();
+  assert.equal(await page.locator(".sim-node.is-selected").count(), 0);
+  await page.getByRole("menuitem", { name: "Edit" }).click();
   await menu(page, "Preferences…").click();
   await page.getByRole("heading", { name: "Preferences" }).waitFor();
   await finish(ui);
