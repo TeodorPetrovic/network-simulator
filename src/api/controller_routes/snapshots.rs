@@ -21,7 +21,13 @@ pub(super) async fn create_snapshot(
         }
     }
     let id = Uuid::new_v4().to_string();
-    let snapshot = json!({"project":project,"objects":objects});
+    let project_files = sqlx::query("SELECT file_path, contents FROM project_files WHERE project_id=? ORDER BY file_path")
+        .bind(&pid).fetch_all(state.store.pool()).await?.into_iter()
+        .map(|row| json!({"path": row.get::<String,_>("file_path"), "contents": row.get::<Vec<u8>,_>("contents")})).collect::<Vec<_>>();
+    let node_files = sqlx::query("SELECT node_id, file_path, contents FROM node_files WHERE project_id=? ORDER BY node_id,file_path")
+        .bind(&pid).fetch_all(state.store.pool()).await?.into_iter()
+        .map(|row| json!({"node_id": row.get::<String,_>("node_id"), "path": row.get::<String,_>("file_path"), "contents": row.get::<Vec<u8>,_>("contents")})).collect::<Vec<_>>();
+    let snapshot = json!({"project":project,"objects":objects,"project_files":project_files,"node_files":node_files});
     let description = body["description"].as_str().unwrap_or("");
     sqlx::query("INSERT INTO project_snapshots(snapshot_id,project_id,name,description,topology_json) VALUES(?,?,?,?,?)").bind(&id).bind(&pid).bind(&name).bind(description).bind(serde_json::to_string(&snapshot).map_err(internal_json_error)?).execute(state.store.pool()).await?;
     let row=sqlx::query("SELECT strftime('%s',created_at) AS epoch, created_at FROM project_snapshots WHERE snapshot_id=?").bind(&id).fetch_one(state.store.pool()).await?;
@@ -70,6 +76,24 @@ pub(super) async fn restore_snapshot(
     .ok_or_else(|| ApiError::not_found("Snapshot does not exist"))?;
     let snapshot = decode_json(row.get("topology_json"))?;
     let mut tx = state.store.begin_write().await?;
+    sqlx::query("DELETE FROM project_files WHERE project_id=?").bind(&pid).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM node_files WHERE project_id=?").bind(&pid).execute(&mut *tx).await?;
+    if let Some(files) = snapshot["project_files"].as_array() {
+        for file in files {
+            sqlx::query("INSERT INTO project_files(project_id,file_path,contents) VALUES(?,?,?)")
+                .bind(&pid).bind(file["path"].as_str().unwrap_or_default())
+                .bind(file["contents"].as_array().map(|bytes| bytes.iter().filter_map(Value::as_u64).map(|b| b as u8).collect::<Vec<_>>()).unwrap_or_default())
+                .execute(&mut *tx).await?;
+        }
+    }
+    if let Some(files) = snapshot["node_files"].as_array() {
+        for file in files {
+            sqlx::query("INSERT INTO node_files(project_id,node_id,file_path,contents) VALUES(?,?,?,?)")
+                .bind(&pid).bind(file["node_id"].as_str().unwrap_or_default()).bind(file["path"].as_str().unwrap_or_default())
+                .bind(file["contents"].as_array().map(|bytes| bytes.iter().filter_map(Value::as_u64).map(|b| b as u8).collect::<Vec<_>>()).unwrap_or_default())
+                .execute(&mut *tx).await?;
+        }
+    }
     sqlx::query("DELETE FROM link_endpoints WHERE project_id=?")
         .bind(&pid)
         .execute(&mut *tx)

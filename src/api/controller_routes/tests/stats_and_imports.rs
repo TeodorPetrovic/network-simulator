@@ -320,6 +320,10 @@ async fn imported_and_duplicated_runtime_nodes_cannot_remove_source_files() {
             .execute(store.pool())
             .await
             .unwrap();
+    sqlx::query("INSERT INTO node_files(project_id,node_id,file_path,contents) VALUES(?,?,?,?)")
+        .bind(source_project_id.to_string()).bind(source_node_id.to_string())
+        .bind("nvram.bin").bind(b"persistent disk state".as_slice())
+        .execute(store.pool()).await.unwrap();
 
     let duplicate_project = json_body(
         send(
@@ -347,6 +351,9 @@ async fn imported_and_duplicated_runtime_nodes_cannot_remove_source_files() {
     )
     .unwrap();
     assert_node_has_no_runtime_state(&duplicate_project_node);
+    let project_copy_file: Vec<u8> = sqlx::query_scalar("SELECT contents FROM node_files WHERE project_id=? AND file_path='nvram.bin'")
+        .bind(duplicate_project_id).fetch_one(store.pool()).await.unwrap();
+    assert_eq!(project_copy_file, b"persistent disk state");
     assert_eq!(
         send(
             &app,
@@ -373,6 +380,9 @@ async fn imported_and_duplicated_runtime_nodes_cannot_remove_source_files() {
     .await;
     assert_node_has_no_runtime_state(&duplicate_node);
     let duplicate_node_id = duplicate_node["node_id"].as_str().unwrap();
+    let node_copy_file: Vec<u8> = sqlx::query_scalar("SELECT contents FROM node_files WHERE project_id=? AND node_id=? AND file_path='nvram.bin'")
+        .bind(source_project_id.to_string()).bind(duplicate_node_id).fetch_one(store.pool()).await.unwrap();
+    assert_eq!(node_copy_file, b"persistent disk state");
     assert_eq!(
         send(
             &app,

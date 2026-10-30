@@ -155,7 +155,7 @@ async fn websocket_status(app: &axum::Router, uri: &str) -> StatusCode {
 
 #[tokio::test]
 async fn project_stats_lock_snapshots_files_export_import_and_duplicate_work_over_http() {
-    let (app, _dir, _store) = app().await;
+    let (app, _dir, store) = app().await;
     let response = send(
         &app,
         Method::POST,
@@ -246,6 +246,15 @@ async fn project_stats_lock_snapshots_files_export_import_and_duplicate_work_ove
         .status(),
         StatusCode::NO_CONTENT
     );
+    sqlx::query("INSERT INTO project_files(project_id,file_path,contents) VALUES(?,?,?)")
+        .bind(id).bind("snapshot-state.txt").bind(b"saved project state".as_slice())
+        .execute(store.pool()).await.unwrap();
+    let state_node = json_body(send(&app, Method::POST, &format!("/v3/projects/{id}/nodes"),
+        Body::from(r#"{"name":"state node","node_type":"vpcs"}"#), Some("application/json")).await).await;
+    let state_node_id = state_node["node_id"].as_str().unwrap();
+    sqlx::query("INSERT INTO node_files(project_id,node_id,file_path,contents) VALUES(?,?,?,?)")
+        .bind(id).bind(state_node_id).bind("startup.vpc").bind(b"saved node config".as_slice())
+        .execute(store.pool()).await.unwrap();
     let snapshot = json_body(
         send(
             &app,
@@ -288,6 +297,12 @@ async fn project_stats_lock_snapshots_files_export_import_and_duplicate_work_ove
         .status(),
         StatusCode::OK
     );
+    let restored_project_file: Vec<u8> = sqlx::query_scalar("SELECT contents FROM project_files WHERE project_id=? AND file_path='snapshot-state.txt'")
+        .bind(id).fetch_one(store.pool()).await.unwrap();
+    let restored_node_file: Vec<u8> = sqlx::query_scalar("SELECT contents FROM node_files WHERE project_id=? AND node_id=? AND file_path='startup.vpc'")
+        .bind(id).bind(state_node_id).fetch_one(store.pool()).await.unwrap();
+    assert_eq!(restored_project_file, b"saved project state");
+    assert_eq!(restored_node_file, b"saved node config");
     assert_eq!(
         send(
             &app,

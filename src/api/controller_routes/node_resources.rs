@@ -33,7 +33,15 @@ pub(super) async fn duplicate_node(
     node["name"] = json!(format!("{old_name} copy"));
     as_object_mut(&mut node, "duplicated node must be an object")?
         .insert("node_id".into(), json!(Uuid::new_v4()));
-    create_topology_object(state, &project_id.to_string(), "node", "node_id", node).await
+    let response = create_topology_object(state.clone(), &project_id.to_string(), "node", "node_id", node).await?;
+    let created = response.into_body();
+    let bytes = to_bytes(created, 1024 * 1024).await.map_err(|error| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+    let created: Value = serde_json::from_slice(&bytes).map_err(internal_json_error)?;
+    let new_node_id = created["node_id"].as_str().ok_or_else(|| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "duplicated node response omitted node_id"))?;
+    sqlx::query("INSERT INTO node_files(project_id,node_id,file_path,contents) SELECT ?,?,file_path,contents FROM node_files WHERE project_id=? AND node_id=?")
+        .bind(project_id.to_string()).bind(new_node_id).bind(project_id.to_string()).bind(node_id.to_string())
+        .execute(state.store.pool()).await?;
+    Ok((StatusCode::CREATED, Json(created)).into_response())
 }
 pub(super) async fn set_node_isolated(
     State(state): State<AppState>,

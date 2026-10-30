@@ -416,6 +416,11 @@ pub(super) async fn duplicate_project(
                 strip_link_runtime_fields(&mut object);
             }
         }
+        if kind == "node" {
+            sqlx::query("INSERT INTO node_files(project_id,node_id,file_path,contents) SELECT ?,?,file_path,contents FROM node_files WHERE project_id=? AND node_id=?")
+                .bind(&new_id).bind(&new_object_id).bind(&pid).bind(&old_id)
+                .execute(&mut *tx).await?;
+        }
         let obj_name = object
             .get("name")
             .and_then(Value::as_str)
