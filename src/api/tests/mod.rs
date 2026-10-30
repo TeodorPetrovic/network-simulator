@@ -48,6 +48,15 @@ async fn test_router() -> (axum::Router, TempDir) {
 
 async fn test_router_with_vpcs(vpcs_available: bool) -> (axum::Router, TempDir) {
     let directory = TempDir::new().expect("temporary test directory");
+    let client_dir = directory.path().join("client");
+    std::fs::create_dir_all(client_dir.join("assets")).expect("frontend fixture assets directory");
+    std::fs::write(
+        client_dir.join("index.html"),
+        "<html>Network Studio<link href=\"/assets/app.css\"></html>",
+    )
+    .expect("write frontend fixture shell");
+    std::fs::write(client_dir.join("assets/app.css"), "body{}")
+        .expect("write frontend fixture asset");
     let database = directory.path().join("controller.sqlite");
     let store = Store::connect(database.to_str().expect("UTF-8 temporary path"))
         .await
@@ -103,26 +112,29 @@ async fn test_router_with_vpcs(vpcs_available: bool) -> (axum::Router, TempDir) 
             .unwrap_or_else(|| directory.path().join("vpcs-test-double-not-installed"))
     };
     (
-        router(AppState::with_runtimes(
-            store,
-            DockerRuntime::with_binary(docker),
-            QemuRuntime::with_paths(
-                qemu,
-                qemu_img,
-                qemu_images,
-                directory.path().join("qemu-state"),
-                directory.path().join("qemu-sockets"),
+        super::router_with_client_dir(
+            AppState::with_runtimes(
+                store,
+                DockerRuntime::with_binary(docker),
+                QemuRuntime::with_paths(
+                    qemu,
+                    qemu_img,
+                    qemu_images,
+                    directory.path().join("qemu-state"),
+                    directory.path().join("qemu-sockets"),
+                ),
+                VpcsRuntime::with_paths(vpcs_binary, directory.path().join("vpcs-state")),
+                DynamipsRuntime::with_paths(
+                    directory.path().join("dynamips-test-double-not-installed"),
+                    directory.path().join("dynamips-images"),
+                    directory.path().join("dynamips-state"),
+                ),
+                crate::marketplace::MarketplaceCatalog::with_directory(
+                    directory.path().join("appliances"),
+                ),
             ),
-            VpcsRuntime::with_paths(vpcs_binary, directory.path().join("vpcs-state")),
-            DynamipsRuntime::with_paths(
-                directory.path().join("dynamips-test-double-not-installed"),
-                directory.path().join("dynamips-images"),
-                directory.path().join("dynamips-state"),
-            ),
-            crate::marketplace::MarketplaceCatalog::with_directory(
-                directory.path().join("appliances"),
-            ),
-        )),
+            &client_dir,
+        ),
         directory,
     )
 }

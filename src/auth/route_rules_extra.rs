@@ -150,6 +150,11 @@ pub const ROUTE_RULES_EXTRA: &[RouteRule] = rules![
     ),
     (
         "GET",
+        "/projects/{project_id}/nodes/{node_id}/console/ws",
+        RouteClass::Privilege("Node.Console")
+    ),
+    (
+        "GET",
         "/projects/{project_id}/nodes",
         RouteClass::Privilege("Node.Audit")
     ),

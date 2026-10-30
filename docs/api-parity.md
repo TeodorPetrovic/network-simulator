@@ -136,7 +136,7 @@ Statuses mean:
 | `nodes.py` | PUT | `/v3/projects/{project_id}/nodes/{node_id}` | Implemented |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/{node_id}/console/reset` | Runtime without listener reset hook returns 409 with explanation |
 | `nodes.py` | WEBSOCKET | `/v3/projects/{project_id}/nodes/{node_id}/console/vnc` | Missing — controller console proxy endpoints remain |
-| `nodes.py` | WEBSOCKET | `/v3/projects/{project_id}/nodes/{node_id}/console/ws` | Missing — controller console proxy endpoints remain |
+| `nodes.py` | WEBSOCKET | `/v3/projects/{project_id}/nodes/{node_id}/console/ws` | Implemented for telnet QEMU, VPCS, and Dynamips nodes; relays terminal frames over the runtime TCP console. Compute QEMU telnet and existing VPCS/Dynamips console routes use the same TCP stream behavior. |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/{node_id}/duplicate` | Partial — copies topology metadata without provisioning a separate runtime instance |
 | `nodes.py` | GET | `/v3/projects/{project_id}/nodes/{node_id}/dynamips/auto_idlepc` | Partial — stopped routers are started for probing and stopped afterward; compute node directory behavior is not equivalent |
 | `nodes.py` | GET | `/v3/projects/{project_id}/nodes/{node_id}/dynamips/idlepc_proposals` | Partial — stopped routers are started for probing and stopped afterward; compute node directory behavior is not equivalent |

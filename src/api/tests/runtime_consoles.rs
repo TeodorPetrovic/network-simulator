@@ -1,6 +1,42 @@
 use super::*;
 
 #[tokio::test]
+async fn tcp_telnet_console_websocket_relays_frames_to_a_real_echo_server() {
+    use axum::{extract::ws::WebSocketUpgrade, response::Response, routing::get};
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, time::{Duration, timeout}};
+    use tokio_tungstenite::{connect_async, tungstenite::Message};
+
+    let tcp_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let tcp_address = tcp_listener.local_addr().unwrap();
+    let echo_server = tokio::spawn(async move {
+        let (mut stream, _) = tcp_listener.accept().await.unwrap();
+        let (mut reader, mut writer) = stream.split();
+        let mut buffer = [0; 2048];
+        loop {
+            let size = reader.read(&mut buffer).await.unwrap();
+            if size == 0 { break; }
+            writer.write_all(&buffer[..size]).await.unwrap();
+        }
+    });
+    async fn relay(ws: WebSocketUpgrade, address: std::net::SocketAddr) -> Response {
+        let stream = TcpStream::connect(address).await.unwrap();
+        ws.on_upgrade(move |socket| super::super::consoles::vpcs_console_session(socket, stream))
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = axum::Router::new().route("/", get(move |ws| relay(ws, tcp_address)));
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    let (mut socket, _) = connect_async(format!("ws://{address}/")).await.unwrap();
+    socket.send(Message::Text("telnet input\r\n".into())).await.unwrap();
+    let echoed = timeout(Duration::from_secs(2), socket.next()).await.unwrap().unwrap().unwrap();
+    assert_eq!(echoed.into_data().as_ref(), b"telnet input\r\n");
+    socket.close(None).await.unwrap();
+    server.abort();
+    echo_server.abort();
+}
+
+#[tokio::test]
 async fn docker_console_attaches_to_the_running_container_tty_over_websocket() {
     use futures_util::{SinkExt, StreamExt};
     use tokio::{

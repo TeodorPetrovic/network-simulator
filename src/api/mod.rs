@@ -139,6 +139,10 @@ pub struct AppState {
 }
 
 pub fn router(state: AppState) -> Router {
+    router_with_client_dir(state, FsPath::new("frontend/dist/client"))
+}
+
+fn router_with_client_dir(state: AppState, client_dir: &FsPath) -> Router {
     state.start_idle_stop_worker();
     let api = Router::new()
         .route("/healthz", get(system::health))
@@ -318,6 +322,10 @@ pub fn router(state: AppState) -> Router {
             get(notifications::project_marker_notifications),
         )
         .route(
+            "/v3/projects/{project_id}/nodes/{node_id}/console/ws",
+            get(consoles::controller_telnet_console),
+        )
+        .route(
             "/v3/compute/projects/{project_id}/qemu/nodes/{node_id}/console/ws",
             get(consoles::qemu_console),
         )
@@ -339,7 +347,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v3", any(|| async { StatusCode::NOT_FOUND }))
         .route("/v3/{*path}", any(|| async { StatusCode::NOT_FOUND }))
-        .merge(spa_fallback_router(FsPath::new("frontend/dist/client")))
+        .merge(spa_fallback_router(client_dir))
         .route_layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES));
     let image_upload = Router::new()
         .route(

@@ -1,6 +1,84 @@
 use super::*;
 use axum::extract::ws::CloseFrame;
 
+enum ConsoleStream {
+    Tcp(TcpStream),
+    Unix(UnixStream),
+}
+
+pub(super) async fn controller_telnet_console(
+    State(state): State<AppState>,
+    Path((project_id, node_id)): Path<(Uuid, Uuid)>,
+    websocket: WebSocketUpgrade,
+) -> Result<Response, ApiError> {
+    let project_id = project_id.to_string();
+    let node_id = node_id.to_string();
+    let node = get_topology_object(state.store.pool(), &project_id, "node", &node_id)
+        .await?
+        .0;
+    if node["console_type"].as_str().unwrap_or("telnet") != "telnet" {
+        return Err(ApiError::conflict(
+            "Controller console proxy supports telnet consoles only",
+        ));
+    }
+    let console = match node["node_type"].as_str().unwrap_or_default() {
+        "qemu" => {
+            let vm = state.qemu.vm_from_node(&node).map_err(runtime_api_error)?;
+            if state.qemu.status(&vm).await.map_err(runtime_api_error)? != "started" {
+                return Ok(stopped_console(websocket));
+            }
+            let port = vm
+                .console_port
+                .ok_or_else(|| ApiError::conflict("QEMU telnet console has no port"))?;
+            TcpStream::connect(("127.0.0.1", port))
+                .await
+                .map_err(|error| {
+                    ApiError::new(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        format!("Could not connect to the QEMU telnet console: {error}"),
+                    )
+                })?
+        }
+        "vpcs" => {
+            if state
+                .vpcs
+                .status(&node_id)
+                .await
+                .map_err(runtime_api_error)?
+                != "started"
+            {
+                return Ok(stopped_console(websocket));
+            }
+            state
+                .vpcs
+                .connect_console(&node_id)
+                .await
+                .map_err(runtime_api_error)?
+        }
+        "dynamips" => {
+            let vm = state
+                .dynamips
+                .vm_from_node(&node)
+                .map_err(runtime_api_error)?;
+            state
+                .dynamips
+                .console(&vm)
+                .await
+                .map_err(runtime_api_error)?
+        }
+        _ => {
+            return Err(ApiError::conflict(
+                "Telnet console proxy is unavailable for this node type",
+            ));
+        }
+    };
+    let activity = state.project_activity.clone();
+    Ok(websocket.on_upgrade(move |socket| async move {
+        let _activity = activity.open_websocket(project_id);
+        vpcs_console_session(socket, console).await;
+    }))
+}
+
 pub(super) async fn qemu_console(
     State(state): State<AppState>,
     Path((project_id, node_id)): Path<(Uuid, Uuid)>,
@@ -20,18 +98,39 @@ pub(super) async fn qemu_console(
     if state.qemu.status(&vm).await.map_err(runtime_api_error)? != "started" {
         return Ok(stopped_console(websocket));
     }
-    let serial = UnixStream::connect(&vm.serial_socket)
-        .await
-        .map_err(|error| {
-            ApiError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                format!("Could not connect to the QEMU serial console: {error}"),
-            )
-        })?;
+    let serial = if vm.console_type == "telnet" {
+        let port = vm
+            .console_port
+            .ok_or_else(|| ApiError::conflict("QEMU telnet console has no port"))?;
+        ConsoleStream::Tcp(
+            TcpStream::connect(("127.0.0.1", port))
+                .await
+                .map_err(|error| {
+                    ApiError::new(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        format!("Could not connect to the QEMU telnet console: {error}"),
+                    )
+                })?,
+        )
+    } else {
+        ConsoleStream::Unix(
+            UnixStream::connect(&vm.serial_socket)
+                .await
+                .map_err(|error| {
+                    ApiError::new(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        format!("Could not connect to the QEMU serial console: {error}"),
+                    )
+                })?,
+        )
+    };
     let activity = state.project_activity.clone();
     Ok(websocket.on_upgrade(move |socket| async move {
         let _activity = activity.open_websocket(project_id);
-        qemu_console_session(socket, serial).await;
+        match serial {
+            ConsoleStream::Tcp(stream) => vpcs_console_session(socket, stream).await,
+            ConsoleStream::Unix(stream) => qemu_console_session(socket, stream).await,
+        }
     }))
 }
 
@@ -185,11 +284,15 @@ pub(super) async fn vpcs_console(
 
 fn stopped_console(websocket: WebSocketUpgrade) -> Response {
     websocket.on_upgrade(|mut socket| async move {
-        let _ = socket.send(Message::Text("node is not started".into())).await;
-        let _ = socket.send(Message::Close(Some(CloseFrame {
-            code: 1008,
-            reason: "node is not started".into(),
-        }))).await;
+        let _ = socket
+            .send(Message::Text("node is not started".into()))
+            .await;
+        let _ = socket
+            .send(Message::Close(Some(CloseFrame {
+                code: 1008,
+                reason: "node is not started".into(),
+            })))
+            .await;
     })
 }
 
