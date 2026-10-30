@@ -20,6 +20,62 @@ async fn fixture() -> (TempDir, Router, SqlitePool) {
     (directory, app, pool)
 }
 
+#[tokio::test]
+async fn acl_endpoint_catalog_includes_project_nodes_and_links() {
+    let (_directory, app, pool) = fixture().await;
+    let admin = token(&pool, "admin", 0).await;
+    let project_id = Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO projects (project_id, name, status, project_json) VALUES (?, 'ACL catalog lab', 'closed', ?)")
+        .bind(&project_id)
+        .bind(json!({"project_id":project_id,"name":"ACL catalog lab","status":"closed"}).to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let first = Uuid::new_v4().to_string();
+    let second = Uuid::new_v4().to_string();
+    let link_id = Uuid::new_v4().to_string();
+    for (node_id, name) in [(&first, "Router A"), (&second, "Router B")] {
+        let node =
+            json!({"node_id":node_id,"project_id":project_id,"name":name,"node_type":"vpcs"});
+        sqlx::query("INSERT INTO topology_objects (project_id, kind, object_id, name, object_json) VALUES (?, 'node', ?, ?, ?)")
+            .bind(&project_id).bind(node_id).bind(name).bind(node.to_string())
+            .execute(&pool).await.unwrap();
+    }
+    let link = json!({"link_id":link_id,"nodes":[{"node_id":first},{"node_id":second}]});
+    sqlx::query("INSERT INTO topology_objects (project_id, kind, object_id, object_json) VALUES (?, 'link', ?, ?)")
+        .bind(&project_id).bind(&link_id).bind(link.to_string())
+        .execute(&pool).await.unwrap();
+
+    let (status, endpoints) =
+        json_route(&app, "GET", "/v3/access/acl/endpoints", &admin, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    let endpoint = |path: String| {
+        endpoints
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|value| value["endpoint"] == path)
+            .cloned()
+            .unwrap_or_else(|| panic!("missing ACL endpoint {path}"))
+    };
+    assert_eq!(
+        endpoint(format!("/projects/{project_id}/nodes"))["endpoint_type"],
+        "node"
+    );
+    assert_eq!(
+        endpoint(format!("/projects/{project_id}/nodes/{first}"))["name"],
+        "Node \"Router A\" in project \"ACL catalog lab\""
+    );
+    assert_eq!(
+        endpoint(format!("/projects/{project_id}/links"))["endpoint_type"],
+        "link"
+    );
+    assert_eq!(
+        endpoint(format!("/projects/{project_id}/links/{link_id}"))["name"],
+        "Link from \"Router A\" to \"Router B\" in project \"ACL catalog lab\""
+    );
+}
+
 async fn create_test_user(
     pool: &SqlitePool,
     username: &str,

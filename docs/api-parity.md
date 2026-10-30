@@ -15,7 +15,7 @@ Statuses mean:
 | --- | --- | --- | --- |
 | `acl.py` | GET | `/v3/access/acl` | Implemented |
 | `acl.py` | POST | `/v3/access/acl` | Implemented |
-| `acl.py` | GET | `/v3/access/acl/endpoints` | Partial — current endpoint catalog covers projects and access principals |
+| `acl.py` | GET | `/v3/access/acl/endpoints` | Partial — catalog covers projects, nodes, links, and access principals; images and templates are omitted |
 | `acl.py` | DELETE | `/v3/access/acl/{ace_id}` | Implemented |
 | `acl.py` | GET | `/v3/access/acl/{ace_id}` | Implemented |
 | `acl.py` | PUT | `/v3/access/acl/{ace_id}` | Partial — path, allow/deny, and propagation fields update |
@@ -138,8 +138,8 @@ Statuses mean:
 | `nodes.py` | WEBSOCKET | `/v3/projects/{project_id}/nodes/{node_id}/console/vnc` | Missing — controller console proxy endpoints remain |
 | `nodes.py` | WEBSOCKET | `/v3/projects/{project_id}/nodes/{node_id}/console/ws` | Missing — controller console proxy endpoints remain |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/{node_id}/duplicate` | Partial — copies topology metadata without provisioning a separate runtime instance |
-| `nodes.py` | GET | `/v3/projects/{project_id}/nodes/{node_id}/dynamips/auto_idlepc` | Partial — hypervisor protocol implemented for running nodes; stopped-node start/stop workflow is absent |
-| `nodes.py` | GET | `/v3/projects/{project_id}/nodes/{node_id}/dynamips/idlepc_proposals` | Partial — hypervisor protocol implemented for running nodes; stopped-node start/stop workflow is absent |
+| `nodes.py` | GET | `/v3/projects/{project_id}/nodes/{node_id}/dynamips/auto_idlepc` | Partial — stopped routers are started for probing and stopped afterward; compute node directory behavior is not equivalent |
+| `nodes.py` | GET | `/v3/projects/{project_id}/nodes/{node_id}/dynamips/idlepc_proposals` | Partial — stopped routers are started for probing and stopped afterward; compute node directory behavior is not equivalent |
 | `nodes.py` | GET | `/v3/projects/{project_id}/nodes/{node_id}/files` | Partial — database-backed node files rather than compute node directories |
 | `nodes.py` | DELETE | `/v3/projects/{project_id}/nodes/{node_id}/files/{file_path:path}` | Partial — database-backed node files rather than compute node directories |
 | `nodes.py` | GET | `/v3/projects/{project_id}/nodes/{node_id}/files/{file_path:path}` | Partial — database-backed node files rather than compute node directories |
@@ -205,10 +205,10 @@ Statuses mean:
 | `roles.py` | PUT | `/v3/access/roles/{role_id}/privileges/{privilege_id}` | Implemented |
 | `settings.py` | GET | `/v3/settings` | Partial — generic persisted settings; lacks GNS3 config validation and secret masking |
 | `settings.py` | PUT | `/v3/settings` | Partial — generic persisted settings; lacks GNS3 config validation and secret masking |
-| `snapshots.py` | GET | `/v3/projects/{project_id}/snapshots` | Partial — topology snapshots; restore does not rehydrate runtime processes |
-| `snapshots.py` | POST | `/v3/projects/{project_id}/snapshots` | Partial — topology snapshots; restore does not rehydrate runtime processes |
-| `snapshots.py` | DELETE | `/v3/projects/{project_id}/snapshots/{snapshot_id}` | Partial — topology snapshots; restore does not rehydrate runtime processes |
-| `snapshots.py` | POST | `/v3/projects/{project_id}/snapshots/{snapshot_id}/restore` | Partial — topology snapshots; restore does not rehydrate runtime processes |
+| `snapshots.py` | GET | `/v3/projects/{project_id}/snapshots` | Partial — snapshots contain controller topology only, not runtime disks or project directories |
+| `snapshots.py` | POST | `/v3/projects/{project_id}/snapshots` | Partial — snapshots contain controller topology only, not runtime disks or project directories |
+| `snapshots.py` | DELETE | `/v3/projects/{project_id}/snapshots/{snapshot_id}` | Partial — snapshots contain controller topology only, not runtime disks or project directories |
+| `snapshots.py` | POST | `/v3/projects/{project_id}/snapshots/{snapshot_id}/restore` | Partial — restores topology rows and marks nodes stopped; does not rehydrate runtime processes, disks, or project directories |
 | `symbols.py` | GET | `/v3/symbols` | Partial — custom DB symbols; built-in resource symbols/theme mapping are incomplete |
 | `symbols.py` | GET | `/v3/symbols/default_symbols` | Partial — custom DB symbols; built-in resource symbols/theme mapping are incomplete |
 | `symbols.py` | DELETE | `/v3/symbols/{symbol_id:path}` | Partial — custom DB symbols; built-in resource symbols/theme mapping are incomplete |
@@ -253,7 +253,9 @@ optional integrations remain outside this pass.
 - Passwords use Argon2id. Access and refresh tokens are HS256 JWTs; the signing secret is randomly generated once and persisted in `auth_config`. Login and refresh responses include `expires_in` and `refresh_expires_in` in seconds. API keys (`gns3_<api_key_id>_<secret>`) are accepted as bearer tokens; key secrets are returned once, stored as Argon2 hashes, and can be revoked, restored, or deleted by their owner.
 - A new database creates an `admin` superadmin with a random initial password. That password is printed once at bootstrap; it is not `admin/admin`, which is a public default credential. Change it after the first login. `NETWORK_SIMULATOR_AUTH_ENABLED` explicitly overrides the persisted setting. Without an override, the first startup defaults auth OFF for loopback binds and ON for non-loopback binds; the setting can be changed in Settings by a superadmin and persists in SQLite. Startup logs the effective auth state.
 - When enabled, API routes require a bearer token; WebSocket routes accept the same token in the `token` query parameter. Privileges are resolved per method and endpoint family, then checked against user and group ACEs. ACL paths omit `/v3`; nearer paths replace inherited rules, `propagate` controls allow inheritance, direct user ACEs are checked before group ACEs, and project access can be granted through resource-pool membership.
-- The ACL endpoint catalog currently includes projects and access principals; node/link/template/image endpoint enumeration and broader route-specific policy detail remain partial. Resource pools currently contain project resources only. The OAuth2 refresh response and API-key shape follow GNS3 but token algorithms and persistence details differ.
+- The ACL endpoint catalog includes projects, nodes, links, and access principals; template/image enumeration and broader route-specific policy detail remain partial. Resource pools currently contain project resources only. The OAuth2 refresh response and API-key shape follow GNS3 but token algorithms and persistence details differ.
+
+The ACL endpoint catalog now also enumerates per-project node and link collections and objects. Template and image endpoints are still omitted. SPA client-route fallback tests use a temporary `index.html` fixture, so the test suite does not require `frontend/dist` to be prebuilt.
 
 **Upstream controller routes enumerated:** 223 method/path pairs.
 

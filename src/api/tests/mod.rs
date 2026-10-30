@@ -20,6 +20,28 @@ use crate::{
     dynamips::DynamipsRuntime, qemu::QemuRuntime, runtime::DockerRuntime, vpcs::VpcsRuntime,
 };
 
+#[tokio::test]
+async fn client_routes_fall_back_to_index_from_a_temporary_fixture() {
+    let directory = tempfile::tempdir().expect("temporary frontend directory");
+    std::fs::write(directory.path().join("index.html"), "fixture app shell")
+        .expect("write fixture app shell");
+
+    let response = super::spa_fallback_router::<()>(directory.path())
+        .with_state(())
+        .oneshot(
+            Request::builder()
+                .uri("/projects/fixture-id")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], b"fixture app shell");
+}
+
 async fn test_router() -> (axum::Router, TempDir) {
     test_router_with_vpcs(false).await
 }

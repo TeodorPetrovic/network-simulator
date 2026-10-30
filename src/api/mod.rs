@@ -339,13 +339,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v3", any(|| async { StatusCode::NOT_FOUND }))
         .route("/v3/{*path}", any(|| async { StatusCode::NOT_FOUND }))
-        .route_service("/", ServeFile::new("frontend/dist/client/index.html"))
-        .route_service(
-            "/{*path}",
-            ServeFile::new("frontend/dist/client/index.html"),
-        )
-        .nest_service("/assets", ServeDir::new("frontend/dist/client/assets"))
-        .nest_service("/xpra", ServeDir::new("frontend/dist/client/xpra"))
+        .merge(spa_fallback_router(FsPath::new("frontend/dist/client")))
         .route_layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES));
     let image_upload = Router::new()
         .route(
@@ -374,6 +368,17 @@ pub fn router(state: AppState) -> Router {
         state.clone(),
     )
     .with_state(state)
+}
+
+fn spa_fallback_router<S>(client_dir: &FsPath) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route_service("/", ServeFile::new(client_dir.join("index.html")))
+        .route_service("/{*path}", ServeFile::new(client_dir.join("index.html")))
+        .nest_service("/assets", ServeDir::new(client_dir.join("assets")))
+        .nest_service("/xpra", ServeDir::new(client_dir.join("xpra")))
 }
 
 fn request_trace_path<B>(request: &axum::http::Request<B>) -> &str {

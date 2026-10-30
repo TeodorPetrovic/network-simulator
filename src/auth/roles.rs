@@ -250,6 +250,68 @@ pub(super) async fn acl_endpoints(State(state): State<AppState>) -> Result<Json<
         json!({"endpoint":"/access/groups", "name":"All groups", "endpoint_type":"group"}),
         json!({"endpoint":"/access/roles", "name":"All roles", "endpoint_type":"role"}),
     ];
+    let projects = sqlx::query("SELECT project_id, name FROM projects ORDER BY name")
+        .fetch_all(state.store.pool())
+        .await
+        .map_err(db_error)?;
+    for project in projects {
+        let project_id: String = project.get("project_id");
+        let project_name: String = project.get("name");
+        values.push(json!({
+            "endpoint":format!("/projects/{project_id}/nodes"),
+            "name":format!("All nodes in project \"{project_name}\""),
+            "endpoint_type":"node"
+        }));
+        values.push(json!({
+            "endpoint":format!("/projects/{project_id}/links"),
+            "name":format!("All links in project \"{project_name}\""),
+            "endpoint_type":"link"
+        }));
+        let objects = sqlx::query("SELECT kind, object_id, object_json FROM topology_objects WHERE project_id = ? AND kind IN ('node', 'link') ORDER BY kind, name")
+            .bind(&project_id)
+            .fetch_all(state.store.pool())
+            .await
+            .map_err(db_error)?;
+        let mut node_names = HashMap::new();
+        let mut links = Vec::new();
+        for object in objects {
+            let kind: String = object.get("kind");
+            let object_id: String = object.get("object_id");
+            let value: Value = serde_json::from_str(&object.get::<String, _>("object_json"))
+                .unwrap_or(Value::Null);
+            if kind == "node" {
+                let name = value["name"].as_str().unwrap_or("Node").to_owned();
+                node_names.insert(object_id.clone(), name.clone());
+                values.push(json!({
+                    "endpoint":format!("/projects/{project_id}/nodes/{object_id}"),
+                    "name":format!("Node \"{name}\" in project \"{project_name}\""),
+                    "endpoint_type":"node"
+                }));
+            } else {
+                links.push((object_id, value));
+            }
+        }
+        for (link_id, link) in links {
+            let endpoints = link["nodes"].as_array();
+            let left = endpoints
+                .and_then(|nodes| nodes.first())
+                .and_then(|node| node["node_id"].as_str())
+                .and_then(|id| node_names.get(id))
+                .map(String::as_str)
+                .unwrap_or("N/A");
+            let right = endpoints
+                .and_then(|nodes| nodes.get(1))
+                .and_then(|node| node["node_id"].as_str())
+                .and_then(|id| node_names.get(id))
+                .map(String::as_str)
+                .unwrap_or("N/A");
+            values.push(json!({
+                "endpoint":format!("/projects/{project_id}/links/{link_id}"),
+                "name":format!("Link from \"{left}\" to \"{right}\" in project \"{project_name}\""),
+                "endpoint_type":"link"
+            }));
+        }
+    }
     for (table, id_column, name_column, base, kind) in [
         ("projects", "project_id", "name", "/projects", "project"),
         ("auth_users", "user_id", "username", "/access/users", "user"),
