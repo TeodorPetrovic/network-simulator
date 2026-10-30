@@ -224,8 +224,31 @@ test("drag from rail creates VPCS and switch devices; started VPCS to switch lin
   } catch (error) {
     throw error;
   }
+  const createdLink = (await server.api("GET", `/projects/${pid}/links`)).json[0];
+  const styled = await server.api("PUT", `/projects/${pid}/links/${createdLink.link_id}`, {
+    link_style: { color: "#008800", width: 4, type: 2, link_type: "bezier", bezier_curviness: 40 },
+  });
+  assert.equal(styled.status, 200);
+  const nodeUpdate = await server.api("PUT", `/projects/${pid}/nodes/${createdLink.nodes[1].node_id}`, {
+    label: { text: "Styled switch", style: "fill:#ff0000;font-size:18px;font-weight:bold", x: 0, y: 56, rotation: 12 },
+  });
+  assert.equal(nodeUpdate.status, 200);
+  await ui.page.locator(".sim-grid-fill").evaluate((element) => element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 20, clientY: 20 })));
+  await ui.page.keyboard.press("Escape");
+  try {
+    await waitFor(async () => {
+      const stroke = await ui.page.locator(".sim-link-stroke").first().getAttribute("style");
+      const path = await ui.page.locator(".sim-link-stroke").first().getAttribute("d");
+      const label = ui.page.locator(".sim-node-name").filter({ hasText: "Styled switch" });
+      return stroke?.includes("rgb(0, 136, 0)") && stroke.includes("stroke-width: 4") && path?.includes("Q") && await label.count() === 1;
+    }, { label: "GNS3 link and node label styles rendered" });
+  } catch (error) {
+    throw new Error(`${error.message}; api=${JSON.stringify({ links: (await server.api("GET", `/projects/${pid}/links`)).json, nodes: (await server.api("GET", `/projects/${pid}/nodes`)).json })}; rendered=${JSON.stringify(await ui.page.locator(".sim-link-stroke, .sim-node-name").evaluateAll((items) => items.map((item) => ({ tag: item.tagName, text: item.textContent, style: item.getAttribute("style"), d: item.getAttribute("d") }))))}`);
+  }
+  assert.match(await ui.page.locator(".sim-node-name").filter({ hasText: "Styled switch" }).getAttribute("style"), /fill: rgb\(255, 0, 0\)/);
   const link = ui.page.getByRole("button", { name: /Ethernet segment connecting/ });
   await link.click({ button: "right" });
+  ui.page.once("dialog", (dialog) => dialog.accept());
   await ui.page.getByRole("menuitem", { name: "Delete link" }).click();
   await waitFor(async () => (await server.api("GET", `/projects/${pid}/links`)).json.length === 0, { label: "link deleted" });
 });

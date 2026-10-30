@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent, PointerEvent, ReactNode } from "react";
+import type { CSSProperties, DragEvent, PointerEvent, ReactNode } from "react";
 import { Network } from "lucide-react";
 import type { Drawing, Link, LinkEndpoint, Node } from "../api";
 import { api } from "../api";
@@ -21,6 +21,49 @@ export { deviceGroupLabel, endpointLabel, iconForSymbolName, iconForType, imageN
 export const scene = { width: 1440, height: 920 };
 export const maxZoom = 4;
 const defaultSymbolUrls: Record<string, string> = { "cloud.svg": cloudSymbolUrl, "docker_guest.svg": dockerSymbolUrl, "ethernet_switch.svg": switchSymbolUrl, "hub.svg": hubSymbolUrl, "nat.svg": natSymbolUrl, "qemu_guest.svg": qemuSymbolUrl, "router.svg": routerSymbolUrl, "vpcs_guest.svg": vpcsSymbolUrl };
+const gns3LabelStyle = { fontFamily: "TypeWriter, monospace", fontSize: 10, fontWeight: 700 } as const;
+
+function svgTextStyle(value: unknown): CSSProperties {
+  if (typeof value !== "string") return gns3LabelStyle;
+  const result: CSSProperties = { ...gns3LabelStyle };
+  for (const declaration of value.split(";")) {
+    const separator = declaration.indexOf(":");
+    if (separator < 1) continue;
+    const key = declaration.slice(0, separator).trim().toLowerCase();
+    const content = declaration.slice(separator + 1).trim();
+    if (!content) continue;
+    if (key === "fill" || key === "color") result.fill = content;
+    else if (key === "font-family") result.fontFamily = content;
+    else if (key === "font-size") result.fontSize = content;
+    else if (key === "font-weight") result.fontWeight = content;
+    else if (key === "font-style") result.fontStyle = content;
+    else if (key === "opacity") result.opacity = Number(content);
+  }
+  return result;
+}
+
+function linkDash(type: unknown) {
+  return ["", undefined, "8 4", "1 4", "8 4 1 4", "8 4 1 4 1 4"][Number(type)] ?? undefined;
+}
+
+function linkPath(from: { x: number; y: number }, to: { x: number; y: number }, style: Record<string, unknown>) {
+  const kind = style.link_type;
+  if (kind === "flowchart") {
+    const middle = (from.x + to.x) / 2;
+    return `M ${from.x} ${from.y} H ${middle} V ${to.y} H ${to.x}`;
+  }
+  if (kind === "bezier" || kind === "statemachine" || kind === "freeform") {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const length = Math.hypot(dx, dy) || 1;
+    const bend = Number(style.bezier_curviness ?? 30);
+    const offset = Array.isArray(style.control_offset) ? style.control_offset : null;
+    const cx = offset ? Number(offset[0]) : (from.x + to.x) / 2 - dy / length * bend;
+    const cy = offset ? Number(offset[1]) : (from.y + to.y) / 2 + dx / length * bend;
+    return `M ${from.x} ${from.y} Q ${cx} ${cy} ${to.x} ${to.y}`;
+  }
+  return `M ${from.x} ${from.y} L ${to.x} ${to.y}`;
+}
 
 export type Selection = { kind: "node" | "link"; id: string } | null;
 type CanvasProps = {
@@ -374,8 +417,12 @@ export function TopologyCanvas(props: CanvasProps) {
         const selected = props.selection?.kind === "link" && props.selection.id === link.link_id;
         const sourcePoint = portPoint(source.node, source.endpoint);
         const targetPoint = portPoint(endpoints[1].node, endpoints[1].endpoint);
+        const style = (link.link_style && typeof link.link_style === "object" ? link.link_style : {}) as Record<string, unknown>;
+        const stroke = selected ? "#1683df" : typeof style.color === "string" ? style.color : "#555";
+        const strokeWidth = Number.isFinite(Number(style.width)) && Number(style.width) > 0 ? Number(style.width) : 2;
+        const dash = link.suspend ? "6 4" : linkDash(style.type);
         return <g key={link.link_id} className={`sim-link ${selected ? "is-selected" : ""} ${link.suspend ? "is-suspended" : ""}`} onClick={(event) => { event.stopPropagation(); props.onLinkClick(link.link_id); }} onContextMenu={() => props.onLinkClick(link.link_id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") props.onLinkClick(link.link_id); }} role="button" aria-label={`Ethernet segment connecting ${endpoints.map(({ node }) => node.name).join(", ")}`} tabIndex={0}>
-          {endpoints.slice(1).map(({ endpoint, node }) => { const point = portPoint(node, endpoint); return <g key={`${endpoint.node_id}:${endpoint.adapter_number}:${endpoint.port_number}`}><line className="sim-link-stroke" x1={sourcePoint.x} y1={sourcePoint.y} x2={point.x} y2={point.y} style={{ stroke: selected ? "#1683df" : "#555", strokeWidth: selected ? 2.5 : 2, strokeDasharray: link.suspend ? "6 4" : undefined }} /><line className="sim-link-hit" x1={sourcePoint.x} y1={sourcePoint.y} x2={point.x} y2={point.y} /></g>; })}
+          {endpoints.slice(1).map(({ endpoint, node }) => { const point = portPoint(node, endpoint); const d = linkPath(sourcePoint, point, style); return <g key={`${endpoint.node_id}:${endpoint.adapter_number}:${endpoint.port_number}`}><path className="sim-link-stroke" d={d} fill="none" style={{ stroke, strokeWidth: selected ? Math.max(strokeWidth, 2.5) : strokeWidth, strokeDasharray: dash, opacity: Number(style.type) === 0 ? 0 : undefined }} /><path className="sim-link-hit" d={d} /></g>; })}
           {Boolean(link.capturing) && <g pointerEvents="none" transform={`translate(${(sourcePoint.x+targetPoint.x)/2},${(sourcePoint.y+targetPoint.y)/2-12})`}><rect x="-25" y="-10" width="50" height="18" rx="9" fill={link.wireshark ? "#7c3aed" : "#dc2626"}/><text y="3" textAnchor="middle" fill="white" fontSize="10" fontWeight="700">{link.wireshark ? "◉ WS" : "● CAP"}</text></g>}
           {endpoints.map(({ endpoint, node }, index) => {
             const other = endpoints[index === 0 ? 1 : 0]?.node;
@@ -392,7 +439,7 @@ export function TopologyCanvas(props: CanvasProps) {
             if (!props.showInterfaceLabels || !text) return null;
             const position = linkLabelPositions[key] ?? { x: Number(savedLabel?.x ?? localPort.x + 8), y: Number(savedLabel?.y ?? localPort.y + 4) };
             return <g key={`label:${endpoint.node_id}`} transform={`translate(${Number(node.x ?? 0)},${Number(node.y ?? 0)})`}>
-              <text className="sim-link-label" x={position.x} y={position.y} transform={Number(savedLabel?.rotation) ? `rotate(${Number(savedLabel?.rotation)}, ${position.x}, ${position.y})` : undefined} onPointerDown={(event) => startLinkLabelMove(event, link, endpoint, node)} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.stopPropagation()}>{text}</text>
+              <text className="sim-link-label" style={svgTextStyle(savedLabel?.style)} x={position.x} y={position.y} transform={Number(savedLabel?.rotation) ? `rotate(${Number(savedLabel?.rotation)}, ${position.x}, ${position.y})` : undefined} onPointerDown={(event) => startLinkLabelMove(event, link, endpoint, node)} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.stopPropagation()}>{text}</text>
             </g>;
           })}
         </g>;
@@ -461,7 +508,7 @@ export function TopologyCanvas(props: CanvasProps) {
           </>}
           <circle className={`sim-node-status ${node.status === "started" ? "running" : suspended ? "suspended" : "stopped"}`} cx="22" cy="-21" r="4" />
           {(node.locked || props.projectLocked) && <text className="sim-node-lock" x="-22" y="-17" aria-label="Locked">🔒</text>}
-          <text className="sim-node-name" data-node-label="true" x={labelPosition.x} y={labelPosition.y} onPointerDown={(event) => startLabelMove(event, node)} onClick={(event) => event.stopPropagation()}>{node.name}</text>
+          <text className="sim-node-name" data-node-label="true" style={svgTextStyle(label.style)} transform={Number(label.rotation) ? `rotate(${Number(label.rotation)}, ${labelPosition.x}, ${labelPosition.y})` : undefined} x={labelPosition.x} y={labelPosition.y} onPointerDown={(event) => startLabelMove(event, node)} onClick={(event) => event.stopPropagation()}>{String(label.text ?? node.name)}</text>
         </g>;
         })}
       {selectionBox && <rect className="sim-selection-box" x={selectionBox.x} y={selectionBox.y} width={selectionBox.width} height={selectionBox.height} />}
