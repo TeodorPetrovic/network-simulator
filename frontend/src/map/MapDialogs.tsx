@@ -296,6 +296,7 @@ export function SymbolPickerDialog({ projectId, node, open, onOpenChange, onSave
   const [selected, setSelected] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
   useEffect(() => {
     if (!open) return;
     setLoading(true); setError("");
@@ -313,13 +314,25 @@ export function SymbolPickerDialog({ projectId, node, open, onOpenChange, onSave
     try { const updated = await api.updateNode(projectId, node.node_id, { symbol: selected }); onSaved(updated); onOpenChange(false); }
     catch (reason) { setError(`Could not change symbol: ${errorMessage(reason)}`); }
   }
+  async function upload(file?: File) {
+    if (!file) return;
+    setUploading(true); setError("");
+    try {
+      await api.uploadProjectSymbol(projectId, file);
+      const id = file.name;
+      setSelected(id);
+      setSymbols((current) => [...current.filter((item) => (item.symbol_id ?? item.filename) !== id), { symbol_id: id, filename: id, name: id, builtin: false }, ...current]);
+    } catch (reason) { setError(`Could not upload symbol: ${errorMessage(reason)}`); }
+    finally { setUploading(false); }
+  }
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent>
     <DialogHeader><DialogTitle>Change symbol for {node.name}</DialogTitle><DialogDescription>Choose a symbol from the controller library.</DialogDescription></DialogHeader>
     {loading && <p className="text-sm text-muted-foreground">Loading symbols…</p>}
     {symbols.length > 0 && <Select value={selected} onValueChange={setSelected}><SelectTrigger aria-label="Node symbol"><SelectValue placeholder="Choose a symbol" /></SelectTrigger><SelectContent>{symbols.map((symbol) => { const value = symbol.symbol_id ?? symbol.path ?? symbol.filename ?? symbol.name ?? "unknown"; return <SelectItem key={value} value={value}>{symbol.name ?? symbol.filename ?? value}</SelectItem>; })}</SelectContent></Select>}
+    <label className="grid gap-1.5 text-sm"><Label>Upload custom symbol</Label><Input type="file" accept="image/svg+xml,image/png,image/jpeg" aria-label="Upload custom symbol" disabled={uploading} onChange={(event) => { void upload(event.target.files?.[0]); event.currentTarget.value = ""; }} />{uploading && <span className="text-muted-foreground">Uploading symbol…</span>}</label>
     {error && <Unavailable message={error} />}
     {!loading && !error && symbols.length === 0 && <p className="text-sm text-muted-foreground">The controller returned no symbols.</p>}
-    <DialogFooter><Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button><Button disabled={!selected || loading} onClick={() => void save()}>Apply symbol</Button></DialogFooter>
+    <DialogFooter><Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button><Button disabled={!selected || loading || uploading} onClick={() => void save()}>Apply symbol</Button></DialogFooter>
   </DialogContent></Dialog>;
 }
 
@@ -361,7 +374,7 @@ export function LogConsoleDialog({ projectId, cursor, open, onOpenChange, onCoun
 export function HelpDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent>
     <DialogHeader><DialogTitle>Map shortcuts</DialogTitle><DialogDescription>Keyboard and pointer controls for the project map.</DialogDescription></DialogHeader>
-    <div className="grid grid-cols-[1fr_auto] gap-x-5 gap-y-2 text-sm"><span>Select multiple devices</span><kbd>Ctrl / ⌘ + click</kbd><span>Select devices in a region</span><kbd>Drag empty canvas</kbd><span>Move a device label</span><kbd>Drag its label</kbd><span>Pan the map</span><kbd>Space + drag</kbd><span>Delete selected devices or links</span><kbd>Delete / Backspace</kbd><span>Select all devices</span><kbd>Ctrl / ⌘ + A</kbd><span>Zoom</span><kbd>Ctrl / ⌘ + + / −</kbd><span>Undo last device move</span><kbd>Ctrl / ⌘ + Z</kbd><span>Clear selection</span><kbd>Escape</kbd></div>
+    <div className="grid grid-cols-[1fr_auto] gap-x-5 gap-y-2 text-sm"><span>Select multiple devices</span><kbd>Ctrl / ⌘ + click</kbd><span>Select devices in a region</span><kbd>Drag empty canvas</kbd><span>Copy and paste selected devices</span><kbd>Ctrl / ⌘ + C / V</kbd><span>Nudge selected devices</span><kbd>Arrow keys</kbd><span>Move a device label</span><kbd>Drag its label</kbd><span>Pan the map</span><kbd>Space + drag</kbd><span>Delete selected devices or links</span><kbd>Delete / Backspace</kbd><span>Select all devices</span><kbd>Ctrl / ⌘ + A</kbd><span>Zoom</span><kbd>Ctrl / ⌘ + + / −</kbd><span>Undo last device move</span><kbd>Ctrl / ⌘ + Z</kbd><span>Clear selection</span><kbd>Escape</kbd></div>
     <DialogFooter><Button onClick={() => onOpenChange(false)}>Close</Button></DialogFooter>
   </DialogContent></Dialog>;
 }

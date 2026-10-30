@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Link, LinkEndpoint, Node, Project, ResourceMonitor, RuntimeInfo, RuntimeTemplate, TopologySnapshot } from "./api";
 import { api, getAuthToken } from "./api";
 import { ResourceMonitorPopover } from "./ResourceMonitorPopover";
@@ -16,6 +16,7 @@ import type { DrawingTool } from "./map/helpers";
 import { TopologyCanvas, scene, maxZoom, messageFor, safeFileName, sameEndpoint, valuesFromDrawing } from "./map/TopologyCanvas";
 import { pngScreenshotAvailable, spreadOverlappingNodes } from "./workspaceUtils";
 import type { Selection } from "./map/TopologyCanvas";
+import { alignNodes, distributeNodes } from "./map/layout";
 
 import { WorkspaceSidebar } from "./WorkspaceSidebar";
 import { WorkspaceDocks } from "./WorkspaceDocks";
@@ -177,6 +178,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [projectLocked, setProjectLocked] = useState(Boolean(props.project.locked));
   const [symbolDefaults, setSymbolDefaults] = useState<Record<string, string>>({});
   const [customSymbolIds, setCustomSymbolIds] = useState<string[]>([]);
+  const copiedNodes = useRef<{ nodes: Node[]; links: Link[] } | null>(null);
   const [featureMessage, setFeatureMessage] = useState("");
   const groupedTemplates = useMemo(() => {
     const query = deviceQuery.trim().toLowerCase();
@@ -305,6 +307,68 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
     });
   }
 
+  function arrangeSelection(mode: "left" | "right" | "top" | "bottom" | "horizontal" | "vertical" | "distribute-horizontal" | "distribute-vertical") {
+    if (projectLocked) return;
+    const selected = topology.nodes.filter((node) => selectedNodeIds.includes(node.node_id) && !node.locked);
+    const positions = mode.startsWith("distribute-")
+      ? distributeNodes(selected, mode.endsWith("horizontal") ? "horizontal" : "vertical")
+      : alignNodes(selected, mode as "left" | "right" | "top" | "bottom" | "horizontal" | "vertical");
+    if (positions.length > 1) props.onNodeMoveEnd(positions);
+  }
+
+  function copySelectedNodes() {
+    const ids = new Set(selectedNodeIds);
+    const nodes = topology.nodes.filter((node) => ids.has(node.node_id));
+    if (!nodes.length) return;
+    copiedNodes.current = { nodes, links: topology.links.filter((link) => link.nodes.length >= 2 && link.nodes.every((endpoint) => ids.has(endpoint.node_id))) };
+    setFeatureMessage(`${nodes.length} device${nodes.length === 1 ? "" : "s"} copied.`);
+  }
+
+  async function pasteCopiedNodes() {
+    const copied = copiedNodes.current;
+    if (!copied || projectLocked) return;
+    const idMap = new Map<string, string>();
+    const created: Node[] = [];
+    const createdLinks: Link[] = [];
+    try {
+      for (const source of copied.nodes) {
+        const payload: Record<string, unknown> = { ...source };
+        for (const key of ["node_id", "project_id", "container_id", "image_digest", "status", "locked", "runtime_missing", "runtime_overlay", "runtime_qmp_socket", "runtime_serial_socket", "runtime_pid_file", "runtime_log_file", "console_host", "console_port"]) delete payload[key];
+        const baseName = `${source.name} copy`;
+        const names = new Set([...topology.nodes, ...created].map((node) => node.name));
+        let name = baseName, suffix = 2;
+        while (names.has(name)) name = `${baseName} ${suffix++}`;
+        payload.name = name;
+        payload.x = Number(source.x ?? 0) + 140;
+        payload.y = Number(source.y ?? 0) + 100;
+        const node = await api.createNode(props.project.project_id, payload as Omit<Node, "node_id">);
+        idMap.set(source.node_id, node.node_id); created.push(node);
+      }
+      for (const link of copied.links) {
+        const endpoints = link.nodes.map((endpoint) => ({ ...endpoint, node_id: idMap.get(endpoint.node_id) ?? "" }));
+        if (endpoints.every((endpoint) => endpoint.node_id)) createdLinks.push(await api.createLink(props.project.project_id, endpoints));
+      }
+      setTopology((current) => ({ ...current, nodes: [...current.nodes, ...created], links: [...current.links, ...createdLinks] }));
+      setSelectedNodeIds(created.map((node) => node.node_id));
+      props.onSelectCanvas();
+      setFeatureMessage(`${created.length} device${created.length === 1 ? "" : "s"} pasted with ${createdLinks.length} internal link${createdLinks.length === 1 ? "" : "s"}.`);
+    } catch (reason) {
+      setFeatureMessage(`Paste stopped: ${messageFor(reason)}`);
+      if (created.length) void api.topology(props.project.project_id).then(setTopology);
+    }
+  }
+
+  async function toggleSelectedNodeLocks() {
+    if (projectLocked) return;
+    const selected = topology.nodes.filter((node) => selectedNodeIds.includes(node.node_id));
+    const lock = selected.some((node) => !node.locked);
+    const targets = selected.filter((node) => Boolean(node.locked) !== lock);
+    const results = await Promise.allSettled(targets.map((node) => api.updateNode(props.project.project_id, node.node_id, { locked: lock })));
+    const updated = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+    setTopology((current) => ({ ...current, nodes: current.nodes.map((node) => updated.find((item) => item.node_id === node.node_id) ?? node) }));
+    if (results.some((result) => result.status === "rejected")) setFeatureMessage("Some selected devices could not be locked or unlocked.");
+  }
+
   function startDrawingTool(tool: DrawingTool) { setDrawingTool(tool); setPendingDrawing(null); }
 
   function onDrawingConfigured(tool: DrawingTool, values: DrawingValues) {
@@ -328,7 +392,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
 
   return (
     <section className="sim-workspace" aria-label={`Project ${props.project.name}`}>
-      <WorkspaceToolbar workspace={props} topology={topology} selectedNodeIds={selectedNodeIds} selectedLifecycleNodes={selectedLifecycleNodes} projectLocked={projectLocked} gridVisible={gridVisible} setGridVisible={setGridVisible} snapToGrid={snapToGrid} setSnapToGrid={setSnapToGrid} selectedDrawing={selectedDrawing} selectedLink={selectedLink} runBulkLifecycle={runBulkLifecycle} runAllLifecycle={runAllLifecycle} deleteSelectedNodes={deleteSelectedNodes} toggleProjectLock={toggleProjectLock} startDrawingTool={startDrawingTool} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} setSnapshotsOpen={setSnapshotsOpen} setLogOpen={setLogOpen} setScreenshotOpen={setScreenshotOpen} setLinkPropertiesOpen={setLinkPropertiesOpen} setHelpOpen={setHelpOpen} setInfoOpen={setInfoOpen} onToggleConsoleDock={props.onToggleConsoleDock ?? (() => props.onOpenConsoleDock?.())} consoleDockOpen={props.consoleOpen ?? false} onSelectAll={() => { setSelectedNodeIds(topology.nodes.map((node) => node.node_id)); props.onSelectCanvas(); }} onSelectNone={() => { setSelectedNodeIds([]); setSelectedDrawingId(null); props.onSelectCanvas(); }} topologyDockOpen={topologyDockOpen} serversDockOpen={serversDockOpen} onToggleTopologyDock={() => setTopologyDockOpen(!topologyDockOpen)} onToggleServersDock={() => setServersDockOpen(!serversDockOpen)} zoom={view.zoom} onZoom={(delta) => setView((current) => ({ ...current, zoom: Math.max(0.1, Math.min(maxZoom, Number((current.zoom + delta).toFixed(1)))) }))} onFitTopology={fitTopology} onZoomToSelection={zoomToSelection} onResetZoom={() => setView({ zoom: 1, centerX: 0, centerY: 0 })} showInterfaceLabels={showInterfaceLabels} onToggleInterfaceLabels={() => setShowInterfaceLabels((current) => !current)} />
+      <WorkspaceToolbar workspace={props} topology={topology} selectedNodeIds={selectedNodeIds} selectedLifecycleNodes={selectedLifecycleNodes} projectLocked={projectLocked} gridVisible={gridVisible} setGridVisible={setGridVisible} snapToGrid={snapToGrid} setSnapToGrid={setSnapToGrid} selectedDrawing={selectedDrawing} selectedLink={selectedLink} runBulkLifecycle={runBulkLifecycle} runAllLifecycle={runAllLifecycle} deleteSelectedNodes={deleteSelectedNodes} toggleProjectLock={toggleProjectLock} startDrawingTool={startDrawingTool} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} setSnapshotsOpen={setSnapshotsOpen} setLogOpen={setLogOpen} setScreenshotOpen={setScreenshotOpen} setLinkPropertiesOpen={setLinkPropertiesOpen} setHelpOpen={setHelpOpen} setInfoOpen={setInfoOpen} onToggleConsoleDock={props.onToggleConsoleDock ?? (() => props.onOpenConsoleDock?.())} consoleDockOpen={props.consoleOpen ?? false} onSelectAll={() => { setSelectedNodeIds(topology.nodes.map((node) => node.node_id)); props.onSelectCanvas(); }} onSelectNone={() => { setSelectedNodeIds([]); setSelectedDrawingId(null); props.onSelectCanvas(); }} arrangeSelection={arrangeSelection} toggleSelectedNodeLocks={toggleSelectedNodeLocks} copySelectedNodes={copySelectedNodes} pasteCopiedNodes={() => void pasteCopiedNodes()} topologyDockOpen={topologyDockOpen} serversDockOpen={serversDockOpen} onToggleTopologyDock={() => setTopologyDockOpen(!topologyDockOpen)} onToggleServersDock={() => setServersDockOpen(!serversDockOpen)} zoom={view.zoom} onZoom={(delta) => setView((current) => ({ ...current, zoom: Math.max(0.1, Math.min(maxZoom, Number((current.zoom + delta).toFixed(1)))) }))} onFitTopology={fitTopology} onZoomToSelection={zoomToSelection} onResetZoom={() => setView({ zoom: 1, centerX: 0, centerY: 0 })} showInterfaceLabels={showInterfaceLabels} onToggleInterfaceLabels={() => setShowInterfaceLabels((current) => !current)} />
       <WorkspaceIconToolbar workspace={props} selectedLink={selectedLink} setLinkPropertiesOpen={setLinkPropertiesOpen} startDrawingTool={startDrawingTool} runAllLifecycle={runAllLifecycle} showInterfaceLabels={showInterfaceLabels} onToggleInterfaceLabels={() => setShowInterfaceLabels((current) => !current)} zoomIn={() => setView((current) => ({ ...current, zoom: Math.min(maxZoom, Number((current.zoom + 0.1).toFixed(1))) }))} zoomOut={() => setView((current) => ({ ...current, zoom: Math.max(0.1, Number((current.zoom - 0.1).toFixed(1))) }))} fitTopology={fitTopology} />
 
       <div className={`sim-workspace-grid ${!topologyDockOpen && !serversDockOpen ? "is-docks-closed" : ""}`}>
@@ -383,6 +447,8 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
                   onDrawingClick={(id) => { setSelectedDrawingId(id); setSelectedNodeIds([]); props.onSelectCanvas(); }}
                   onDrawingMove={(id, x, y) => void moveDrawing(id, x, y)}
                   onDeleteSelected={() => { if (selectedDrawing) void removeDrawing(); else if (selectedLink) props.onDeleteSelection(); else deleteSelectedNodes(); }}
+                  onCopy={copySelectedNodes}
+                  onPaste={() => void pasteCopiedNodes()}
                   onClearSelection={() => { setSelectedNodeIds([]); setSelectedDrawingId(null); props.onSelectCanvas(); }}
                   onZoom={(delta) => setView((current) => ({ ...current, zoom: Math.max(0.1, Math.min(maxZoom, current.zoom + delta)) }))}
                   onNodeLabelMove={(id, x, y) => void saveNodeLabelPosition(id, x, y)}
@@ -401,7 +467,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
       <DrawingEditorDialog tool={drawingEditOpen ? drawingEditTool : drawingTool} open={drawingEditOpen || drawingTool !== null} mode={drawingEditOpen ? "edit" : "create"} initial={drawingEditValues} onOpenChange={(open) => { if (!open) { setDrawingTool(null); setDrawingEditOpen(false); } }} onSave={onDrawingConfigured} />
       <SnapshotsDialog projectId={props.project.project_id} open={snapshotsOpen} onOpenChange={setSnapshotsOpen} onRestored={setTopology} />
       <LinkPropertiesDialog projectId={props.project.project_id} link={selectedLink ?? null} nodes={topology.nodes} open={linkPropertiesOpen} onOpenChange={setLinkPropertiesOpen} onUpdated={(updated) => setTopology((current) => ({ ...current, links: current.links.map((link) => link.link_id === updated.link_id ? updated : link) }))} />
-      <SymbolPickerDialog projectId={props.project.project_id} node={symbolNode} open={symbolNode !== null} onOpenChange={(open) => { if (!open) setSymbolNode(null); }} onSaved={(updated) => setTopology((current) => ({ ...current, nodes: current.nodes.map((node) => node.node_id === updated.node_id ? updated : node) }))} />
+      <SymbolPickerDialog projectId={props.project.project_id} node={symbolNode} open={symbolNode !== null} onOpenChange={(open) => { if (!open) setSymbolNode(null); }} onSaved={(updated) => { setTopology((current) => ({ ...current, nodes: current.nodes.map((node) => node.node_id === updated.node_id ? updated : node) })); if (typeof updated.symbol === "string") setCustomSymbolIds((current) => current.includes(updated.symbol as string) ? current : [...current, updated.symbol as string]); }} />
       <LogConsoleDialog projectId={props.project.project_id} cursor={topology.event_cursor} open={logOpen} onOpenChange={setLogOpen} onCountsChange={onLogCount} />
       <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
       <InfoDialog project={props.project} nodeCount={topology.nodes.length} linkCount={topology.links.length} drawingCount={topology.drawings.length} eventCursor={topology.event_cursor} open={infoOpen} onOpenChange={setInfoOpen} />

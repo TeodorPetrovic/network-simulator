@@ -177,6 +177,10 @@ pub(super) fn router() -> Router<AppState> {
             get(get_image).delete(delete_image),
         )
         .route("/v3/symbols", get(list_symbols))
+        .route(
+            "/v3/projects/{project_id}/symbols",
+            post(upload_project_symbol),
+        )
         .route("/v3/symbols/default_symbols", get(default_symbols))
         .route(
             "/v3/symbols/{symbol_id}/raw",

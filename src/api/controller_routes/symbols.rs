@@ -71,6 +71,36 @@ pub(super) async fn upload_symbol(
     sqlx::query("INSERT INTO controller_symbols(symbol_id,contents) VALUES(?,?) ON CONFLICT(symbol_id) DO UPDATE SET contents=excluded.contents,updated_at=CURRENT_TIMESTAMP").bind(id).bind(bytes.to_vec()).execute(state.store.pool()).await?;
     Ok(StatusCode::NO_CONTENT)
 }
+pub(super) async fn upload_project_symbol(
+    State(state): State<AppState>,
+    AxumPath(project_id): AxumPath<String>,
+    Query(query): Query<HashMap<String, String>>,
+    request: Request,
+) -> Result<StatusCode, ApiError> {
+    let exists = sqlx::query("SELECT 1 FROM projects WHERE project_id=?")
+        .bind(project_id)
+        .fetch_optional(state.store.pool())
+        .await?;
+    if exists.is_none() {
+        return Err(ApiError::not_found("Project does not exist"));
+    }
+    let filename = query
+        .get("filename")
+        .ok_or_else(|| ApiError::bad_request("filename is required"))?;
+    let id = safe_symbol_id(filename)?;
+    let bytes = to_bytes(request.into_body(), 16 * 1024 * 1024)
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    if bytes.is_empty() {
+        return Err(ApiError::bad_request("symbol file is empty"));
+    }
+    sqlx::query("INSERT INTO controller_symbols(symbol_id,contents) VALUES(?,?) ON CONFLICT(symbol_id) DO UPDATE SET contents=excluded.contents,updated_at=CURRENT_TIMESTAMP")
+        .bind(id)
+        .bind(bytes.to_vec())
+        .execute(state.store.pool())
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
 pub(super) async fn delete_symbol(
     State(state): State<AppState>,
     AxumPath(symbol_id): AxumPath<String>,

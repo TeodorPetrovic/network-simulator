@@ -101,6 +101,8 @@ type CanvasProps = {
   onDrawingClick: (id: string) => void;
   onDrawingMove: (id: string, x: number, y: number) => void;
   onDeleteSelected: () => void;
+  onCopy: () => void;
+  onPaste: () => void;
   onClearSelection: () => void;
   onZoom: (delta: number) => void;
   onDropTemplate: (templateId: string, x: number, y: number) => void;
@@ -181,7 +183,7 @@ export function TopologyCanvas(props: CanvasProps) {
     if (event.metaKey || event.ctrlKey || !svgRef.current) return;
     draggedNodeRef.current = false;
     event.stopPropagation();
-    const nodeIds = props.selectedNodeIds.includes(node.node_id) ? props.selectedNodeIds : [node.node_id];
+    const nodeIds = (props.selectedNodeIds.includes(node.node_id) ? props.selectedNodeIds : [node.node_id]).filter((id) => !nodeMap.get(id)?.locked);
     const origins = new Map(nodeIds.map((id) => { const item = nodeMap.get(id); return [id, { x: Number(item?.x ?? 0), y: Number(item?.y ?? 0) }] as const; }));
     dragRef.current = { nodeIds, pointerId: event.pointerId, start: scenePoint(event.clientX, event.clientY, svgRef.current.getBoundingClientRect(), false), origins };
     if (!props.selectedNodeIds.includes(node.node_id)) props.onMultiSelect(nodeIds);

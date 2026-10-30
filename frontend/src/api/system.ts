@@ -22,5 +22,14 @@ export const systemApi = {
     return response.blob();
   },
     listSymbols: () => request<NetworkSymbol[]>("/symbols"),
+    uploadProjectSymbol: async (projectId: string, file: File) => {
+    const path = `/projects/${encodeURIComponent(projectId)}/symbols?filename=${encodeURIComponent(file.name)}`;
+    const response = await fetchWithAuth(`/v3${path}`, { method: "POST", headers: { "Content-Type": file.type || "application/octet-stream" }, body: file });
+    handleUnauthorized(response, path);
+    if (!response.ok) {
+      const body = await response.json().catch(() => null) as { message?: string } | null;
+      throw new Error(body?.message ?? `Symbol upload failed (${response.status})`);
+    }
+  },
     defaultSymbols: () => request<{ default_symbol: string; symbols: Record<string, string> }>("/symbols/default_symbols")
 };

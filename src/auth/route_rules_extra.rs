@@ -7,6 +7,11 @@ macro_rules! rules {
 }
 
 pub const ROUTE_RULES_EXTRA: &[RouteRule] = rules![
+    (
+        "POST",
+        "/projects/{project_id}/symbols",
+        RouteClass::Privilege("Symbol.Allocate")
+    ),
     ("GET", "/projects", RouteClass::Privilege("Project.Audit")),
     (
         "POST",
