@@ -257,6 +257,9 @@ pub(super) async fn update_node_configuration(
                 .as_u64()
                 .and_then(|port| u16::try_from(port).ok()),
             console_http_path: updated["console_http_path"].as_str().map(str::to_owned),
+            console_vnc_port: updated["console_vnc_port"]
+                .as_u64()
+                .and_then(|port| u16::try_from(port).ok()),
             aux_type: updated["aux_type"].as_str().unwrap_or("none").to_owned(),
             custom_adapters: serde_json::from_value(updated["custom_adapters"].clone()).map_err(
                 |_| {

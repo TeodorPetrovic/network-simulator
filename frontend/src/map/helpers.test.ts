@@ -88,3 +88,14 @@ describe("project map helpers", () => {
     svg.remove();
   });
 });
+
+import { captureDisplayName, defaultCaptureName } from "./helpers";
+describe("capture names", () => {
+  const nodes = [{ node_id: "a", name: "PC 1", node_type: "vpcs" }, { node_id: "b", name: "R1", node_type: "qemu" }] as never[];
+  const link = { link_id: "11111111-2222-3333-4444-555555555555", nodes: [{ node_id: "a", adapter_number: 0, port_number: 0 }, { node_id: "b", adapter_number: 1, port_number: 0 }] };
+  it("names captures after their endpoints", () => { expect(defaultCaptureName(link as never, nodes)).toBe("PC-1_eth0_to_R1_Ethernet1.pcap"); });
+  it("replaces legacy uuid names but keeps custom ones", () => {
+    expect(captureDisplayName({ ...link, capture_file_name: `${link.link_id}.pcap` } as never, nodes)).toBe("PC-1_eth0_to_R1_Ethernet1.pcap");
+    expect(captureDisplayName({ ...link, capture_file_name: "mine.pcap" } as never, nodes)).toBe("mine.pcap");
+  });
+});

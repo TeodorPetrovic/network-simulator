@@ -1,0 +1,15 @@
+{
+  "name": "network-simulator-agent-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "e2e run",
+    "explore": "e2e explore \"Bug bash the workspace UI: find overlapping or clipped components, floating console/capture windows that cannot be dragged, resized, or brought to front, and broken dialogs. Record reproducible findings and screenshots.\""
+  },
+  "devDependencies": {
+    "@ai-sdk/openai": "^4.0.108",
+    "@e2e-dev/web": "^0.15.4",
+    "ai": "^7.0.162",
+    "e2e": "^0.22.0"
+  }
+}

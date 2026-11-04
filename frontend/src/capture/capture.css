@@ -79,11 +79,13 @@
 .capture-stream-client { color: #166534; background: color-mix(in srgb, #dcfce7, transparent 30%); }
 .capture-stream-server { color: #1e40af; background: color-mix(in srgb, #dbeafe, transparent 30%); }
 .capture-follow-streams pre { min-height: 0; }
-.capture-window { position: fixed; z-index: 45; display: flex; flex-direction: column; min-width: 800px; min-height: 600px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--card); box-shadow: 0 12px 36px #0007; }
+.capture-window { position: fixed; z-index: 45; display: flex; flex-direction: column; min-width: 420px; min-height: 280px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--card); box-shadow: 0 12px 36px #0007; }
 .capture-window header { height: 42px; min-height: 42px; display: flex; align-items: center; gap: 8px; padding: 0 8px; background: var(--muted); cursor: move; font-weight: 600; }
 .capture-window header span { flex: 1; }
 .capture-window.minimized { min-width: 240px; min-height: 42px; }
-.capture-window-resize { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; }
+.capture-window-resize { position: absolute; z-index: 3; right: 0; bottom: 0; width: 22px; height: 22px; cursor: nwse-resize; touch-action: none; background: linear-gradient(135deg, transparent 0 55%, var(--muted-foreground) 55% 62%, transparent 62% 72%, var(--muted-foreground) 72% 79%, transparent 79%); opacity: .7; }
+.capture-window-resize:hover { opacity: 1; }
+.web-wireshark-frame.is-interacting iframe { pointer-events: none; }
 .web-wireshark-frame { position: relative; display: flex; flex: 1; min-height: 0; background: #111; }
 .web-wireshark-frame iframe { width: 100%; height: 100%; border: 0; }
 .web-wireshark-loading { position: absolute; z-index: 1; inset: 0; display: flex; align-items: center; justify-content: center; gap: 10px; background: #111d; color: white; }

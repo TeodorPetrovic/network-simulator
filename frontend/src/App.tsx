@@ -206,8 +206,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
         setTopology((current) => current ? { ...current, links: upsertLink(current.links, link) } : current);
         setSelection({ kind: "link", id: link.link_id });
         setLinkEndpoints([]);
-        setConnecting(false);
-        setNotice(`Ethernet segment created with ${link.nodes.length} endpoints`);
+        setNotice(`Ethernet segment created with ${link.nodes.length} endpoints · link mode stays on (Esc to exit)`);
       }).catch((reason) => setError(errorMessage(reason)));
     } else if (first && samePort(first, endpoint)) {
       setLinkEndpoints([]);
@@ -222,8 +221,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
       setTopology((current) => current ? { ...current, links: upsertLink(current.links, link) } : current);
       setSelection({ kind: "link", id: link.link_id });
       setLinkEndpoints([]);
-      setConnecting(false);
-      setNotice(`Ethernet segment created with ${link.nodes.length} endpoints`);
+      setNotice(`Ethernet segment created with ${link.nodes.length} endpoints · link mode stays on (Esc to exit)`);
     } catch (reason) {
       setError(errorMessage(reason));
     }

@@ -25,6 +25,7 @@ test("Web Wireshark starts from the link dialog, opens inline, and closes when c
   await linkContextMenu(page);
   await page.getByRole("menuitem", { name: "Packet capture…" }).click();
   const dialog = page.getByRole("dialog", { name: "Link properties" });
+  await dialog.getByRole("tab", { name: "Capture" }).click();
   await dialog.getByRole("checkbox", { name: "Web Wireshark" }).check();
   await dialog.getByRole("button", { name: "Start capture" }).click();
   await page.getByText("Starting Web Wireshark… (3-6 s)").waitFor();

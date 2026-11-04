@@ -184,6 +184,7 @@ pub(super) async fn create_node_from_template(
             "console_resolution": template["console_resolution"],
             "console_http_port": template["console_http_port"],
             "console_http_path": template["console_http_path"],
+            "console_vnc_port": template["console_vnc_port"],
             "aux_type": template["aux_type"],
             "custom_adapters": template["custom_adapters"],
             "x": usage.get("x").cloned().unwrap_or(json!(0)),

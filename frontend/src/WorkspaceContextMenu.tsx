@@ -1,16 +1,17 @@
-import { Activity, Image, Layers, Lock, Pause, Pencil, Play, Plus, Power, Settings2, Terminal, Trash2, Unlock } from "lucide-react";
+import { Activity, FileText, Image, Layers, Lock, Pause, Pencil, Play, Plus, Power, Settings2, Terminal, Trash2, Unlock } from "lucide-react";
 import type { Link, Node, TopologySnapshot } from "./api";
 import type { SimulatorWorkspaceProps } from "./SimulatorWorkspace";
 import type { DrawingTool } from "./map/helpers";
 import { canApplyLifecycle } from "./lifecycle";
 import type { LifecycleAction } from "./lifecycle";
 import { availableInterfacesForNode, endpointName, interfacesForNode } from "./map/helpers";
+import { configFieldForNode } from "./NodeConfigFileDialog";
 import { nodeHasAuxConsole } from "./map/TopologyCanvas";
 import { ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator } from "@/components/ui/context-menu";
 
 type Props = {
   workspace: SimulatorWorkspaceProps; selectedNode: Node | null | undefined; selectedLink: Link | null | undefined;
-  selectedDrawing: TopologySnapshot["drawings"][number] | null; setConfigureNode: (node: Node) => void; setSymbolNode: (node: Node) => void;
+  selectedDrawing: TopologySnapshot["drawings"][number] | null; setConfigureNode: (node: Node) => void; setConfigNode: (node: Node) => void; setSymbolNode: (node: Node) => void;
   toggleNodeIsolation: (node: Node) => void; toggleNodeLock: (node: Node) => void; setLinkPropertiesOpen: (open: boolean) => void;
   toggleLinkSuspend: (link: Link) => void; setDrawingEditTool: (tool: DrawingTool | null) => void; setDrawingEditValues: (values: { width: number; height: number; stroke: string; fill: string; strokeWidth: number; text: string; imageDataUrl?: string } | null) => void;
   onOpenCaptureViewer?: (link: Link, newTab?: boolean) => void;
@@ -31,7 +32,7 @@ function canShowNodeLifecycle(node: Node, action: LifecycleAction) {
   return canApplyLifecycle(node, action);
 }
 
-export function WorkspaceContextMenu({ workspace: props, selectedNode, selectedLink, selectedDrawing, setConfigureNode, setSymbolNode, toggleNodeIsolation, toggleNodeLock, setLinkPropertiesOpen, toggleLinkSuspend, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, onOpenCaptureViewer, onOpenWebWireshark, onRestartWebWireshark, onStopCapture, onResetLink }: Props) {
+export function WorkspaceContextMenu({ workspace: props, selectedNode, selectedLink, selectedDrawing, setConfigureNode, setConfigNode, setSymbolNode, toggleNodeIsolation, toggleNodeLock, setLinkPropertiesOpen, toggleLinkSuspend, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, onOpenCaptureViewer, onOpenWebWireshark, onRestartWebWireshark, onStopCapture, onResetLink }: Props) {
   if (props.connecting && selectedNode) {
     const ports = interfacesForNode(selectedNode);
     const available = new Set(availableInterfacesForNode(selectedNode, props.topology.links).map((port) => `${port.adapter_number}:${port.port_number}`));
@@ -53,6 +54,7 @@ export function WorkspaceContextMenu({ workspace: props, selectedNode, selectedL
                 {selectedNode.status === "started" && ["qemu", "docker", "vpcs", "dynamips"].includes(selectedNode.node_type ?? "") && nodeHasAuxConsole(selectedNode) && <ContextMenuItem onSelect={() => props.onOpenConsole(selectedNode, true)}><Terminal />Open auxiliary console</ContextMenuItem>}
                 <ContextMenuItem onSelect={() => { document.querySelector<HTMLButtonElement>("[data-tab=topology]")?.click(); window.setTimeout(() => document.querySelector<HTMLInputElement>("[data-rename-node]")?.focus(), 0); }}><Pencil />Edit device name</ContextMenuItem>
                 {["qemu", "docker", "vpcs", "dynamips", "iou", "ethernet_switch", "ethernet_hub", "hub", "cloud", "nat"].includes(selectedNode.node_type ?? "") && <ContextMenuItem onSelect={() => setConfigureNode(selectedNode)}><Settings2 />Configure device</ContextMenuItem>}
+                {configFieldForNode(selectedNode) && <ContextMenuItem onSelect={() => setConfigNode(selectedNode)}><FileText />Edit config</ContextMenuItem>}
                 <ContextMenuItem onSelect={() => setSymbolNode(selectedNode)}><Image />Change symbol</ContextMenuItem>
                 <ContextMenuItem onSelect={() => void toggleNodeIsolation(selectedNode)}>{selectedNode.isolated ? <Unlock /> : <Lock />}{selectedNode.isolated ? "Unisolate device" : "Isolate device"}</ContextMenuItem>
                 <ContextMenuItem onSelect={() => void toggleNodeLock(selectedNode)}>{selectedNode.locked ? <Unlock /> : <Lock />}{selectedNode.locked ? "Unlock device" : "Lock device"}</ContextMenuItem>

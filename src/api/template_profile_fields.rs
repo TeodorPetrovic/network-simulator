@@ -54,6 +54,7 @@ pub(super) fn template_profile_fields(kind: &str) -> Result<&'static [&'static s
             "console_resolution",
             "console_http_port",
             "console_http_path",
+            "console_vnc_port",
             "aux_type",
             "custom_adapters",
         ],

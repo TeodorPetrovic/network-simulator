@@ -149,6 +149,19 @@ pub(super) async fn proxy_docker_http(
     target_port: u16,
     console_port: u16,
 ) -> Result<(), RuntimeError> {
+    proxy_docker_stream(client, docker, container_id, target_port, Some(console_port)).await
+}
+
+/// Bridges a host TCP client to a port inside the container with `docker exec`.
+/// `rewrite_console_port` rewrites loopback URLs in HTTP responses; raw
+/// protocols such as VNC pass `None` so their bytes are never modified.
+pub(super) async fn proxy_docker_stream(
+    client: TcpStream,
+    docker: &Path,
+    container_id: &str,
+    target_port: u16,
+    rewrite_console_port: Option<u16>,
+) -> Result<(), RuntimeError> {
     let target_port_text = target_port.to_string();
     let mut child = Command::new(docker)
         .args([
@@ -184,12 +197,18 @@ pub(super) async fn proxy_docker_http(
     let output = async {
         let host_replace = format!("://{client_host}").into_bytes();
         let port_replace = format!(":{target_port}").into_bytes();
-        let public_port = format!(":{console_port}").into_bytes();
+        let public_port = rewrite_console_port
+            .map(|port| format!(":{port}").into_bytes())
+            .unwrap_or_default();
         let mut buffer = [0u8; 4096];
         loop {
             let length = stdout.read(&mut buffer).await?;
             if length == 0 {
                 return Ok::<(), std::io::Error>(());
+            }
+            if rewrite_console_port.is_none() {
+                client_writer.write_all(&buffer[..length]).await?;
+                continue;
             }
             let mut chunk = buffer[..length].to_vec();
             replace_bytes(&mut chunk, b"://127.0.0.1", &host_replace);
@@ -236,7 +255,7 @@ pub(super) fn replace_bytes(contents: &mut Vec<u8>, from: &[u8], to: &[u8]) {
 pub(super) fn docker_vnc_tools_error(has_xvfb: bool, has_x11vnc: bool) -> Option<RuntimeError> {
     (!has_xvfb || !has_x11vnc).then(|| {
         RuntimeError::Unavailable(
-            "Docker VNC console is unsupported: Xvfb and x11vnc must be installed".to_owned(),
+            "Docker VNC console is unsupported: TigerVNC (Xtigervnc or Xvnc), or Xvfb and x11vnc, must be installed".to_owned(),
         )
     })
 }

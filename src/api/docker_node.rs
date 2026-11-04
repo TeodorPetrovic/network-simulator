@@ -66,6 +66,7 @@ pub(super) async fn create_docker_node(
     set_default(object, "console_resolution", json!("1024x768"));
     set_default(object, "console_http_port", json!(80));
     set_default(object, "console_http_path", json!("/"));
+    set_default(object, "console_vnc_port", json!(null));
     set_default(object, "aux_type", json!("none"));
     set_default(object, "custom_adapters", json!([]));
     set_default(object, "extra_configs", json!([]));
@@ -154,6 +155,10 @@ pub(super) async fn create_docker_node(
             .get("console_http_path")
             .and_then(Value::as_str)
             .map(str::to_owned),
+        console_vnc_port: object
+            .get("console_vnc_port")
+            .and_then(Value::as_u64)
+            .and_then(|port| u16::try_from(port).ok()),
         aux_type: object
             .get("aux_type")
             .and_then(Value::as_str)

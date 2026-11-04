@@ -433,6 +433,19 @@ pub(super) fn validate_template_profile_patch(
                     })?;
                 validated.insert(key.clone(), json!(port));
             }
+            "console_vnc_port" if kind == "docker" => {
+                if value.is_null() {
+                    validated.insert(key.clone(), json!(null));
+                } else {
+                    let port = value
+                        .as_u64()
+                        .filter(|port| (1..=65535).contains(port))
+                        .ok_or_else(|| {
+                            ApiError::bad_request("console_vnc_port must be from 1 to 65535")
+                        })?;
+                    validated.insert(key.clone(), json!(port));
+                }
+            }
             "console_http_path" if kind == "docker" => {
                 let path = value
                     .as_str()

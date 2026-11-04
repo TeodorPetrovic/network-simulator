@@ -64,7 +64,16 @@ impl QemuRuntime {
                 vm.qmp_socket.display()
             ));
         command.arg("-monitor").arg("none");
-        if matches!(vm.console_type.as_str(), "telnet" | "ssh") {
+        // GNS3 serves the primary serial console as a QEMU telnet server on the
+        // node's console port; the browser WebSocket proxy and external telnet
+        // clients both connect to that port.
+        if vm.console_type == "telnet" {
+            if let Some(port) = vm.console_port {
+                command
+                    .arg("-serial")
+                    .arg(format!("telnet:127.0.0.1:{port},server=on,wait=off"));
+            }
+        } else if vm.console_type == "ssh" {
             command
                 .arg("-chardev")
                 .arg(format!(

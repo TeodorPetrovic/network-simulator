@@ -25,6 +25,8 @@ function freePort() {
 }
 
 /** Start an isolated simulator (loopback => auth off, temp DB) and return {base, api, stop}. */
+export const freePortForTests = () => freePort();
+
 export async function startServer() {
   const bin = process.env.E2E_BINARY ?? join(root, "target/debug/network-simulator");
   if (!existsSync(bin)) throw new Error(`missing ${bin}; run cargo build first`);

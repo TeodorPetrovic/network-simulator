@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppliancesRouteImport } from './routes/appliances'
 import { Route as CaptureRouteImport } from './routes/capture'
 import { Route as ComputesRouteImport } from './routes/computes'
+import { Route as ConsoleRouteImport } from './routes/console'
 import { Route as InstalledSoftwareRouteImport } from './routes/installed-software'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as PreferencesRouteImport } from './routes/preferences'
@@ -47,6 +48,11 @@ const CaptureRoute = CaptureRouteImport.update({
 const ComputesRoute = ComputesRouteImport.update({
   id: '/computes',
   path: '/computes',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConsoleRoute = ConsoleRouteImport.update({
+  id: '/console',
+  path: '/console',
   getParentRoute: () => rootRouteImport,
 } as any)
 const InstalledSoftwareRoute = InstalledSoftwareRouteImport.update({
@@ -131,6 +137,7 @@ export interface FileRoutesByFullPath {
   '/appliances': typeof AppliancesRoute
   '/capture': typeof CaptureRoute
   '/computes': typeof ComputesRoute
+  '/console': typeof ConsoleRoute
   '/installed-software': typeof InstalledSoftwareRoute
   '/login': typeof LoginRoute
   '/preferences': typeof PreferencesRoute
@@ -152,6 +159,7 @@ export interface FileRoutesByTo {
   '/appliances': typeof AppliancesRoute
   '/capture': typeof CaptureRoute
   '/computes': typeof ComputesRoute
+  '/console': typeof ConsoleRoute
   '/installed-software': typeof InstalledSoftwareRoute
   '/login': typeof LoginRoute
   '/preferences': typeof PreferencesRoute
@@ -174,6 +182,7 @@ export interface FileRoutesById {
   '/appliances': typeof AppliancesRoute
   '/capture': typeof CaptureRoute
   '/computes': typeof ComputesRoute
+  '/console': typeof ConsoleRoute
   '/installed-software': typeof InstalledSoftwareRoute
   '/login': typeof LoginRoute
   '/preferences': typeof PreferencesRoute
@@ -197,6 +206,7 @@ export interface FileRouteTypes {
     | '/appliances'
     | '/capture'
     | '/computes'
+    | '/console'
     | '/installed-software'
     | '/login'
     | '/preferences'
@@ -218,6 +228,7 @@ export interface FileRouteTypes {
     | '/appliances'
     | '/capture'
     | '/computes'
+    | '/console'
     | '/installed-software'
     | '/login'
     | '/preferences'
@@ -239,6 +250,7 @@ export interface FileRouteTypes {
     | '/appliances'
     | '/capture'
     | '/computes'
+    | '/console'
     | '/installed-software'
     | '/login'
     | '/preferences'
@@ -261,6 +273,7 @@ export interface RootRouteChildren {
   AppliancesRoute: typeof AppliancesRoute
   CaptureRoute: typeof CaptureRoute
   ComputesRoute: typeof ComputesRoute
+  ConsoleRoute: typeof ConsoleRoute
   InstalledSoftwareRoute: typeof InstalledSoftwareRoute
   LoginRoute: typeof LoginRoute
   PreferencesRoute: typeof PreferencesRoute
@@ -305,6 +318,13 @@ declare module '@tanstack/react-router' {
       path: '/computes'
       fullPath: '/computes'
       preLoaderRoute: typeof ComputesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/console': {
+      id: '/console'
+      path: '/console'
+      fullPath: '/console'
+      preLoaderRoute: typeof ConsoleRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/installed-software': {
@@ -431,6 +451,7 @@ const rootRouteChildren: RootRouteChildren = {
   AppliancesRoute: AppliancesRoute,
   CaptureRoute: CaptureRoute,
   ComputesRoute: ComputesRoute,
+  ConsoleRoute: ConsoleRoute,
   InstalledSoftwareRoute: InstalledSoftwareRoute,
   LoginRoute: LoginRoute,
   PreferencesRoute: PreferencesRoute,

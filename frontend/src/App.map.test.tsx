@@ -231,7 +231,7 @@ describe("map", () => {
         { node_id: "node-1", adapter_number: 0, port_number: 0 },
         { node_id: "node-2", adapter_number: 0, port_number: 0 },
       ]));
-      expect(await screen.findByText("Ethernet segment created with 2 endpoints")).toBeInTheDocument();
+      expect(await screen.findByText(/Ethernet segment created with 2 endpoints/)).toBeInTheDocument();
     });
 
     it("exposes the complete node context-menu actions for a running device", async () => {

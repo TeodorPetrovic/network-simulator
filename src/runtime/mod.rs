@@ -58,6 +58,10 @@ pub struct DockerTemplateOptions {
     pub console_http_port: Option<u16>,
     #[serde(default)]
     pub console_http_path: Option<String>,
+    /// VNC server port inside the container. When set with `console_type`
+    /// "vnc", the controller bridges to it instead of starting Xvfb/x11vnc.
+    #[serde(default)]
+    pub console_vnc_port: Option<u16>,
     #[serde(default = "default_docker_aux_type")]
     pub aux_type: String,
     #[serde(default)]
@@ -76,6 +80,7 @@ impl Default for DockerTemplateOptions {
             console_resolution: default_docker_console_resolution(),
             console_http_port: Some(80),
             console_http_path: Some("/".to_owned()),
+            console_vnc_port: None,
             aux_type: default_docker_aux_type(),
             custom_adapters: Vec::new(),
         }

@@ -103,6 +103,14 @@ impl DockerRuntime {
                 "/tmp/.X11-unix:/tmp/.X11-unix:ro".to_owned(),
             ]);
         }
+        // GNS3 mounts a static BusyBox at /gns3/bin/busybox; the auxiliary
+        // console and the HTTP/VNC console bridges execute it inside the guest.
+        if let Some(busybox) = runtime_program("NETWORK_SIMULATOR_BUSYBOX", "busybox") {
+            args.extend([
+                "--volume".to_owned(),
+                format!("{}:/gns3/bin/busybox:ro", busybox.display()),
+            ]);
+        }
         // TODO(RUNTIME-NET Docker custom adapter hook): apply custom interface
         // names and MAC addresses while the NET workstream creates container NICs.
         if let Some(memory_mb) = memory_mb.filter(|memory| *memory > 0) {

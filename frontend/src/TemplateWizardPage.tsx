@@ -35,6 +35,7 @@ export function TemplateWizardPage() {
   const [notice, setNotice] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [creating, setCreating] = useState(false);
+  const [pullTarget, setPullTarget] = useState<{ image: string; name: string; available: boolean } | null>(null);
 
   const categories = useMemo(() => ["all", ...new Set(results.map((item) => item.category).filter((value): value is string => Boolean(value)))], [results]);
   const visible = results.filter((item) => category === "all" || item.category === category);
@@ -54,14 +55,25 @@ export function TemplateWizardPage() {
   async function importSelected() {
     if (!selected) return;
     setBusy(true); setError(""); setNotice("");
-    try { await api.importGns3Appliance(selected.file_name); setNotice(`Imported “${selected.name}” definition. Required images still need explicit local bindings before its template is ready.`); }
+    try { await api.importGns3Appliance(selected.file_name); setNotice(`Imported “${selected.name}” definition.`); offerDockerPull(selected); }
     catch (reason) { setError(`Appliance import is unavailable: ${errorMessage(reason)}`); }
+    finally { setBusy(false); }
+  }
+  function offerDockerPull(appliance: Gns3Appliance) {
+    const version = appliance.versions?.find((item) => item.template_type === "docker" && item.docker_image);
+    setPullTarget(version?.docker_image ? { image: version.docker_image, name: appliance.name, available: Boolean(version.docker_image_available) } : null);
+  }
+  async function pullImage() {
+    if (!pullTarget) return;
+    setBusy(true); setError("");
+    try { await api.pullDockerImage(pullTarget.image); setNotice(`Pulled ${pullTarget.image}. “${pullTarget.name}” is now available under Add device.`); setPullTarget({ ...pullTarget, available: true }); }
+    catch (reason) { setError(`Could not pull ${pullTarget.image}: ${errorMessage(reason)}`); }
     finally { setBusy(false); }
   }
   async function importFile() {
     if (!file) return;
     setBusy(true); setError(""); setNotice("");
-    try { const appliance = await api.importGns3ApplianceFile(file); setNotice(`Imported “${appliance.name}” definition. Review its image requirements in the appliance library before creating a node template.`); }
+    try { const appliance = await api.importGns3ApplianceFile(file); setNotice(`Imported “${appliance.name}” definition.`); offerDockerPull(appliance); }
     catch (reason) { setError(`Appliance file import is unavailable: ${errorMessage(reason)}`); }
     finally { setBusy(false); }
   }
@@ -73,7 +85,7 @@ export function TemplateWizardPage() {
 
   return <PagesShell active="Preferences"><div className="pages-content">
     <PageTitle eyebrow="TEMPLATE SETUP" title="New template wizard" description="Add a runtime template manually or import an appliance definition from the GNS3 registry or a local file." actions={<Button variant="outline" onClick={() => void navigate({ to: "/preferences" as never })}><ArrowLeft size={15} />Preferences</Button>} />
-    {error && <div role="alert" className="pages-alert">{error}</div>}{notice && <div role="status" className="pages-notice">{notice}<Button variant="ghost" size="sm" onClick={() => void navigate({ to: "/appliances" as never })}>Open appliance library</Button></div>}
+    {error && <div role="alert" className="pages-alert">{error}</div>}{pullTarget && <div className="pages-notice" role="group" aria-label="Docker image for the imported appliance"><span><b>{pullTarget.name}</b> runs <code>{pullTarget.image}</code>. {pullTarget.available ? "The image is already installed, so the template is ready under Add device." : "Docker only needs to pull this image to make the template available."}</span>{!pullTarget.available && <Button size="sm" disabled={busy} onClick={() => void pullImage()}>{busy ? "Pulling…" : "Pull image and add template"}</Button>}</div>}{notice && <div role="status" className="pages-notice">{notice}<Button variant="ghost" size="sm" onClick={() => void navigate({ to: "/appliances" as never })}>Open appliance library</Button></div>}
 
     {mode === "choose" && <div className="wizard-choice-grid"><Card className="wizard-choice" role="button" tabIndex={0} onClick={() => setMode("manual")} onKeyDown={(event) => event.key === "Enter" && setMode("manual")}><div className="wizard-choice-icon"><Check size={19} /></div><h2>Manual template</h2><p>Choose a runtime and configure the fields this controller currently supports.</p><Button onClick={(event) => { event.stopPropagation(); setMode("manual"); }}>Continue <ArrowRight size={15} /></Button></Card><Card className="wizard-choice" role="button" tabIndex={0} onClick={beginInstall} onKeyDown={(event) => event.key === "Enter" && beginInstall()}><div className="wizard-choice-icon"><Download size={19} /></div><h2>Install appliance</h2><p>Import an appliance definition from the GNS3 registry or upload a .gns3a file.</p><Button variant="outline" onClick={(event) => { event.stopPropagation(); beginInstall(); }}>Browse appliances <ArrowRight size={15} /></Button></Card></div>}
 

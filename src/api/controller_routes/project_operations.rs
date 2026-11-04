@@ -159,6 +159,7 @@ pub(super) fn api_node_to_gns3(mut node: Value) -> Value {
             "console_resolution",
             "console_http_port",
             "console_http_path",
+            "console_vnc_port",
             "aux",
             "aux_type",
             "locked",

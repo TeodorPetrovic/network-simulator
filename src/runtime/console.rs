@@ -6,6 +6,20 @@ impl DockerRuntime {
         options: &DockerTemplateOptions,
     ) -> Result<Option<DockerConsoleHost>, RuntimeError> {
         let console_type = options.console_type.as_str();
+        if console_type == "vnc"
+            && let Some(vnc_port) = options.console_vnc_port
+        {
+            return Ok(Some(DockerConsoleHost {
+                console_type: "vnc".to_owned(),
+                console_port: available_tcp_port().await?,
+                http_port: vnc_port,
+                http_path: "/".to_owned(),
+                resolution: options.console_resolution.clone(),
+                display: None,
+                vnc_processes: Vec::new(),
+                http_task: None,
+            }));
+        }
         if console_type == "vnc" {
             return self
                 .start_vnc_console(&options.console_resolution)
@@ -31,10 +45,92 @@ impl DockerRuntime {
         Ok(None)
     }
 
+    async fn start_tigervnc_console(
+        &self,
+        tigervnc: &Path,
+        resolution: &str,
+    ) -> Result<DockerConsoleHost, RuntimeError> {
+        let display = (10..=999)
+            .find(|display| !Path::new(&format!("/tmp/.X11-unix/X{display}")).exists())
+            .ok_or_else(|| {
+                RuntimeError::Unavailable(
+                    "No free X11 display is available for Docker VNC".to_owned(),
+                )
+            })?;
+        let console_port = available_tcp_port().await?;
+        let mut process = Command::new(tigervnc)
+            .args([
+                "-extension",
+                "MIT-SHM",
+                "-geometry",
+                resolution,
+                "-depth",
+                "16",
+                "-interface",
+                "127.0.0.1",
+                "-rfbport",
+                console_port.to_string().as_str(),
+                "-AlwaysShared",
+                "-SecurityTypes",
+                "None",
+                "-desktop",
+                "network-simulator",
+            ])
+            .arg(format!(":{display}"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|error| {
+                RuntimeError::Unavailable(format!(
+                    "Docker VNC console is unsupported: could not start TigerVNC '{}': {error}",
+                    tigervnc.display()
+                ))
+            })?;
+        let socket_path = PathBuf::from(format!("/tmp/.X11-unix/X{display}"));
+        let address = std::net::SocketAddr::from(([127, 0, 0, 1], console_port));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while !(socket_path.exists() && TcpStream::connect(address).await.is_ok()) {
+            if let Some(status) = process.try_wait().map_err(|error| {
+                RuntimeError::Unavailable(format!("Could not inspect TigerVNC startup: {error}"))
+            })? {
+                return Err(RuntimeError::Failed(format!(
+                    "TigerVNC exited during Docker VNC startup ({status})"
+                )));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                let _ = process.start_kill();
+                return Err(RuntimeError::Unavailable(
+                    "Docker VNC console is unsupported: TigerVNC did not open its display or port"
+                        .to_owned(),
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        Ok(DockerConsoleHost {
+            console_type: "vnc".to_owned(),
+            console_port,
+            http_port: 0,
+            http_path: "/".to_owned(),
+            resolution: resolution.to_owned(),
+            display: Some(display),
+            vnc_processes: vec![process],
+            http_task: None,
+        })
+    }
+
     pub(super) async fn start_vnc_console(
         &self,
         resolution: &str,
     ) -> Result<DockerConsoleHost, RuntimeError> {
+        // GNS3 runs one TigerVNC process that is both the X server and the VNC
+        // server; prefer it and fall back to Xvfb plus x11vnc.
+        if let Some(tigervnc) = runtime_program("NETWORK_SIMULATOR_TIGERVNC", "Xtigervnc")
+            .or_else(|| runtime_program("NETWORK_SIMULATOR_TIGERVNC", "Xvnc"))
+        {
+            return self.start_tigervnc_console(&tigervnc, resolution).await;
+        }
         let xvfb = runtime_program("NETWORK_SIMULATOR_XVFB", "Xvfb");
         let x11vnc = runtime_program("NETWORK_SIMULATOR_X11VNC", "x11vnc");
         if let Some(error) = docker_vnc_tools_error(xvfb.is_some(), x11vnc.is_some()) {
@@ -175,7 +271,10 @@ impl DockerRuntime {
         let Some(host) = hosts.get_mut(container_id) else {
             return Ok(());
         };
-        if !matches!(host.console_type.as_str(), "http" | "https") || host.http_task.is_some() {
+        let raw_vnc = host.console_type == "vnc" && host.vnc_processes.is_empty();
+        if !(raw_vnc || matches!(host.console_type.as_str(), "http" | "https"))
+            || host.http_task.is_some()
+        {
             return Ok(());
         }
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, host.console_port))
@@ -201,8 +300,9 @@ impl DockerRuntime {
                 let docker = docker.clone();
                 let container_id = container_id.clone();
                 tokio::spawn(async move {
+                    let rewrite = (!raw_vnc).then_some(console_port);
                     if let Err(error) =
-                        proxy_docker_http(stream, &docker, &container_id, target_port, console_port)
+                        proxy_docker_stream(stream, &docker, &container_id, target_port, rewrite)
                             .await
                     {
                         tracing::debug!(error = %error.message(), %container_id, "Docker web console proxy disconnected");

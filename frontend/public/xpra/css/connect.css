@@ -194,7 +194,7 @@ div.bg-image {
   margin: 0;
   top: 0;
   left: 0;
-  background-image: url(../background.jpg);
+  background-color: #10151d;
   background-position: center center;
   background-repeat: no-repeat;
   background-size: cover;

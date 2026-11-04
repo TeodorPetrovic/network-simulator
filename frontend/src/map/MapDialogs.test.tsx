@@ -49,11 +49,12 @@ describe("project map dialogs", () => {
   it("keeps link appearance available and reports unavailable filters and capture", async () => {
     vi.spyOn(api, "availableLinkFilters").mockRejectedValue(new Error("Request failed (404)"));
     vi.spyOn(api, "startLinkCapture").mockRejectedValue(new Error("Request failed (404)"));
-    const link: Link = { link_id: "l1", nodes: [], link_type: "ethernet" };
-    render(<LinkPropertiesDialog projectId="p1" link={link} nodes={[]} open onOpenChange={() => undefined} onUpdated={() => undefined} />);
+    const link = { link_id: "l1", nodes: [{ node_id: "n1", adapter_number: 0, port_number: 0 }], link_type: "ethernet" } as Link;
+    render(<LinkPropertiesDialog projectId="p1" link={link} nodes={[{ node_id: "n1", status: "started" } as never]} open onOpenChange={() => undefined} onUpdated={() => undefined} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("Link filters are not available");
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Capture" }));
     expect(screen.queryByRole("button", { name: "Start in Web Wireshark" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Start capture" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Start capture" }));
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Packet capture is not available"));
   });
 
@@ -62,14 +63,15 @@ describe("project map dialogs", () => {
     vi.spyOn(api, "settings").mockResolvedValue({ WebWireshark: { enabled: true } });
     vi.spyOn(api, "runtimes").mockResolvedValue({ docker: { available: true, version: "29", error: null } } as any);
     vi.spyOn(api, "startLinkCapture").mockResolvedValue({ link_id: "l1", nodes: [], capturing: true, wireshark: true });
-    render(<LinkPropertiesDialog projectId="p1" link={{ link_id: "l1", nodes: [] }} nodes={[]} open onOpenChange={() => undefined} onUpdated={() => undefined} />);
+    render(<LinkPropertiesDialog projectId="p1" link={{ link_id: "l1", nodes: [{ node_id: "n1", adapter_number: 0, port_number: 0 }] }} nodes={[{ node_id: "n1", status: "started" } as never]} open onOpenChange={() => undefined} onUpdated={() => undefined} />);
+    fireEvent.mouseDown(await screen.findByRole("tab", { name: "Capture" }));
     const checkbox = await screen.findByRole("checkbox", { name: "Web Wireshark" });
     expect(checkbox).toBeEnabled();
     fireEvent.click(checkbox);
     fireEvent.click(screen.getByRole("button", { name: "Start capture" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Starting Web Wireshark… (3-6 s)");
     await waitFor(() => expect(api.startLinkCapture).toHaveBeenCalledWith("p1", "l1", {
-      capture_file_name: "l1.pcap", data_link_type: "DLT_EN10MB", wireshark: true,
+      capture_file_name: "link-l1.pcap", data_link_type: "DLT_EN10MB", wireshark: true,
     }));
   });
 
@@ -88,7 +90,8 @@ describe("project map dialogs", () => {
     vi.spyOn(api, "availableLinkFilters").mockResolvedValue([]);
     vi.spyOn(api, "updateLink").mockResolvedValue(link);
     render(<LinkPropertiesDialog projectId="p1" link={link} nodes={nodes} open onOpenChange={() => undefined} onUpdated={() => undefined} />);
-    fireEvent.change(screen.getAllByLabelText("Text", { selector: "input" })[0]!, { target: { value: "uplink" } });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Endpoint labels" }));
+    fireEvent.change((await screen.findAllByLabelText("Text", { selector: "input" }))[0]!, { target: { value: "uplink" } });
     fireEvent.change(screen.getAllByLabelText("X", { selector: "input" })[0]!, { target: { value: "24" } });
     fireEvent.click(screen.getByRole("button", { name: "Save endpoint labels" }));
     await waitFor(() => expect(api.updateLink).toHaveBeenCalledWith("p1", "l1", {

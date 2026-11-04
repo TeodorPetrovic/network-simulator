@@ -11,7 +11,8 @@ import {
 import { NodeSettingsDialog } from "./NodeSettingsDialog";
 import { DrawingEditorDialog, HelpDialog, InfoDialog, LinkPropertiesDialog, LogConsoleDialog, ScreenshotDialog, SnapshotsDialog, SymbolPickerDialog } from "./map/MapDialogs";
 import type { ScreenshotRequest } from "./map/MapDialogs";
-import { serializeSvgScreenshot, svgScreenshotPng } from "./map/helpers";
+import { popOutWindow } from "./floating";
+import { captureDisplayName, defaultCaptureName, serializeSvgScreenshot, svgScreenshotPng } from "./map/helpers";
 import type { DrawingTool } from "./map/helpers";
 import { TopologyCanvas, scene, maxZoom, messageFor, safeFileName, sameEndpoint, valuesFromDrawing } from "./map/TopologyCanvas";
 import { pngScreenshotAvailable, spreadOverlappingNodes } from "./workspaceUtils";
@@ -21,6 +22,7 @@ import { alignNodes, distributeNodes } from "./map/layout";
 import { WorkspaceSidebar } from "./WorkspaceSidebar";
 import { WorkspaceDocks } from "./WorkspaceDocks";
 import { WorkspaceContextMenu } from "./WorkspaceContextMenu";
+import { NodeConfigFileDialog } from "./NodeConfigFileDialog";
 import { WorkspaceIconToolbar, WorkspaceToolbar } from "./WorkspaceToolbar";
 import { ProjectStatusBar } from "./ProjectStatusBar";
 import { useWorkspaceSelection } from "./useWorkspaceSelection";
@@ -80,7 +82,7 @@ export type SimulatorWorkspaceProps = {
 
 
 export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
-  const [captureViewer, setCaptureViewer] = useState<{ url?: string; downloadUrl?: string; title: string } | null>(null);
+  const [captureViewer, setCaptureViewer] = useState<{ url?: string; downloadUrl?: string; title: string; link?: Link } | null>(null);
   const [wiresharkWindows, setWiresharkWindows] = useState<Array<{ linkId: string; wsPath: string; title: string; key: number }>>([]);
   const openedEvents = useMemo(() => new Set<string>(), [props.project.project_id]);
   useEffect(() => {
@@ -88,7 +90,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
       const path = link.wireshark_ws_path;
       if (link.wireshark === true && typeof path === "string" && !openedEvents.has(link.link_id)) {
         openedEvents.add(link.link_id);
-        setWiresharkWindows((current) => current.some((item) => item.linkId === link.link_id) ? current : [...current, { linkId: link.link_id, wsPath: path, title: `Web Wireshark · ${link.capture_file_name ?? link.link_id}`, key: Date.now() }]);
+        setWiresharkWindows((current) => current.some((item) => item.linkId === link.link_id) ? current : [...current, { linkId: link.link_id, wsPath: path, title: `Web Wireshark · ${captureDisplayName(link, topology.nodes)}`, key: Date.now() }]);
       }
       if (link.capturing === false || link.wireshark === false) setWiresharkWindows((current) => current.filter((item) => item.linkId !== link.link_id));
     }
@@ -97,7 +99,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
     const wsPath = link.wireshark_ws_path ?? link.ws_path;
     if (typeof wsPath !== "string") return;
     if (newTab) { window.open(webWiresharkClientUrl(wsPath), "_blank", "noopener"); return; }
-    setWiresharkWindows((current) => current.some((item) => item.linkId === link.link_id) ? current : [...current, { linkId: link.link_id, wsPath, title: `Web Wireshark · ${link.capture_file_name ?? link.link_id}`, key: Date.now() }]);
+    setWiresharkWindows((current) => current.some((item) => item.linkId === link.link_id) ? current : [...current, { linkId: link.link_id, wsPath, title: `Web Wireshark · ${captureDisplayName(link, topology.nodes)}`, key: Date.now() }]);
   }
   async function restartWebWireshark(link: Link) {
     try { const updated = await api.restartWebWireshark(props.project.project_id, link.link_id); const wsPath = updated.wireshark_ws_path ?? updated.ws_path ?? link.wireshark_ws_path ?? link.ws_path; if (typeof wsPath === "string") setWiresharkWindows((current) => current.map((item) => item.linkId === link.link_id ? { ...item, wsPath, key: Date.now() } : item)); }
@@ -114,14 +116,22 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
       setFeatureMessage("Link reset: filters cleared and link resumed.");
     } catch (reason) { const message = `Could not reset link: ${reason instanceof Error ? reason.message : "request failed"}`; setFeatureMessage(message); props.onApiError?.(message); }
   }
-  async function openCaptureViewer(link: Link, newTab = false) {
+  async function openCaptureViewer(link: Link, newTab = false, popup = false) {
+    if (!link.capturing && !link.capture_file_name) {
+      // Never captured: there is no file to open, so start a capture first (as GNS3 does).
+      try {
+        const started = await api.startLinkCapture(props.project.project_id, link.link_id, { capture_file_name: defaultCaptureName(link, topology.nodes), data_link_type: "DLT_EN10MB" });
+        link = { ...link, ...started, capturing: true };
+        setTopology((current) => ({ ...current, links: current.links.map((item) => item.link_id === link.link_id ? { ...item, ...link } : item) }));
+      } catch (reason) { setFeatureMessage(`Could not start packet capture: ${reason instanceof Error ? reason.message : "request failed"}`); return; }
+    }
     const capturing = Boolean(link.capturing);
     const route = capturing
       ? api.linkCaptureStreamUrl(props.project.project_id, link.link_id)
       : api.linkCaptureFileUrl(props.project.project_id, link.link_id);
     const url = new URL(route, window.location.href);
     if (getAuthToken()) url.searchParams.set("ticket", await api.accessTicket(route));
-    const title = String(link.capture_file_name ?? link.link_id);
+    const title = captureDisplayName(link, topology.nodes);
     const viewer = capturing
       ? { url: url.toString(), title: `Capture · ${title}` }
       : { downloadUrl: url.toString(), title: `Capture · ${title}` };
@@ -129,10 +139,11 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
       const params = new URLSearchParams({ title });
       if (viewer.url) params.set("stream", viewer.url);
       if (viewer.downloadUrl) params.set("download", viewer.downloadUrl);
-      window.open(`/capture?${params.toString()}`, "_blank", "noopener");
+      if (popup) popOutWindow(`/capture?${params.toString()}`);
+      else window.open(`/capture?${params.toString()}`, "_blank", "noopener");
       return;
     }
-    setCaptureViewer(viewer);
+    setCaptureViewer({ ...viewer, link });
   }
   const [view, setView] = useState({ zoom: 1, centerX: 0, centerY: 0 });
   const viewKey = `ns.view.${props.project.project_id}`;
@@ -159,6 +170,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const setServersDockOpen = (open: boolean) => setDockState((current) => ({ ...current, servers: open }));
   useEffect(() => { try { localStorage.setItem("ns.docks", JSON.stringify(dockState)); } catch { /* Storage can be disabled. */ } }, [dockState]);
   const [configureNode, setConfigureNode] = useState<Node | null>(null);
+  const [configFileNode, setConfigFileNode] = useState<Node | null>(null);
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -397,7 +409,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
 
       <div className={`sim-workspace-grid ${!topologyDockOpen && !serversDockOpen ? "is-docks-closed" : ""}`}>
         <WorkspaceSidebar workspace={props} deviceQuery={deviceQuery} setDeviceQuery={setDeviceQuery} groupedTemplates={groupedTemplates} />
-        <WorkspaceDocks workspace={props} topology={topology} topologyOpen={topologyDockOpen} serversOpen={serversDockOpen} onCloseTopology={() => setTopologyDockOpen(false)} onCloseServers={() => setServersDockOpen(false)} selectedLink={selectedLink} onConfigureNode={() => selectedNode && setConfigureNode(selectedNode)} onOpenLinkProperties={() => setLinkPropertiesOpen(true)} onToggleLinkSuspend={(link) => void toggleLinkSuspend(link)} renderNodeContextMenu={(nodeId) => { const node = topology.nodes.find((item) => item.node_id === nodeId); return node ? <WorkspaceContextMenu workspace={props} selectedNode={node} selectedLink={null} selectedDrawing={null} setConfigureNode={setConfigureNode} setSymbolNode={setSymbolNode} toggleNodeIsolation={toggleNodeIsolation} toggleNodeLock={toggleNodeLock} setLinkPropertiesOpen={setLinkPropertiesOpen} toggleLinkSuspend={toggleLinkSuspend} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} /> : null; }} />
+        <WorkspaceDocks workspace={props} topology={topology} topologyOpen={topologyDockOpen} serversOpen={serversDockOpen} onCloseTopology={() => setTopologyDockOpen(false)} onCloseServers={() => setServersDockOpen(false)} selectedLink={selectedLink} onConfigureNode={() => selectedNode && setConfigureNode(selectedNode)} onOpenLinkProperties={() => setLinkPropertiesOpen(true)} onToggleLinkSuspend={(link) => void toggleLinkSuspend(link)} renderNodeContextMenu={(nodeId) => { const node = topology.nodes.find((item) => item.node_id === nodeId); return node ? <WorkspaceContextMenu workspace={props} selectedNode={node} selectedLink={null} selectedDrawing={null} setConfigureNode={setConfigureNode} setConfigNode={setConfigFileNode} setSymbolNode={setSymbolNode} toggleNodeIsolation={toggleNodeIsolation} toggleNodeLock={toggleNodeLock} setLinkPropertiesOpen={setLinkPropertiesOpen} toggleLinkSuspend={toggleLinkSuspend} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} /> : null; }} />
         <Card className="sim-canvas-card">
           <ContextMenu>
             <ContextMenuTrigger asChild>
@@ -457,12 +469,13 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
                 />
               </div>
             </ContextMenuTrigger>
-            <WorkspaceContextMenu workspace={props} selectedNode={selectedNode} selectedLink={selectedLink} selectedDrawing={selectedDrawing} setConfigureNode={setConfigureNode} setSymbolNode={setSymbolNode} toggleNodeIsolation={toggleNodeIsolation} toggleNodeLock={toggleNodeLock} setLinkPropertiesOpen={setLinkPropertiesOpen} toggleLinkSuspend={toggleLinkSuspend} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} onOpenCaptureViewer={openCaptureViewer} onOpenWebWireshark={openWebWireshark} onRestartWebWireshark={restartWebWireshark} onStopCapture={stopLinkCapture} onResetLink={resetLink} />
+            <WorkspaceContextMenu workspace={props} selectedNode={selectedNode} selectedLink={selectedLink} selectedDrawing={selectedDrawing} setConfigureNode={setConfigureNode} setConfigNode={setConfigFileNode} setSymbolNode={setSymbolNode} toggleNodeIsolation={toggleNodeIsolation} toggleNodeLock={toggleNodeLock} setLinkPropertiesOpen={setLinkPropertiesOpen} toggleLinkSuspend={toggleLinkSuspend} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} onOpenCaptureViewer={openCaptureViewer} onOpenWebWireshark={openWebWireshark} onRestartWebWireshark={restartWebWireshark} onStopCapture={stopLinkCapture} onResetLink={resetLink} />
           </ContextMenu>
         </Card>
 
       </div>
       <ProjectStatusBar topology={topology} projectLocked={projectLocked} connecting={props.connecting} linkEndpointCount={props.linkEndpoints.length} pendingDrawing={pendingDrawing} onCancelDrawing={() => setPendingDrawing(null)} connection={props.connection} onOpenLog={() => setLogOpen(true)} errors={logCounts.errors} warnings={logCounts.warnings} resources={<ResourceMonitorPopover resources={props.resources} runtimeInfo={props.runtimeInfo} error={props.resourceError} refreshing={props.refreshingResources} onRefresh={props.onRefreshResources} />} />
+      <NodeConfigFileDialog node={configFileNode} open={configFileNode !== null} onOpenChange={(open) => { if (!open) setConfigFileNode(null); }} onSave={props.onConfigureNode} />
       <NodeSettingsDialog node={configureNode} open={configureNode !== null} onOpenChange={(open) => { if (!open) setConfigureNode(null); }} onSave={props.onConfigureNode} />
       <DrawingEditorDialog tool={drawingEditOpen ? drawingEditTool : drawingTool} open={drawingEditOpen || drawingTool !== null} mode={drawingEditOpen ? "edit" : "create"} initial={drawingEditValues} onOpenChange={(open) => { if (!open) { setDrawingTool(null); setDrawingEditOpen(false); } }} onSave={onDrawingConfigured} />
       <SnapshotsDialog projectId={props.project.project_id} open={snapshotsOpen} onOpenChange={setSnapshotsOpen} onRestored={setTopology} />
@@ -472,7 +485,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
       <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
       <InfoDialog project={props.project} nodeCount={topology.nodes.length} linkCount={topology.links.length} drawingCount={topology.drawings.length} eventCursor={topology.event_cursor} open={infoOpen} onOpenChange={setInfoOpen} />
       <ScreenshotDialog open={screenshotOpen} onOpenChange={setScreenshotOpen} onExport={(request) => void exportScreenshot(request)} pngAvailable={pngScreenshotAvailable()} />
-      {captureViewer&&<CaptureWindow url={captureViewer.url} downloadUrl={captureViewer.downloadUrl} title={captureViewer.title} onClose={()=>setCaptureViewer(null)}/>}
+      {captureViewer&&<CaptureWindow url={captureViewer.url} downloadUrl={captureViewer.downloadUrl} title={captureViewer.title} onClose={()=>setCaptureViewer(null)} onPopOut={captureViewer.link ? ()=>{ void openCaptureViewer(captureViewer.link!, true, true); setCaptureViewer(null); } : undefined}/>}
       {wiresharkWindows.map((item) => <WebWiresharkWindow key={item.key} projectId={props.project.project_id} linkId={item.linkId} wsPath={item.wsPath} title={item.title} onClose={() => setWiresharkWindows((current) => current.filter((window) => window.linkId !== item.linkId))} />)}
     </section>
   );

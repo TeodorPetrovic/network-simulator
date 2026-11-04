@@ -156,3 +156,19 @@ export async function svgScreenshotPng(svgText: string, width: number, height: n
 function escapeXml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[character] ?? character);
 }
+
+/** Human-readable capture name from the link's two endpoints, e.g. "PC1_e0_to_PC2_e0.pcap" (never a bare UUID). */
+export function defaultCaptureName(link: { link_id: string; nodes: LinkEndpoint[] }, nodes: Node[]): string {
+  const parts = link.nodes.map((endpoint) => {
+    const node = nodes.find((item) => item.node_id === endpoint.node_id);
+    return node ? `${node.name}_${endpointName(node, endpoint)}` : "";
+  });
+  const base = parts.every(Boolean) && parts.length === 2 ? parts.join("_to_") : `link-${link.link_id.slice(0, 8)}`;
+  return `${base.replace(/[^A-Za-z0-9._-]+/g, "-")}.pcap`;
+}
+
+/** The link's capture file name, replacing legacy UUID-only names with the readable endpoint name. */
+export function captureDisplayName(link: { link_id: string; nodes: LinkEndpoint[]; capture_file_name?: unknown }, nodes: Node[]): string {
+  const stored = typeof link.capture_file_name === "string" ? link.capture_file_name : "";
+  return stored && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.pcap)?$/i.test(stored) ? stored : defaultCaptureName(link, nodes);
+}

@@ -21,8 +21,8 @@ export function useAppDeviceActions({ projectId, topology, templates, setError, 
       setError("That device template is no longer available. Refresh the device library and try again.");
       return;
     }
-    const index = topology.nodes.length;
-    const position = { x: x ?? -420 + (index % 5) * 180, y: y ?? -220 + Math.floor(index / 5) * 150 };
+    const free = freeGridSlot(topology.nodes);
+    const position = { x: x ?? free.x, y: y ?? free.y };
     const name = template.template_type === "dynamips" ? generatedNodeName(template, topology.nodes, pendingNodeNames).replace(/[^a-zA-Z0-9._-]/g, "") : generatedNodeName(template, topology.nodes, pendingNodeNames);
     pendingNodeNames.add(name);
     try {
@@ -113,4 +113,13 @@ export function useAppDeviceActions({ projectId, topology, templates, setError, 
 
 
   return { addTemplateAt, renameNode, duplicateNode, configureNode, saveTemplateSettings };
+}
+
+/** First grid slot (180x150 cells) with no existing node nearby, so devices added without a drop point never stack. */
+function freeGridSlot(nodes: { x?: number; y?: number }[]) {
+  for (let index = 0; index < 500; index++) {
+    const slot = { x: -420 + (index % 5) * 180, y: -220 + Math.floor(index / 5) * 150 };
+    if (!nodes.some((node) => Math.abs((node.x ?? 0) - slot.x) < 90 && Math.abs((node.y ?? 0) - slot.y) < 75)) return slot;
+  }
+  return { x: -420, y: -220 };
 }

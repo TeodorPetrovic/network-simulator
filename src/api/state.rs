@@ -394,6 +394,117 @@ impl super::AppState {
     /// Reconcile persisted runtime statuses after startup and periodically while
     /// the controller is running. Only runtimes with an inspection hook are
     /// considered; inspection failures leave the stored state untouched.
+    /// Restores the persisted per-adapter UDP ports of QEMU links into the
+    /// in-memory reservation map after a controller restart.
+    pub async fn restore_qemu_adapter_ports(&self) {
+        let qemu_nodes: std::collections::HashSet<String> = match sqlx::query_scalar(
+            "SELECT object_id FROM topology_objects WHERE kind = 'node' AND json_extract(object_json, '$.node_type') = 'qemu'",
+        )
+        .fetch_all(self.store.pool())
+        .await
+        {
+            Ok(ids) => ids.into_iter().collect(),
+            Err(error) => {
+                tracing::error!(%error, "could not load QEMU nodes for adapter port restore");
+                return;
+            }
+        };
+        if qemu_nodes.is_empty() {
+            return;
+        }
+        let rows = match sqlx::query(
+            "SELECT object_json FROM topology_objects WHERE kind = 'link'",
+        )
+        .fetch_all(self.store.pool())
+        .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(%error, "could not load links for QEMU adapter port restore");
+                return;
+            }
+        };
+        for row in rows {
+            let Ok(link) = decode_json(row.get::<String, _>("object_json")) else {
+                continue;
+            };
+            for endpoint in link["nodes"].as_array().into_iter().flatten() {
+                let Some(node_id) = endpoint["node_id"].as_str() else {
+                    continue;
+                };
+                if !qemu_nodes.contains(node_id) {
+                    continue;
+                }
+                let (Some(adapter), Some(local), Some(remote)) = (
+                    endpoint["adapter_number"].as_u64(),
+                    endpoint["runtime_udp_port"].as_u64(),
+                    endpoint["runtime_adapter_port"].as_u64(),
+                ) else {
+                    continue;
+                };
+                let (Ok(adapter), Ok(local), Ok(remote)) = (
+                    u32::try_from(adapter),
+                    u16::try_from(local),
+                    u16::try_from(remote),
+                ) else {
+                    continue;
+                };
+                if let Err(error) =
+                    self.qemu
+                        .restore_adapter_ports(node_id, adapter, (local, remote))
+                {
+                    tracing::warn!(error = %error.message(), %node_id, adapter, "could not restore QEMU adapter ports");
+                }
+            }
+        }
+    }
+
+    /// Clears Web Wireshark link flags that cannot be valid after a controller
+    /// restart because the sessions and feeders were in-memory only.
+    pub async fn reset_stale_web_wireshark(&self) {
+        self.web_wireshark.remove_orphan_containers().await;
+        let rows = match sqlx::query(
+            "SELECT project_id, object_id, object_json FROM topology_objects
+             WHERE kind = 'link' AND json_extract(object_json, '$.wireshark') = 1",
+        )
+        .fetch_all(self.store.pool())
+        .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(%error, "could not load links for Web Wireshark reset");
+                return;
+            }
+        };
+        for row in rows {
+            let project_id: String = row.get("project_id");
+            let link_id: String = row.get("object_id");
+            let Ok(mut link) = decode_json(row.get::<String, _>("object_json")) else {
+                continue;
+            };
+            link["wireshark"] = serde_json::json!(false);
+            link["wireshark_ws_path"] = serde_json::Value::Null;
+            link["ws_path"] = serde_json::Value::Null;
+            let result = async {
+                let mut tx = self.store.pool().begin().await?;
+                sqlx::query(
+                    "UPDATE topology_objects SET object_json = ? WHERE project_id = ? AND kind = 'link' AND object_id = ?",
+                )
+                .bind(link.to_string())
+                .bind(&project_id)
+                .bind(&link_id)
+                .execute(&mut *tx)
+                .await?;
+                Store::append_event(&mut tx, &project_id, "link.updated", &link).await?;
+                tx.commit().await
+            }
+            .await;
+            if let Err(error) = result {
+                tracing::warn!(%error, %project_id, %link_id, "could not reset stale Web Wireshark flag");
+            }
+        }
+    }
+
     pub async fn reconcile_node_statuses(&self) {
         let rows = match sqlx::query(
             "SELECT project_id, object_id, object_json FROM topology_objects

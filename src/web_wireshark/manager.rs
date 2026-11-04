@@ -447,6 +447,27 @@ impl WebWiresharkManager {
         }
         let _ = docker(&["rm", "-f", &Self::container_name(project_id)]).await;
     }
+    /// Web Wireshark sessions live only in this process, so containers left by a
+    /// previous controller run have no session to serve and are removed.
+    pub async fn remove_orphan_containers(&self) {
+        let Ok(names) = docker(&[
+            "ps",
+            "-aq",
+            "--filter",
+            "name=gns3-wireshark-",
+        ])
+        .await
+        else {
+            return;
+        };
+        let ids: Vec<&str> = names.split_whitespace().collect();
+        if ids.is_empty() {
+            return;
+        }
+        let mut args = vec!["rm", "-f"];
+        args.extend(ids);
+        let _ = docker(&args).await;
+    }
     pub async fn container_ip(&self, project_id: &str) -> Result<String, String> {
         let (_, ip) = self.ensure_container(project_id).await?;
         Ok(ip)

@@ -656,7 +656,7 @@
         const port = getintparam("port") || window.location.port;
         const ssl = getboolparam("ssl", https);
         const webtransport = getboolparam("webtransport", false);
-        const path = getstrparam("path", ALLOWED_CHARS + "/") || window.location.pathname;
+        const path = getstrparam("path", ALLOWED_CHARS + "/?=&%") || window.location.pathname;
         const encryption = getstrparam("encryption") || "";
         const key = getstrparam("key") || null;
         const keyboard_layout = getstrparam("keyboard_layout") || null;
@@ -1470,9 +1470,9 @@
 
         client = init_client();
         addEventListener(
-          "unload",
+          "pagehide",
           () => {
-            clog("onunload()");
+            clog("onpagehide()");
             client.close();
           }, {
             capture: true

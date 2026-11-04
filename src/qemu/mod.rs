@@ -179,6 +179,28 @@ impl QemuRuntime {
         Ok(ports[..adapters as usize].to_vec())
     }
 
+    /// Re-reserves the UDP ports a saved link already uses for an adapter, so a
+    /// controller restart does not hand the VM different ports than its links.
+    pub fn restore_adapter_ports(
+        &self,
+        node_id: &str,
+        adapter: u32,
+        pair: (u16, u16),
+    ) -> Result<(), RuntimeError> {
+        self.adapter_udp_ports(node_id, adapter)?;
+        let mut map = self
+            .adapter_ports
+            .lock()
+            .map_err(|_| RuntimeError::Failed("QEMU adapter port map is unavailable".into()))?;
+        let ports = map.entry(node_id.to_owned()).or_default();
+        if ports.len() == adapter as usize {
+            ports.push(pair);
+        } else if let Some(slot) = ports.get_mut(adapter as usize) {
+            *slot = pair;
+        }
+        Ok(())
+    }
+
     pub fn adapter_udp_port_pair(
         &self,
         node_id: &str,

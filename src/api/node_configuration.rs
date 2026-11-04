@@ -39,6 +39,7 @@ pub(super) fn validate_node_configuration_patch(
             "console_resolution",
             "console_http_port",
             "console_http_path",
+            "console_vnc_port",
             "aux_type",
             "custom_adapters",
         ],
@@ -278,6 +279,19 @@ pub(super) fn validate_node_configuration_patch(
                         ApiError::bad_request("console_http_port must be from 1 to 65535")
                     })?;
                 json!(port)
+            }
+            "console_vnc_port" => {
+                if value.is_null() {
+                    json!(null)
+                } else {
+                    let port = value
+                        .as_u64()
+                        .filter(|port| (1..=65535).contains(port))
+                        .ok_or_else(|| {
+                            ApiError::bad_request("console_vnc_port must be from 1 to 65535")
+                        })?;
+                    json!(port)
+                }
             }
             "console_http_path" => {
                 let path = value

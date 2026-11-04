@@ -59,6 +59,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tracing::error!(%error, "could not sync templates from registered images");
     }
     state.reap_orphaned_runtimes();
+    state.restore_qemu_adapter_ports().await;
+    state.reset_stale_web_wireshark().await;
     state.reconcile_node_statuses().await;
     state.open_auto_open_projects().await;
     state.reattach_running_links().await;

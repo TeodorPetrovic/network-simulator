@@ -49,6 +49,7 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
         console_type: String(node.console_type ?? "telnet"),
         console_http_port: String(node.console_http_port ?? 80),
         console_http_path: String(node.console_http_path ?? "/"),
+        console_vnc_port: node.console_vnc_port ? String(node.console_vnc_port) : "",
         aux_type: String(node.aux_type ?? "none"),
         extra_volumes: Array.isArray(node.extra_volumes)
           ? node.extra_volumes.filter((path): path is string => typeof path === "string").join("\n")
@@ -122,6 +123,7 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
       patch.extra_hosts = draft.extra_hosts ?? "";
       patch.extra_volumes = (draft.extra_volumes ?? "").split("\n").map((path) => path.trim()).filter(Boolean);
       patch.console_type = draft.console_type ?? "telnet";
+      patch.console_vnc_port = patch.console_type === "vnc" && String(draft.console_vnc_port ?? "").trim() ? Number(draft.console_vnc_port) : null;
       if (patch.console_type !== "none") {
         patch.console_http_port = Number(draft.console_http_port);
         patch.console_http_path = draft.console_http_path || "/";
@@ -213,7 +215,10 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
             <div className="grid gap-3 sm:grid-cols-2">{field("console_http_port", "HTTP port in the container", "number", undefined, "1")}{field("console_http_path", "HTTP path", "text", "Must begin with a slash.")}</div>
             <Button type="button" variant="outline" className="w-fit" onClick={openHttpConsole}><ExternalLink />Open in new tab</Button>
           </div> : null}
-          {draft.console_type === "vnc" && <p role="status" className="text-sm text-muted-foreground sm:col-span-2">Open the device console from its context menu to use the browser VNC window.</p>}
+          {draft.console_type === "vnc" && <div className="grid gap-2 rounded-md border p-3 sm:col-span-2">
+            <p className="text-sm text-muted-foreground">Open the device console from its context menu to use the browser VNC window. If the container runs its own VNC server, enter its port to connect to it; leave it empty to have the controller start Xvfb and x11vnc for the container.</p>
+            {field("console_vnc_port", "VNC port in the container (optional)", "number", undefined, "1")}
+          </div>}
           {draft.console_type === "none" && <p role="status" className="text-sm text-muted-foreground sm:col-span-2">The controller does not accept Docker console type “none” yet. Select another type to save.</p>}
           {selectField("aux_type", "Auxiliary console type", ["none", "telnet", "ssh"])}
           {draft.aux_type !== "none" && <p role="status" className="text-sm text-muted-foreground sm:col-span-2">When the device is running, open its context menu and choose “Open auxiliary console”.</p>}

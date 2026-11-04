@@ -417,7 +417,7 @@ button, input, textarea, select { font: inherit; }
 .sim-link-hit { stroke: transparent !important; stroke-width: 14px !important; }
 .sim-canvas-empty { fill: var(--muted-foreground); font-size: 14px; text-anchor: middle; }
 .sim-empty-subtitle { fill: oklch(0.64 0.02 255); font-size: 12px; }
-.sim-device-rail { position: relative; z-index: 4; display: flex; min-width: 0; min-height: 0; flex-direction: column; align-items: center; border: 0; border-right: 1px solid var(--border); border-radius: 0; background: oklch(0.995 0.003 250); }
+.sim-device-rail { position: relative; z-index: 12; display: flex; min-width: 0; min-height: 0; flex-direction: column; align-items: center; border: 0; border-right: 1px solid var(--border); border-radius: 0; background: oklch(0.995 0.003 250); }
 .sim-device-rail-buttons, .sim-device-rail-bottom { display: flex; width: 100%; flex-direction: column; align-items: center; gap: 4px; padding: 6px 3px; }
 .sim-device-rail-buttons { border-bottom: 1px solid var(--border); }
 .sim-device-rail-bottom { margin-top: auto; border-top: 1px solid var(--border); }
@@ -558,7 +558,7 @@ button, input, textarea, select { font: inherit; }
 .modal-backdrop { z-index: 60; }
 .marketplace-backdrop { z-index: 70; }
 
-.appliance-manager-page { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; padding: 14px 18px 18px; }
+.appliance-manager-page { display: flex; min-width: 0; min-height: 0; flex: 1; height: 100%; flex-direction: column; overflow: hidden; padding: 14px 18px 18px; }
 .appliance-manager-header { display: flex; min-height: 54px; align-items: center; justify-content: space-between; gap: 16px; padding: 0 2px 12px; }
 .appliance-manager-header h1 { margin-top: 2px; font-size: 20px; font-weight: 650; letter-spacing: -.035em; }
 .appliance-manager-header p { margin-top: 3px; color: var(--muted-foreground); font-size: 11px; }
@@ -711,3 +711,11 @@ button, input, textarea, select { font: inherit; }
 .sim-vnc-screen { min-height: 0; flex: 1; overflow: hidden; }
 .sim-vnc-screen canvas { display: block; }
 @media (max-width: 700px) { .sim-vnc-window { inset: 4vh 3vw; } }
+
+.sim-console-tabs.is-draggable { cursor: grab; touch-action: none; user-select: none; }
+.sim-console-tabs.is-draggable:active { cursor: grabbing; }
+.sim-console-tabs.is-draggable button { cursor: pointer; }
+.sim-console-dock.is-minimized .sim-console-tab-list { display: none; }
+.sim-console-tab-list { scrollbar-width: none; }
+.sim-console-tab-list::-webkit-scrollbar { display: none; }
+.sim-console-dock.is-minimized .sim-console-tabs { justify-content: space-between; }

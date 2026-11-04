@@ -207,6 +207,7 @@ pub(super) fn appliance_runtime_templates(
                 "console_resolution",
                 "console_http_port",
                 "console_http_path",
+                "console_vnc_port",
                 "aux_type",
                 "custom_adapters",
             ] {
