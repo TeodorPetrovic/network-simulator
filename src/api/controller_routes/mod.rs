@@ -38,6 +38,8 @@ use bulk_lifecycle::*;
 mod node_resources;
 use node_resources::*;
 mod images;
+mod gns3_compat;
+use gns3_compat::*;
 pub(crate) use images::is_qemu_image_upload;
 use images::*;
 mod symbols;
@@ -65,6 +67,8 @@ pub(super) fn router() -> Router<AppState> {
             post(duplicate_template),
         )
         .route("/v3/statistics", get(controller_statistics))
+        .route("/v3/reload", post(reload_controller))
+        .route("/v3/shutdown", post(shutdown_controller))
         .route("/v3/notifications", get(controller_notifications))
         .route("/v3/notifications/ws", get(controller_notifications_ws))
         .route("/v3/settings", get(get_settings).put(update_settings))
@@ -175,6 +179,16 @@ pub(super) fn router() -> Router<AppState> {
             get(idlepc_proposals),
         )
         .route("/v3/images", get(list_images))
+        .route("/v3/images/prune", delete(prune_images))
+        .route("/v3/images/qemu/{*image_path}", post(create_qemu_image))
+        .route("/v3/appliances", get(list_appliances))
+        .route("/v3/appliances/{appliance_id}", get(get_appliance))
+        .route("/v3/appliances/{appliance_id}/install", post(install_appliance))
+        .route("/v3/templates/{template_id}/base-configs", get(list_base_configs))
+        .route(
+            "/v3/templates/{template_id}/base-config/{filename}",
+            get(get_base_config).put(put_base_config),
+        )
         .route("/v3/images/upload/{*image_path}", post(upload_image))
         .route(
             "/v3/images/{*image_path}",
@@ -594,3 +608,21 @@ mod stats_and_imports;
 #[cfg(test)]
 #[path = "tests/templates_and_version.rs"]
 mod templates_and_version;
+
+/// `POST /v3/reload`: GNS3 re-reads its configuration file. Settings here are read from
+/// the database on every request, so there is nothing stale to refresh.
+async fn reload_controller() -> StatusCode {
+    StatusCode::NO_CONTENT
+}
+
+/// `POST /v3/shutdown`: answer first, then stop the controller the same way SIGTERM does
+/// so runtimes are shut down by the normal graceful path.
+async fn shutdown_controller() -> StatusCode {
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        tracing::warn!("shutdown requested through the API");
+        // SAFETY: raising a signal on our own pid has no memory-safety implications.
+        unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
+    });
+    StatusCode::NO_CONTENT
+}

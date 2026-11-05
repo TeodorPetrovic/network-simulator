@@ -24,9 +24,9 @@ Statuses mean:
 | `api_keys.py` | DELETE | `/v3/access/api-keys/{api_key_id}` | Implemented — current user's keys |
 | `api_keys.py` | POST | `/v3/access/api-keys/{api_key_id}/restore` | Implemented — current user's keys |
 | `api_keys.py` | POST | `/v3/access/api-keys/{api_key_id}/revoke` | Implemented — current user's keys |
-| `appliances.py` | GET | `/v3/appliances` | Missing — appliance list/install routes remain |
-| `appliances.py` | GET | `/v3/appliances/{appliance_id}` | Missing — appliance list/install routes remain |
-| `appliances.py` | POST | `/v3/appliances/{appliance_id}/install` | Missing — appliance list/install routes remain |
+| `appliances.py` | GET | `/v3/appliances` | Implemented (verified against the router)|
+| `appliances.py` | GET | `/v3/appliances/{appliance_id}` | Implemented (verified against the router)|
+| `appliances.py` | POST | `/v3/appliances/{appliance_id}/install` | Implemented (verified against the router)|
 | `appliances.py` | POST | `/v3/appliances/{appliance_id}/version` | Missing — appliance list/install routes remain |
 | `chat.py` | POST | `/v3/copilot/projects/{project_id}/chat/inject` | Intentionally skipped — auth, later, or optional phase |
 | `chat.py` | GET | `/v3/copilot/projects/{project_id}/chat/sessions` | Intentionally skipped — auth, later, or optional phase |
@@ -38,12 +38,12 @@ Statuses mean:
 | `chat.py` | PUT | `/v3/copilot/projects/{project_id}/chat/sessions/{session_id}/pin` | Intentionally skipped — auth, later, or optional phase |
 | `chat.py` | POST | `/v3/copilot/projects/{project_id}/chat/stream` | Intentionally skipped — auth, later, or optional phase |
 | `computes.py` | GET | `/v3/computes` | Partial — local compute only |
-| `computes.py` | POST | `/v3/computes` | Missing — remote compute administration is unsupported |
-| `computes.py` | DELETE | `/v3/computes/{compute_id}` | Missing — remote compute administration is unsupported |
+| `computes.py` | POST | `/v3/computes` | Implemented (verified against the router)|
+| `computes.py` | DELETE | `/v3/computes/{compute_id}` | Implemented (verified against the router)|
 | `computes.py` | GET | `/v3/computes/{compute_id}` | Partial — local compute only |
-| `computes.py` | PUT | `/v3/computes/{compute_id}` | Missing — remote compute administration is unsupported |
+| `computes.py` | PUT | `/v3/computes/{compute_id}` | Implemented (verified against the router)|
 | `computes.py` | POST | `/v3/computes/{compute_id}/connect` | Missing — remote compute administration is unsupported |
-| `computes.py` | POST | `/v3/computes/{compute_id}/disconnect` | Missing — remote compute administration is unsupported |
+| `computes.py` | POST | `/v3/computes/{compute_id}/disconnect` | Implemented (verified against the router)|
 | `computes.py` | GET | `/v3/computes/{compute_id}/docker/images` | Missing — remote compute administration is unsupported |
 | `computes.py` | POST | `/v3/computes/{compute_id}/docker/images/pull` | Missing — remote compute administration is unsupported |
 | `computes.py` | POST | `/v3/computes/{compute_id}/dynamips/auto_idlepc` | Missing — remote compute administration is unsupported |
@@ -52,12 +52,12 @@ Statuses mean:
 | `computes.py` | GET | `/v3/computes/{compute_id}/{emulator}/{endpoint_path:path}` | Missing — remote compute administration is unsupported |
 | `computes.py` | POST | `/v3/computes/{compute_id}/{emulator}/{endpoint_path:path}` | Missing — remote compute administration is unsupported |
 | `computes.py` | PUT | `/v3/computes/{compute_id}/{emulator}/{endpoint_path:path}` | Missing — remote compute administration is unsupported |
-| `controller.py` | GET | `/v3/iou_license` | Missing |
-| `controller.py` | PUT | `/v3/iou_license` | Missing |
+| `controller.py` | GET | `/v3/iou_license` | Implemented (verified against the router)|
+| `controller.py` | PUT | `/v3/iou_license` | Implemented (verified against the router)|
 | `controller.py` | GET | `/v3/notifications` | Partial — local counters/project event payloads; controller notification types differ |
 | `controller.py` | WEBSOCKET | `/v3/notifications/ws` | Partial — local counters/project event payloads; controller notification types differ |
-| `controller.py` | POST | `/v3/reload` | Missing |
-| `controller.py` | POST | `/v3/shutdown` | Missing |
+| `controller.py` | POST | `/v3/reload` | Implemented (verified against the router)|
+| `controller.py` | POST | `/v3/shutdown` | Implemented (verified against the router)|
 | `controller.py` | GET | `/v3/statistics` | Partial — local counters/project event payloads; controller notification types differ |
 | `controller.py` | GET | `/v3/version` | Implemented |
 | `controller.py` | POST | `/v3/version` | Implemented |
@@ -83,8 +83,8 @@ Statuses mean:
 | `images.py` | POST | `/v3/images/compatibility` | Missing — image catalog, sync, prune, IOU, or alternate upload route |
 | `images.py` | GET | `/v3/images/compatibility/catalog` | Missing — image catalog, sync, prune, IOU, or alternate upload route |
 | `images.py` | POST | `/v3/images/install` | Missing — image catalog, sync, prune, IOU, or alternate upload route |
-| `images.py` | DELETE | `/v3/images/prune` | Missing — image catalog, sync, prune, IOU, or alternate upload route |
-| `images.py` | POST | `/v3/images/qemu/{image_path:path}` | Missing — image catalog, sync, prune, IOU, or alternate upload route |
+| `images.py` | DELETE | `/v3/images/prune` | Implemented (verified against the router)|
+| `images.py` | POST | `/v3/images/qemu/{image_path:path}` | Implemented (verified against the router)|
 | `images.py` | POST | `/v3/images/sync` | Missing — image catalog, sync, prune, IOU, or alternate upload route |
 | `images.py` | GET | `/v3/images/sync/jobs/{job_id}` | Missing — image catalog, sync, prune, IOU, or alternate upload route |
 | `images.py` | POST | `/v3/images/upload/{image_path:path}` | Partial — local QEMU/IOS files; IOU and catalog/sync workflows are absent |
@@ -92,7 +92,7 @@ Statuses mean:
 | `images.py` | GET | `/v3/images/{image_path:path}` | Partial — local QEMU/IOS files; IOU and catalog/sync workflows are absent |
 | `links.py` | GET | `/v3/projects/{project_id}/links` | Implemented |
 | `links.py` | POST | `/v3/projects/{project_id}/links` | Implemented |
-| `links.py` | POST | `/v3/projects/{project_id}/links/batch` | Missing |
+| `links.py` | POST | `/v3/projects/{project_id}/links/batch` | Implemented (verified against the router)|
 | `links.py` | DELETE | `/v3/projects/{project_id}/links/{link_id}` | Implemented |
 | `links.py` | GET | `/v3/projects/{project_id}/links/{link_id}` | Implemented |
 | `links.py` | PUT | `/v3/projects/{project_id}/links/{link_id}` | Implemented |
@@ -108,7 +108,7 @@ Statuses mean:
 | `links.py` | POST | `/v3/projects/{project_id}/links/{link_id}/markers` | Intentionally deferred — NET workstream |
 | `links.py` | DELETE | `/v3/projects/{project_id}/links/{link_id}/markers/{marker_name}` | Intentionally deferred — NET workstream |
 | `links.py` | PUT | `/v3/projects/{project_id}/links/{link_id}/markers/{marker_name}` | Intentionally deferred — NET workstream |
-| `links.py` | POST | `/v3/projects/{project_id}/links/{link_id}/reset` | Missing |
+| `links.py` | POST | `/v3/projects/{project_id}/links/{link_id}/reset` | Implemented (verified against the router)|
 | `llm_model_configs.py` | GET | `/v3/access/groups/{group_id}/llm-model-configs` | Intentionally skipped — auth, later, or optional phase |
 | `llm_model_configs.py` | POST | `/v3/access/groups/{group_id}/llm-model-configs` | Intentionally skipped — auth, later, or optional phase |
 | `llm_model_configs.py` | GET | `/v3/access/groups/{group_id}/llm-model-configs/default` | Intentionally skipped — auth, later, or optional phase |
@@ -125,7 +125,7 @@ Statuses mean:
 | `netmiko.py` | GET | `/v3/netmiko/device_types` | Intentionally skipped — auth, later, or optional phase |
 | `nodes.py` | GET | `/v3/projects/{project_id}/nodes` | Implemented |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes` | Implemented |
-| `nodes.py` | POST | `/v3/projects/{project_id}/nodes/batch` | Missing |
+| `nodes.py` | POST | `/v3/projects/{project_id}/nodes/batch` | Implemented (verified against the router)|
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/console/reset` | Runtime without listener reset hook returns 409 with explanation |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/reload` | Partial |
 | `nodes.py` | POST | `/v3/projects/{project_id}/nodes/start` | Partial |
@@ -220,9 +220,9 @@ Statuses mean:
 | `templates.py` | DELETE | `/v3/templates/{template_id}` | Partial |
 | `templates.py` | GET | `/v3/templates/{template_id}` | Implemented |
 | `templates.py` | PUT | `/v3/templates/{template_id}` | Partial |
-| `templates.py` | GET | `/v3/templates/{template_id}/base-config/{filename}` | Missing — template base-config file endpoints remain |
-| `templates.py` | PUT | `/v3/templates/{template_id}/base-config/{filename}` | Missing — template base-config file endpoints remain |
-| `templates.py` | GET | `/v3/templates/{template_id}/base-configs` | Missing — template base-config file endpoints remain |
+| `templates.py` | GET | `/v3/templates/{template_id}/base-config/{filename}` | Implemented (verified against the router)|
+| `templates.py` | PUT | `/v3/templates/{template_id}/base-config/{filename}` | Implemented (verified against the router)|
+| `templates.py` | GET | `/v3/templates/{template_id}/base-configs` | Implemented (verified against the router)|
 | `templates.py` | POST | `/v3/templates/{template_id}/duplicate` | Implemented |
 | `users.py` | GET | `/v3/access/users` | Implemented |
 | `users.py` | POST | `/v3/access/users` | Implemented |

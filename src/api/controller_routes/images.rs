@@ -138,7 +138,7 @@ fn can_create_template(state: &AppState, filename: &str, md5: &str) -> bool {
         .is_ok_and(|appliances| appliance_image_matches(&appliances, filename, md5))
 }
 
-fn safe_upload_relative_path(value: &str) -> Result<PathBuf, ApiError> {
+pub(super) fn safe_upload_relative_path(value: &str) -> Result<PathBuf, ApiError> {
     let path = Path::new(value);
     if path.is_absolute()
         || path
@@ -152,7 +152,7 @@ fn safe_upload_relative_path(value: &str) -> Result<PathBuf, ApiError> {
     Ok(path.to_path_buf())
 }
 
-async fn prepare_nested_destination(root: &str, relative: &Path) -> Result<PathBuf, ApiError> {
+pub(super) async fn prepare_nested_destination(root: &str, relative: &Path) -> Result<PathBuf, ApiError> {
     let root = tokio::fs::canonicalize(root)
         .await
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

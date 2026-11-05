@@ -280,6 +280,10 @@ fn router_with_client_dir(state: AppState, client_dir: &FsPath) -> Router {
                 .delete(link_capture::delete_link),
         )
         .route(
+            "/v3/projects/{project_id}/links/{link_id}/reset",
+            post(link_details::reset_link),
+        )
+        .route(
             "/v3/projects/{project_id}/links/{link_id}/available_filters",
             get(link_details::available_link_filters),
         )

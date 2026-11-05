@@ -272,3 +272,38 @@ pub(super) async fn available_link_filters(
         json!({ "type": "bpf", "name": "Berkeley Packet Filter (BPF)", "description": "Drop packets matching a BPF expression.", "parameters": [{"name":"Filters","type":"text"}] }),
     ]))
 }
+
+/// `POST .../links/{link_id}/reset`: tear down and rebuild the runtime plumbing of
+/// every running endpoint, as GNS3 does to recover a wedged link.
+pub(super) async fn reset_link(
+    State(state): State<AppState>,
+    Path((project_id, link_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    let project_id = project_id.to_string();
+    let link_id = link_id.to_string();
+    let _project_lock = state.lock_project_operations(&project_id).await;
+    let link = get_topology_object(state.store.pool(), &project_id, "link", &link_id)
+        .await?
+        .0;
+    let runtime_endpoints = link_runtime_endpoints(state.store.pool(), &project_id, &link).await?;
+    let mut live = Vec::new();
+    for endpoint in link["nodes"].as_array().into_iter().flatten() {
+        let Some(runtime_endpoint) = runtime_endpoints
+            .iter()
+            .find(|candidate| candidate["node_id"].as_str() == endpoint["node_id"].as_str())
+        else {
+            continue;
+        };
+        if runtime_endpoint_status(&state, &project_id, runtime_endpoint).await? == "stopped" {
+            continue;
+        }
+        live.push((endpoint.clone(), runtime_endpoint.clone()));
+    }
+    for (endpoint, runtime_endpoint) in &live {
+        detach_runtime_link_endpoint(&state, &project_id, endpoint, runtime_endpoint).await?;
+    }
+    for (endpoint, runtime_endpoint) in &live {
+        attach_runtime_link_endpoint(&state, &project_id, &link, endpoint, runtime_endpoint).await?;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}

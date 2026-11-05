@@ -341,6 +341,13 @@ pub const ROUTE_RULES_EXTRA: &[RouteRule] = rules![
         RouteClass::Privilege("Link.Allocate")
     ),
     (
+        "POST",
+        "/projects/{project_id}/links/{link_id}/reset",
+        RouteClass::Privilege("Link.Modify")
+    ),
+    ("POST", "/reload", RouteClass::Privilege("Server.Modify")),
+    ("POST", "/shutdown", RouteClass::Privilege("Server.Modify")),
+    (
         "GET",
         "/projects/{project_id}/links/{link_id}/available_filters",
         RouteClass::Privilege("Link.Audit")
@@ -441,6 +448,14 @@ pub const ROUTE_RULES_EXTRA: &[RouteRule] = rules![
         RouteClass::Privilege("Node.Console")
     ),
     ("GET", "/images", RouteClass::Privilege("Image.Audit")),
+    ("DELETE", "/images/prune", RouteClass::Privilege("Image.Allocate")),
+    ("POST", "/images/qemu/{*image_path}", RouteClass::Privilege("Image.Allocate")),
+    ("GET", "/appliances", RouteClass::Privilege("Appliance.Audit")),
+    ("GET", "/appliances/{appliance_id}", RouteClass::Privilege("Appliance.Audit")),
+    ("POST", "/appliances/{appliance_id}/install", RouteClass::Privilege("Appliance.Allocate")),
+    ("GET", "/templates/{template_id}/base-configs", RouteClass::Privilege("Template.Audit")),
+    ("GET", "/templates/{template_id}/base-config/{filename}", RouteClass::Privilege("Template.Audit")),
+    ("PUT", "/templates/{template_id}/base-config/{filename}", RouteClass::Privilege("Template.Modify")),
     (
         "POST",
         "/images/upload/{*image_path}",

@@ -38,4 +38,10 @@ test("VPCS behind a NAT node gets DHCP and reaches the internet", { skip: !hasNa
   await waitFor(() => /VPCS>/.test(out), { timeout: 15000, label: "VPCS prompt" });
   await run("dhcp", /IP 192\.168\.\d+\.\d+\/\d+ GW/, 20000);
   await run("ping 8.8.8.8 -c 2", /bytes from 8\.8\.8\.8 icmp_seq=2/, 20000);
+
+  // Resetting a running link rebuilds its plumbing; traffic must still flow afterwards.
+  const reset = await server.api("POST", `/projects/${pid}/links/${link.json.link_id}/reset`, {});
+  assert.equal(reset.status, 204, JSON.stringify(reset.json));
+  await run("ping 8.8.8.8 -c 2", /bytes from 8\.8\.8\.8 icmp_seq=2/, 30000);
+  assert.equal((await server.api("POST", "/reload", {})).status, 204);
 });

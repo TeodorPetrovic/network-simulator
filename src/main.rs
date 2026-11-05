@@ -95,7 +95,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 async fn shutdown_signal() {
-    if let Err(error) = tokio::signal::ctrl_c().await {
-        tracing::error!(%error, "failed to listen for shutdown signal");
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut terminate = match signal(SignalKind::terminate()) {
+        Ok(signal) => signal,
+        Err(error) => {
+            tracing::error!(%error, "failed to listen for SIGTERM");
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        }
+    };
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => {
+            if let Err(error) = result {
+                tracing::error!(%error, "failed to listen for shutdown signal");
+            }
+        }
+        _ = terminate.recv() => {}
     }
 }

@@ -27,14 +27,14 @@ function freePort() {
 /** Start an isolated simulator (loopback => auth off, temp DB) and return {base, api, stop}. */
 export const freePortForTests = () => freePort();
 
-export async function startServer() {
+export async function startServer({ env = {} } = {}) {
   const bin = process.env.E2E_BINARY ?? join(root, "target/debug/network-simulator");
   if (!existsSync(bin)) throw new Error(`missing ${bin}; run cargo build first`);
   const dir = mkdtempSync(join(tmpdir(), "ns-e2e-"));
   const port = await freePort();
   const child = spawn(bin, [], {
     cwd: root,
-    env: { ...process.env, NETWORK_SIMULATOR_BIND: `127.0.0.1:${port}`, NETWORK_SIMULATOR_DB: join(dir, "t.sqlite") },
+    env: { ...process.env, NETWORK_SIMULATOR_BIND: `127.0.0.1:${port}`, NETWORK_SIMULATOR_DB: join(dir, "t.sqlite"), ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let log = "";
