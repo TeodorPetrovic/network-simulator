@@ -65,10 +65,10 @@ describe("project map helpers", () => {
     expect(() => drawingSvg("image", { width: 40, height: 30, imageDataUrl: "https://example.invalid/image.svg" })).toThrow("Choose a PNG");
   });
 
-  it("moves a drawing to the requested z-order and renumbers the stack", () => {
+  it("sends a drawing above all devices (front) or beneath everything (back)", () => {
     const drawings = [{ drawing_id: "a", z_index: 0 }, { drawing_id: "b", z_index: 1 }, { drawing_id: "c", z_index: 2 }];
-    expect(reorderDrawings(drawings, "a", "front").map((drawing) => drawing.drawing_id)).toEqual(["b", "c", "a"]);
-    expect(reorderDrawings(drawings, "c", "back").map((drawing) => drawing.drawing_id)).toEqual(["c", "a", "b"]);
+    expect(reorderDrawings(drawings, "a", "front")).toEqual([{ drawing_id: "a", z_index: 1001 }]);
+    expect(reorderDrawings(drawings, "c", "back")).toEqual([{ drawing_id: "c", z_index: -1 }]);
   });
 
   it("selects nodes intersecting a drag box", () => {

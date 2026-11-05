@@ -11,7 +11,7 @@ use axum::{
         Path, Query, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::{Request, StatusCode},
+    http::{HeaderMap, Request, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{any, get, post, put},
@@ -37,6 +37,10 @@ use uuid::Uuid;
 pub(crate) mod auth;
 #[path = "controller_routes/mod.rs"]
 mod controller_routes;
+mod copilot;
+mod copilot_llm;
+mod mcp;
+mod mcp_tools;
 
 use crate::{
     builtin::BuiltinRuntime,
@@ -238,6 +242,10 @@ fn router_with_client_dir(state: AppState, client_dir: &FsPath) -> Router {
             put(node_handlers::update_node_configuration),
         )
         .route(
+            "/v3/projects/{project_id}/nodes/{node_id}/config/export",
+            post(consoles::export_node_config),
+        )
+        .route(
             "/v3/projects/{project_id}/nodes/{node_id}/start",
             post(node_lifecycle::start_node),
         )
@@ -353,6 +361,12 @@ fn router_with_client_dir(state: AppState, client_dir: &FsPath) -> Router {
             "/v3/compute/projects/{project_id}/docker/nodes/{node_id}/vnc/ws",
             get(consoles::docker_vnc),
         )
+        .route("/v3/mcp", get(mcp::mcp_get).post(mcp::mcp_post).delete(mcp::mcp_delete))
+        .route("/v3/copilot/llm-configs", get(copilot::list_configs).post(copilot::create_config))
+        .route("/v3/copilot/llm-configs/{config_id}", put(copilot::update_config).delete(copilot::delete_config))
+        .route("/v3/copilot/projects/{project_id}/chat/stream", post(copilot::chat_stream))
+        .route("/v3/copilot/projects/{project_id}/chat/sessions", get(copilot::list_sessions))
+        .route("/v3/copilot/projects/{project_id}/chat/sessions/{session_id}", get(copilot::session_history).delete(copilot::delete_session).patch(copilot::update_session))
         .route("/v3", any(|| async { StatusCode::NOT_FOUND }))
         .route("/v3/{*path}", any(|| async { StatusCode::NOT_FOUND }))
         .merge(spa_fallback_router(client_dir))

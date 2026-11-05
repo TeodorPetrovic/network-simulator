@@ -1,4 +1,4 @@
-import { Activity, FileText, Image, Layers, Lock, Pause, Pencil, Play, Plus, Power, Settings2, Terminal, Trash2, Unlock } from "lucide-react";
+import { Activity, AlignCenterHorizontal, AlignCenterVertical, AlignHorizontalDistributeCenter, AlignHorizontalJustifyEnd, AlignHorizontalJustifyStart, AlignVerticalDistributeCenter, AlignVerticalJustifyEnd, AlignVerticalJustifyStart, FileText, Image, Layers, Lock, Move, Pause, Pencil, Play, Plus, Power, Settings2, Terminal, Trash2, Unlock } from "lucide-react";
 import type { Link, Node, TopologySnapshot } from "./api";
 import type { SimulatorWorkspaceProps } from "./SimulatorWorkspace";
 import type { DrawingTool } from "./map/helpers";
@@ -7,14 +7,17 @@ import type { LifecycleAction } from "./lifecycle";
 import { availableInterfacesForNode, endpointName, interfacesForNode } from "./map/helpers";
 import { configFieldForNode } from "./NodeConfigFileDialog";
 import { nodeHasAuxConsole } from "./map/TopologyCanvas";
-import { ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator } from "@/components/ui/context-menu";
+import { ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger } from "@/components/ui/context-menu";
 
 type Props = {
   workspace: SimulatorWorkspaceProps; selectedNode: Node | null | undefined; selectedLink: Link | null | undefined;
+  selectedNodeIds?: string[]; projectLocked?: boolean;
+  arrangeSelection?: (mode: "left" | "right" | "top" | "bottom" | "horizontal" | "vertical" | "distribute-horizontal" | "distribute-vertical") => void;
   selectedDrawing: TopologySnapshot["drawings"][number] | null; setConfigureNode: (node: Node) => void; setConfigNode: (node: Node) => void; setSymbolNode: (node: Node) => void;
   toggleNodeIsolation: (node: Node) => void; toggleNodeLock: (node: Node) => void; setLinkPropertiesOpen: (open: boolean) => void;
   toggleLinkSuspend: (link: Link) => void; setDrawingEditTool: (tool: DrawingTool | null) => void; setDrawingEditValues: (values: { width: number; height: number; stroke: string; fill: string; strokeWidth: number; text: string; imageDataUrl?: string } | null) => void;
   onOpenCaptureViewer?: (link: Link, newTab?: boolean) => void;
+  onExportNodeConfig?: (node: Node) => void;
   onOpenWebWireshark?: (link: Link, newTab?: boolean) => void;
   onRestartWebWireshark?: (link: Link) => void;
   onStopCapture?: (link: Link) => void;
@@ -32,7 +35,9 @@ function canShowNodeLifecycle(node: Node, action: LifecycleAction) {
   return canApplyLifecycle(node, action);
 }
 
-export function WorkspaceContextMenu({ workspace: props, selectedNode, selectedLink, selectedDrawing, setConfigureNode, setConfigNode, setSymbolNode, toggleNodeIsolation, toggleNodeLock, setLinkPropertiesOpen, toggleLinkSuspend, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, onOpenCaptureViewer, onOpenWebWireshark, onRestartWebWireshark, onStopCapture, onResetLink }: Props) {
+export function WorkspaceContextMenu({ workspace: props, selectedNode, selectedLink, selectedDrawing, selectedNodeIds = [], projectLocked = false, arrangeSelection = () => {}, setConfigureNode, setConfigNode, setSymbolNode, toggleNodeIsolation, toggleNodeLock, setLinkPropertiesOpen, toggleLinkSuspend, setDrawingEditTool, setDrawingEditValues, valuesFromDrawing, setDrawingEditOpen, changeDrawingOrder, removeDrawing, onExportNodeConfig, onOpenCaptureViewer, onOpenWebWireshark, onRestartWebWireshark, onStopCapture, onResetLink }: Props) {
+  const arrangeableCount = (props.topology.nodes ?? []).filter((node) => selectedNodeIds.includes(node.node_id) && !node.locked).length;
+  const canArrange = !projectLocked && arrangeableCount >= 2;
   if (props.connecting && selectedNode) {
     const ports = interfacesForNode(selectedNode);
     const available = new Set(availableInterfacesForNode(selectedNode, props.topology.links).map((port) => `${port.adapter_number}:${port.port_number}`));
@@ -52,9 +57,24 @@ export function WorkspaceContextMenu({ workspace: props, selectedNode, selectedL
                 {canShowNodeLifecycle(selectedNode, "reload") && <ContextMenuItem onSelect={() => props.onNodeLifecycle(selectedNode.node_id, "reload")}><Activity />Reload device</ContextMenuItem>}
                 {selectedNode.status === "started" && ["qemu", "docker", "vpcs", "dynamips"].includes(selectedNode.node_type ?? "") && selectedNode.console_type !== "none" && <ContextMenuItem onSelect={() => props.onOpenConsole(selectedNode)}><Terminal />Open console</ContextMenuItem>}
                 {selectedNode.status === "started" && ["qemu", "docker", "vpcs", "dynamips"].includes(selectedNode.node_type ?? "") && nodeHasAuxConsole(selectedNode) && <ContextMenuItem onSelect={() => props.onOpenConsole(selectedNode, true)}><Terminal />Open auxiliary console</ContextMenuItem>}
+                <ContextMenuSub>
+                  <ContextMenuSubTrigger><Move />Arrange selected</ContextMenuSubTrigger>
+                  <ContextMenuSubContent className="w-56">
+                    <ContextMenuItem disabled={!canArrange} onSelect={() => arrangeSelection("left")}><AlignHorizontalJustifyStart />Align left</ContextMenuItem>
+                    <ContextMenuItem disabled={!canArrange} onSelect={() => arrangeSelection("right")}><AlignHorizontalJustifyEnd />Align right</ContextMenuItem>
+                    <ContextMenuItem disabled={!canArrange} onSelect={() => arrangeSelection("top")}><AlignVerticalJustifyStart />Align top</ContextMenuItem>
+                    <ContextMenuItem disabled={!canArrange} onSelect={() => arrangeSelection("bottom")}><AlignVerticalJustifyEnd />Align bottom</ContextMenuItem>
+                    <ContextMenuItem disabled={!canArrange} onSelect={() => arrangeSelection("horizontal")}><AlignCenterHorizontal />Align horizontal centers</ContextMenuItem>
+                    <ContextMenuItem disabled={!canArrange} onSelect={() => arrangeSelection("vertical")}><AlignCenterVertical />Align vertical centers</ContextMenuItem>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem disabled={!canArrange || arrangeableCount < 3} onSelect={() => arrangeSelection("distribute-horizontal")}><AlignHorizontalDistributeCenter />Distribute horizontally</ContextMenuItem>
+                    <ContextMenuItem disabled={!canArrange || arrangeableCount < 3} onSelect={() => arrangeSelection("distribute-vertical")}><AlignVerticalDistributeCenter />Distribute vertically</ContextMenuItem>
+                  </ContextMenuSubContent>
+                </ContextMenuSub>
                 <ContextMenuItem onSelect={() => { document.querySelector<HTMLButtonElement>("[data-tab=topology]")?.click(); window.setTimeout(() => document.querySelector<HTMLInputElement>("[data-rename-node]")?.focus(), 0); }}><Pencil />Edit device name</ContextMenuItem>
                 {["qemu", "docker", "vpcs", "dynamips", "iou", "ethernet_switch", "ethernet_hub", "hub", "cloud", "nat"].includes(selectedNode.node_type ?? "") && <ContextMenuItem onSelect={() => setConfigureNode(selectedNode)}><Settings2 />Configure device</ContextMenuItem>}
                 {configFieldForNode(selectedNode) && <ContextMenuItem onSelect={() => setConfigNode(selectedNode)}><FileText />Edit config</ContextMenuItem>}
+                {selectedNode.node_type === "qemu" && <ContextMenuItem disabled={selectedNode.status !== "started"} onSelect={() => onExportNodeConfig?.(selectedNode)}><FileText />Export config…</ContextMenuItem>}
                 <ContextMenuItem onSelect={() => setSymbolNode(selectedNode)}><Image />Change symbol</ContextMenuItem>
                 <ContextMenuItem onSelect={() => void toggleNodeIsolation(selectedNode)}>{selectedNode.isolated ? <Unlock /> : <Lock />}{selectedNode.isolated ? "Unisolate device" : "Isolate device"}</ContextMenuItem>
                 <ContextMenuItem onSelect={() => void toggleNodeLock(selectedNode)}>{selectedNode.locked ? <Unlock /> : <Lock />}{selectedNode.locked ? "Unlock device" : "Lock device"}</ContextMenuItem>

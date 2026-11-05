@@ -21,6 +21,8 @@ export const linksApi = {
     request<void>(`/projects/${projectId}/links/${linkId}/capture/stop`, jsonBody({})),
     restartWebWireshark: (projectId: string, linkId: string) =>
     request<Link>(`/projects/${projectId}/links/${linkId}/capture/wireshark/restart`, jsonBody({})),
+    exportNodeConfig: (projectId: string, nodeId: string, command?: string) =>
+    request<{ command: string; config: string }>(`/projects/${projectId}/nodes/${nodeId}/config/export`, jsonBody(command ? { command } : {})),
     linkCaptureStreamUrl: (projectId: string, linkId: string) =>
     `/v3/projects/${projectId}/links/${linkId}/capture/stream` as const,
     linkCaptureFileUrl: (projectId: string, linkId: string) =>

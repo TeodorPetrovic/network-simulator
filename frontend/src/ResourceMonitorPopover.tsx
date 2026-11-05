@@ -49,7 +49,7 @@ export function ResourceMonitorPopover({
           <Card className="grid grid-cols-2 gap-3 p-3 shadow-none">
             <div><p className="text-xs text-muted-foreground">Controller RSS</p><p className="mt-1 text-sm font-semibold">{resources.controller.memory_rss_bytes == null ? "Unavailable" : formatBytes(resources.controller.memory_rss_bytes)}</p></div>
             <div><p className="text-xs text-muted-foreground">Controller threads</p><p className="mt-1 text-sm font-semibold">{resources.controller.thread_count ?? "Unavailable"}</p></div>
-            <div className="col-span-2"><p className="text-xs text-muted-foreground">System load · 1 / 5 / 15 min</p><p className="mt-1 font-mono text-xs">{resources.host.load_average?.map((value) => value.toFixed(2)).join(" · ") ?? "Unavailable"}</p></div>
+            <div className="col-span-2"><p className="text-xs text-muted-foreground">System load · 1 / 5 / 15 min</p><p className="mt-1 text-xs tabular-nums">{resources.host.load_average?.map((value) => value.toFixed(2)).join(" · ") ?? "Unavailable"}</p></div>
           </Card>
           {resources.sampled_at_unix_ms && <p className="text-right text-[11px] text-muted-foreground">Sampled {new Date(resources.sampled_at_unix_ms).toLocaleTimeString()}</p>}
         </> : <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">{error || "Collecting host metrics…"}</p>}

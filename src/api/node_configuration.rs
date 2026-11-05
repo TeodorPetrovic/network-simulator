@@ -21,7 +21,7 @@ pub(super) fn validate_node_configuration_patch(
             "hda_disk_interface",
             "boot_priority",
             "hda_disk_image", "hdb_disk_image", "hdc_disk_image", "hdd_disk_image", "cdrom_image",
-            "hdb_disk_interface", "hdc_disk_interface", "hdd_disk_interface", "console_type", "process_priority", "options", "maxcpus",
+            "hdb_disk_interface", "hdc_disk_interface", "hdd_disk_interface", "console_type", "process_priority", "options", "maxcpus", "config_export_command", "config_export_username", "config_export_password",
         ],
         "docker" => &[
             "name",
@@ -188,6 +188,8 @@ pub(super) fn validate_node_configuration_patch(
                 let priority = value.as_str().filter(|v| matches!(*v, "low" | "normal" | "high")).ok_or_else(|| ApiError::bad_request("unsupported QEMU process_priority"))?;
                 json!(priority)
             }
+            "config_export_username" | "config_export_password" => json!(value.as_str().filter(|v| v.len() <= 256 && !v.contains(['\r', '\n'])).ok_or_else(|| ApiError::bad_request(format!("{key} must be a single line")))?),
+            "config_export_command" => json!(value.as_str().filter(|v| v.len() <= 512 && !v.contains(['\r', '\n'])).ok_or_else(|| ApiError::bad_request("config_export_command must be a single line under 512 characters"))?.trim()),
             "maxcpus" => json!(value.as_u64().filter(|v| (1..=256).contains(v)).ok_or_else(|| ApiError::bad_request("maxcpus must be from 1 to 256"))?),
             "ram" | "nvram" => json!(value.as_u64().filter(|v| *v <= 1_048_576).ok_or_else(|| ApiError::bad_request(format!("{key} is outside the supported range")))?),
             "start_command" | "image" | "environment" | "extra_hosts" => {

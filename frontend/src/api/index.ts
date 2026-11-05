@@ -6,9 +6,11 @@ import { templatesApi } from "./templates";
 import { computesApi } from "./computes";
 import { appliancesApi } from "./appliances";
 import { systemApi } from "./system";
+import { copilotApi } from "./copilot";
 import { getAuthToken } from "./client";
 
-export const api = { ...authApi, ...systemApi, ...templatesApi, ...appliancesApi, ...projectsApi, ...computesApi, ...nodesApi, ...linksApi };
+export const api = { ...authApi, ...systemApi, ...templatesApi, ...appliancesApi, ...projectsApi, ...computesApi, ...nodesApi, ...linksApi, ...copilotApi };
+export type * from "./copilot";
 export type * from "../api-types";
 export { getAuthToken } from "./client";
 

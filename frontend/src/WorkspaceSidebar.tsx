@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Cpu, Link2, Router, Shield, Network, Layers3, Search, X, Plus } from "lucide-react";
+import { Cpu, Router, Shield, Network, Layers3, Search, PanelLeftClose } from "lucide-react";
 import type { RuntimeTemplate } from "./api";
 import type { SimulatorWorkspaceProps } from "./SimulatorWorkspace";
 import { Button } from "@/components/ui/button";
@@ -24,21 +24,35 @@ export function templateCategory(template: RuntimeTemplate): Category {
   return "end-devices";
 }
 
-type Props = { workspace: SimulatorWorkspaceProps; deviceQuery: string; setDeviceQuery: (value: string) => void; groupedTemplates: Array<{ kind: string; templates: RuntimeTemplate[] }> };
-export function WorkspaceSidebar({ workspace, deviceQuery, setDeviceQuery, groupedTemplates }: Props) {
+type Props = { workspace: SimulatorWorkspaceProps; deviceQuery: string; setDeviceQuery: (value: string) => void; groupedTemplates: Array<{ kind: string; templates: RuntimeTemplate[] }>; expanded: boolean; onExpandedChange: (expanded: boolean) => void };
+export function WorkspaceSidebar({ workspace, deviceQuery, setDeviceQuery, groupedTemplates, expanded, onExpandedChange }: Props) {
   const [active, setActive] = useState<Category | null>(null);
-  const [dragging, setDragging] = useState(false);
   const templates = useMemo(() => groupedTemplates.flatMap((group) => group.templates), [groupedTemplates]);
   const visible = templates.filter((template) => (active === "all" || templateCategory(template) === active) && (!deviceQuery.trim() || template.name.toLowerCase().includes(deviceQuery.trim().toLowerCase())));
-  return <aside className="sim-device-rail" aria-label="Device types">
-    <nav className="sim-device-rail-buttons" aria-label="Device categories">
-      {categories.map(({ id, label, icon: Icon }) => <Button key={id} variant={active === id ? "secondary" : "ghost"} size="icon" title={label} aria-label={label} aria-pressed={active === id} onClick={() => setActive((value) => value === id ? null : id)}><Icon /></Button>)}
-    </nav>
-    <div className="sim-device-rail-bottom"><Button variant="ghost" size="icon" title="Add node or image" aria-label="Add node or image" onClick={workspace.onOpenNodeDialog}><Plus /></Button><Button variant={workspace.connecting ? "default" : "ghost"} size="icon" title="Add a link" aria-label="Add a link" aria-pressed={workspace.connecting} onClick={() => workspace.onToggleConnect()}><Link2 /></Button></div>
-    {active && <section className={`sim-device-flyout${dragging ? " is-dragging" : ""}`} aria-label={`${categories.find((item) => item.id === active)?.label} templates`}>
-      <header><b>{categories.find((item) => item.id === active)?.label}</b><Button variant="ghost" size="icon-xs" aria-label="Close device list" onClick={() => setActive(null)}><X /></Button></header>
+  const activeCategory = categories.find((item) => item.id === active);
+  function chooseCategory(id: Category) {
+    if (expanded && active === id) {
+      setActive(null);
+      onExpandedChange(false);
+    } else {
+      setActive(id);
+      onExpandedChange(true);
+    }
+  }
+  function collapse() {
+    setActive(null);
+    onExpandedChange(false);
+  }
+  return <aside className={`sim-device-rail${expanded ? " is-expanded" : ""}`} aria-label="Device types">
+    <div className="sim-device-rail-strip">
+      <nav className="sim-device-rail-buttons" aria-label="Device categories">
+        {categories.map(({ id, label, icon: Icon }) => <Button key={id} variant={active === id ? "secondary" : "ghost"} size="icon" title={label} aria-label={label} aria-pressed={active === id} onClick={() => chooseCategory(id)}><Icon /></Button>)}
+      </nav>
+    </div>
+    {expanded && <section className="sim-device-panel" aria-label={`${activeCategory?.label ?? "All devices"} templates`}>
+      <header><div><b>{activeCategory?.label ?? "Device library"}</b><small>{visible.length} template{visible.length === 1 ? "" : "s"}</small></div><Button variant="ghost" size="icon-xs" aria-label="Collapse device sidebar" title="Collapse sidebar" onClick={collapse}><PanelLeftClose /></Button></header>
       <label className="sim-device-search"><Search /><Input value={deviceQuery} onChange={(event) => setDeviceQuery(event.target.value)} placeholder="Filter devices…" aria-label="Filter devices" /></label>
-      <ScrollArea className="sim-device-flyout-list">{visible.length ? visible.map((template) => <DeviceTemplateCard key={template.template_id} template={template} onAdd={() => workspace.onAddTemplate(template.template_id)} onSave={workspace.onSaveTemplate} onDragStart={() => setDragging(true)} onDragEnd={() => setDragging(false)} />) : <p className="sim-device-empty">No templates in this category.</p>}</ScrollArea>
+      <ScrollArea className="sim-device-panel-list">{visible.length ? visible.map((template) => <DeviceTemplateCard key={template.template_id} template={template} onAdd={() => workspace.onAddTemplate(template.template_id)} onSave={workspace.onSaveTemplate} />) : <p className="sim-device-empty">No templates in this category.</p>}</ScrollArea>
       <Button variant="outline" className="sim-device-catalog" onClick={workspace.onOpenMarketplace}><Search />Find devices and images</Button>
     </section>}
   </aside>;

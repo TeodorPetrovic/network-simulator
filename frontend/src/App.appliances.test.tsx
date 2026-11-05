@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "./App.test-utils";
 import { api } from "./api";
 import { renderRoutedApp } from "./App.test-utils";
-import { renderWorkspace } from "./App.test-utils";
+import { renderWorkspace, openNodeDialog } from "./App.test-utils";
 import { ApplianceManagerPage } from "./ApplianceManagerPage";
 
 describe("appliances", () => {
@@ -38,7 +38,7 @@ describe("appliances", () => {
         y: -210,
       });
       renderWorkspace();
-      fireEvent.click(await screen.findByRole("button", { name: /Add node/ }));
+      await openNodeDialog();
       expect(await screen.findByRole("textbox", { name: "Node name" })).toBeInTheDocument();
       fireEvent.change(screen.getByRole("textbox", { name: "Node name" }), {
         target: { value: "Router A" },
@@ -58,7 +58,7 @@ describe("appliances", () => {
 
     it("explains the real Docker image prerequisite when no image is installed", async () => {
       renderWorkspace();
-      fireEvent.click(await screen.findByRole("button", { name: /Add node/ }));
+      await openNodeDialog();
       expect(await screen.findByText(/No local templates/)).toBeInTheDocument();
       expect(screen.queryByText(/placeholder/i)).not.toBeInTheDocument();
     });
@@ -331,7 +331,7 @@ describe("appliances", () => {
         y: -210,
       });
       renderWorkspace();
-      fireEvent.click(await screen.findByRole("button", { name: /Add node/ }));
+      await openNodeDialog();
       expect(await screen.findByRole("textbox", { name: "Node name" })).toBeInTheDocument();
       expect(screen.getByText(/Creates a private copy-on-write disk/)).toBeInTheDocument();
       fireEvent.change(screen.getByRole("textbox", { name: "Node name" }), {
@@ -359,7 +359,7 @@ describe("appliances", () => {
       vi.mocked(api.uploadQemuImage).mockResolvedValue({ name: "custom-router.qcow2", image: template.hda_disk_image, template_type: "qemu", bytes: 1024 });
       vi.mocked(api.templates).mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([template]);
       renderWorkspace();
-      fireEvent.click(await screen.findByRole("button", { name: /Add node/ }));
+      await openNodeDialog();
       const image = new File([new Uint8Array([1, 2, 3])], "custom-router.qcow2");
       fireEvent.change(screen.getByLabelText("Add a QEMU disk image"), { target: { files: [image] } });
   

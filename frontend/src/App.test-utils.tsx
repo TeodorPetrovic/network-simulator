@@ -169,3 +169,10 @@ beforeEach(() => {
 });
 
 export { api } from "./api";
+
+// The rail no longer has an "Add node" button; the node dialog opens from the empty-canvas context menu.
+export async function openNodeDialog() {
+  const { fireEvent, screen } = await import("@testing-library/react");
+  fireEvent.contextMenu(await screen.findByLabelText(/topology/i, { selector: "svg" }).catch(() => document.querySelector(".sim-canvas svg") as Element));
+  fireEvent.click(await screen.findByRole("menuitem", { name: /Import or configure device/ }));
+}

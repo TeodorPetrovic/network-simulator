@@ -7,6 +7,18 @@ macro_rules! rules {
 }
 
 pub const ROUTE_RULES_EXTRA: &[RouteRule] = rules![
+    ("GET", "/copilot/llm-configs", RouteClass::PrincipalScoped),
+    ("POST", "/copilot/llm-configs", RouteClass::PrincipalScoped),
+    ("PUT", "/copilot/llm-configs/{config_id}", RouteClass::PrincipalScoped),
+    ("DELETE", "/copilot/llm-configs/{config_id}", RouteClass::PrincipalScoped),
+    ("POST", "/copilot/projects/{project_id}/chat/stream", RouteClass::PrincipalScoped),
+    ("GET", "/copilot/projects/{project_id}/chat/sessions", RouteClass::PrincipalScoped),
+    ("GET", "/copilot/projects/{project_id}/chat/sessions/{session_id}", RouteClass::PrincipalScoped),
+    ("DELETE", "/copilot/projects/{project_id}/chat/sessions/{session_id}", RouteClass::PrincipalScoped),
+    ("PATCH", "/copilot/projects/{project_id}/chat/sessions/{session_id}", RouteClass::PrincipalScoped),
+    ("GET", "/mcp", RouteClass::PrincipalScoped),
+    ("POST", "/mcp", RouteClass::PrincipalScoped),
+    ("DELETE", "/mcp", RouteClass::PrincipalScoped),
     (
         "POST",
         "/projects/{project_id}/symbols",
@@ -197,6 +209,11 @@ pub const ROUTE_RULES_EXTRA: &[RouteRule] = rules![
         "PUT",
         "/projects/{project_id}/nodes/{node_id}/config",
         RouteClass::Privilege("Node.Modify")
+    ),
+    (
+        "POST",
+        "/projects/{project_id}/nodes/{node_id}/config/export",
+        RouteClass::Privilege("Node.Console")
     ),
     (
         "POST",

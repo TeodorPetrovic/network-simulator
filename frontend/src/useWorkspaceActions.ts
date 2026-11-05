@@ -59,11 +59,18 @@ export function useWorkspaceActions({ workspace: props, topology, selectedDrawin
     } catch (reason) { setFeatureMessage(`Could not move drawing: ${messageFor(reason)}`); }
   }
 
+  async function resizeDrawing(drawingId: string, width: number, height: number, svg: string) {
+    try {
+      const drawing = await api.updateDrawing(props.project.project_id, drawingId, { width, height, svg });
+      setTopology((current) => ({ ...current, drawings: current.drawings.map((item) => item.drawing_id === drawingId ? drawing : item) }));
+    } catch (reason) { setFeatureMessage(`Could not resize drawing: ${messageFor(reason)}`); }
+  }
+
   async function changeDrawingOrder(direction: "front" | "back") {
     if (!selectedDrawing) return;
     const reordered = reorderDrawings(topology.drawings, selectedDrawing.drawing_id, direction);
     try {
-      const updated = await Promise.all(reordered.map((drawing, z_index) => api.updateDrawing(props.project.project_id, drawing.drawing_id, { z_index })));
+      const updated = await Promise.all(reordered.map((drawing) => api.updateDrawing(props.project.project_id, drawing.drawing_id, { z_index: drawing.z_index })));
       setTopology((current) => ({ ...current, drawings: current.drawings.map((drawing) => updated.find((item) => item.drawing_id === drawing.drawing_id) ?? drawing) }));
     } catch (reason) { setFeatureMessage(`Could not change drawing order: ${messageFor(reason)}`); }
   }
@@ -126,5 +133,5 @@ export function useWorkspaceActions({ workspace: props, topology, selectedDrawin
     } catch (reason) { setFeatureMessage(`Could not save endpoint label position: ${messageFor(reason)}`); }
   }
 
-  return { placeDrawing, saveEditedDrawing, removeDrawing, moveDrawing, changeDrawingOrder, toggleProjectLock, toggleNodeLock, toggleNodeIsolation, toggleLinkSuspend, saveNodeLabelPosition, saveLinkEndpointLabelPosition };
+  return { placeDrawing, saveEditedDrawing, removeDrawing, moveDrawing, resizeDrawing, changeDrawingOrder, toggleProjectLock, toggleNodeLock, toggleNodeIsolation, toggleLinkSuspend, saveNodeLabelPosition, saveLinkEndpointLabelPosition };
 }

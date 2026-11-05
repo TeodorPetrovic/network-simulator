@@ -424,6 +424,7 @@ test("Dynamips Cisco routers start, link, suspend, resume, reload, stop, and pro
     await ports.first().waitFor();
     await ports.first().click();
     await waitFor(async () => (await server.api("GET", `/projects/${pid}/links`)).json.length === 1, { label: "router to switch link" });
+    await ui.page.keyboard.press("Escape"); // link mode is a persistent toggle
     const link = ui.page.getByRole("button", { name: /Ethernet segment connecting/ });
     await link.click({ button: "right" });
     ui.page.once("dialog", (dialog) => dialog.accept());
@@ -439,12 +440,17 @@ test("Dynamips Cisco routers start, link, suspend, resume, reload, stop, and pro
       await ui.page.getByRole("menuitem", { name: "Resume device", exact: true }).click();
       await statusIs(server, pid, name, "started", 60000);
     }
+    await ui.page.waitForTimeout(2500); // the UI is still catching up with the resume; a right-click now re-renders the menu mid-open
     await node.click({ button: "right" });
     const reload = ui.page.getByRole("menuitem", { name: "Reload device", exact: true });
     if (await reload.count()) {
       await reload.click();
-      await statusIs(server, pid, name, "started", 60000);
+      // A reload briefly leaves "started" (stopping, then starting); wait for the round trip.
+      await waitFor(async () => (await nodes(server, pid)).find((item) => item.name === name)?.status !== "started", { timeout: 20000, label: "reload leaves started" }).catch(() => {});
+      await statusIs(server, pid, name, "started", 90000);
     }
+    // Let the UI catch up with the last lifecycle change so the menu does not re-render under the click.
+    await ui.page.waitForTimeout(2500);
     await node.click({ button: "right" });
     await ui.page.getByRole("menuitem", { name: "Stop device", exact: true }).click();
     await statusIs(server, pid, name, "stopped", 60000);

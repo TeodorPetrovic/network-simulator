@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import "./App.test-utils";
 import { api } from "./api";
 import { emptyTopology } from "./App.test-utils";
-import { renderWorkspace } from "./App.test-utils";
+import { renderWorkspace, openNodeDialog } from "./App.test-utils";
 
 describe("map", () => {
     it("offers packet capture directly from the selected link inspector", async () => {
@@ -35,7 +35,7 @@ describe("map", () => {
       expect(canvas).not.toBeNull();
       expect(within(canvas as HTMLElement).queryByRole("button", { name: "Zoom in" })).not.toBeInTheDocument();
       expect(within(canvas as HTMLElement).queryByRole("button", { name: "Zoom to selection" })).not.toBeInTheDocument();
-      expect(screen.getByRole("menuitem", { name: "View" })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "View menu" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Show interface labels" })).toBeEnabled();
     });
 
@@ -142,7 +142,7 @@ describe("map", () => {
       vi.mocked(api.topology).mockResolvedValue(emptyTopology);
       renderWorkspace();
   
-      fireEvent.click(await screen.findByRole("button", { name: /Add node/ }));
+      await openNodeDialog();
       fireEvent.change(await screen.findByRole("textbox", { name: "Node name" }), { target: { value: "R1" } });
       const idlePcInput = screen.getByRole("textbox", { name: "Idle-PC address (optional)" });
       expect(idlePcInput).toHaveAttribute("placeholder", "Use the appliance default");
@@ -189,7 +189,7 @@ describe("map", () => {
         y: -210,
       });
       renderWorkspace();
-      fireEvent.click(await screen.findByRole("button", { name: /Add node/ }));
+      await openNodeDialog();
       expect(await screen.findByRole("textbox", { name: "Node name" })).toBeInTheDocument();
       fireEvent.change(screen.getByRole("textbox", { name: "Node name" }), {
         target: { value: "PC A" },
@@ -261,7 +261,7 @@ describe("map", () => {
       renderWorkspace();
       fireEvent.click(await screen.findByRole("button", { name: "Node Edge A" }), { ctrlKey: true });
       fireEvent.click(screen.getByRole("button", { name: "Node Edge B" }), { ctrlKey: true });
-      expect(screen.getByRole("menuitem", { name: "Node" })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "Node menu" })).toBeInTheDocument();
   
       expect(api.startNode).not.toHaveBeenCalled();
     });

@@ -39,7 +39,7 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
         cdrom_image: String(node.cdrom_image ?? ""), hdb_disk_interface: String(node.hdb_disk_interface ?? "ide"),
         hdc_disk_interface: String(node.hdc_disk_interface ?? "ide"), hdd_disk_interface: String(node.hdd_disk_interface ?? "ide"),
         console_type: String(node.console_type ?? "telnet"), options: String(node.options ?? ""),
-        process_priority: String(node.process_priority ?? "normal"), maxcpus: String(node.maxcpus ?? node.cpus ?? 1),
+        config_export_command: String(node.config_export_command ?? ""), config_export_username: String(node.config_export_username ?? ""), config_export_password: String(node.config_export_password ?? ""), process_priority: String(node.process_priority ?? "normal"), maxcpus: String(node.maxcpus ?? node.cpus ?? 1),
       } : {}),
       ...(kind === "docker" ? {
         image: String(node.image ?? ""),
@@ -114,6 +114,8 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
       for (const key of ["hda_disk_image", "hdb_disk_image", "hdc_disk_image", "hdd_disk_image", "cdrom_image", "options"]) patch[key] = draft[key] ?? "";
       for (const key of ["hdb_disk_interface", "hdc_disk_interface", "hdd_disk_interface", "console_type", "process_priority"]) patch[key] = draft[key];
       patch.maxcpus = Number(draft.maxcpus);
+      patch.config_export_command = draft.config_export_command ?? "";
+      patch.config_export_username = draft.config_export_username ?? ""; patch.config_export_password = draft.config_export_password ?? "";
     } else if (kind === "docker") {
       patch.memory = Number(draft.memory);
       patch.cpus = Number(draft.cpus);
@@ -205,6 +207,8 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
           {selectField("hdb_disk_interface", "HDB disk interface", ["ide", "scsi", "virtio", "sd"])}{selectField("hdc_disk_interface", "HDC disk interface", ["ide", "scsi", "virtio", "sd"])}{selectField("hdd_disk_interface", "HDD disk interface", ["ide", "scsi", "virtio", "sd"])}
           {selectField("boot_priority", "Boot priority", ["c", "d", "n", "dc", "cd"])}
           {field("maxcpus", "Maximum CPUs", "number")}{selectField("console_type", "Console type", ["telnet", "vnc"])}{selectField("process_priority", "Process priority", ["low", "normal", "high"])}
+          <div className="template-settings-wide">{field("config_export_command", "Export config command", "text", "Console command whose output is the exported config, e.g. /export on MikroTik RouterOS (used by Export config in the device menu).")}</div>
+          {field("config_export_username", "Export login user", "text", "Console login used before the export command. MikroTik defaults to admin.")}{field("config_export_password", "Export login password", "password", "Empty for a fresh RouterOS CHR.")}
           <div className="template-settings-wide">{textArea("options", "Additional QEMU options", "Command line options passed to QEMU.")}</div>
         </>}
         {kind === "docker" && <div className="template-settings-wide">

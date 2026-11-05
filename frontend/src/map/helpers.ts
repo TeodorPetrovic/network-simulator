@@ -90,14 +90,15 @@ export function drawingSvg(tool: DrawingTool, options: {
   return `${start}${shape}</svg>`;
 }
 
+// "Bring forward" lifts a drawing above every drawing and every device (z_index >= 1000);
+// "Send backward" drops it below every other drawing, beneath the devices (z_index < 1000).
 export function reorderDrawings<T extends Pick<Drawing, "drawing_id" | "z_index">>(drawings: T[], drawingId: string, direction: "front" | "back"): T[] {
-  const ordered = [...drawings].sort((left, right) => Number(left.z_index ?? 0) - Number(right.z_index ?? 0));
-  const currentIndex = ordered.findIndex((drawing) => drawing.drawing_id === drawingId);
-  if (currentIndex < 0) return drawings;
-  const [picked] = ordered.splice(currentIndex, 1);
-  if (direction === "front") ordered.push(picked);
-  else ordered.unshift(picked);
-  return ordered.map((drawing, index) => ({ ...drawing, z_index: index }));
+  const others = drawings.filter((drawing) => drawing.drawing_id !== drawingId);
+  const zs = others.map((drawing) => Number(drawing.z_index ?? 0));
+  const picked = drawings.find((drawing) => drawing.drawing_id === drawingId);
+  if (!picked) return drawings;
+  const z = direction === "front" ? Math.max(1000, ...zs) + 1 : Math.min(0, ...zs) - 1;
+  return [{ ...picked, z_index: z }];
 }
 
 export function selectionBoxIds(nodes: Node[], first: { x: number; y: number }, second: { x: number; y: number }): string[] {

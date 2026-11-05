@@ -315,6 +315,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
             onBack={closeProject}
             onApiError={setError}
             onRefreshResources={() => void refreshResourceMonitor()}
+            onReloadTopology={() => void reloadTopology()}
             onOpenNodeDialog={() => void openNodeDialog()}
             onOpenMarketplace={() => setMarketplaceOpen(true)}
             onOpenApplianceManager={navigateToApplianceManager ?? (() => setMarketplaceOpen(true))}

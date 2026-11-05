@@ -29,6 +29,7 @@ import { useWorkspaceSelection } from "./useWorkspaceSelection";
 import { useWorkspaceActions } from "./useWorkspaceActions";
 import { CaptureWindow } from "./capture/CaptureWindow";
 import { WebWiresharkWindow } from "./capture/WebWiresharkWindow";
+import { CopilotWindow } from "./copilot/CopilotWindow";
 import { webWiresharkClientUrl } from "./api";
 
 type DrawingValues = { width: number; height: number; stroke: string; fill: string; strokeWidth: number; text: string; imageDataUrl?: string };
@@ -51,6 +52,7 @@ export type SimulatorWorkspaceProps = {
   onBack: () => void;
   onApiError?: (message: string) => void;
   onRefreshResources: () => void;
+  onReloadTopology?: () => void;
   onOpenNodeDialog: () => void;
   onOpenMarketplace: () => void;
   onOpenApplianceManager: () => void;
@@ -116,6 +118,17 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
       setFeatureMessage("Link reset: filters cleared and link resumed.");
     } catch (reason) { const message = `Could not reset link: ${reason instanceof Error ? reason.message : "request failed"}`; setFeatureMessage(message); props.onApiError?.(message); }
   }
+  async function exportNodeConfig(node: Node) {
+    setFeatureMessage(`Exporting config from ${node.name}…`);
+    try {
+      const { config, command } = await api.exportNodeConfig(props.project.project_id, node.node_id);
+      const url = URL.createObjectURL(new Blob([config], { type: "text/plain" }));
+      const link = document.createElement("a");
+      link.href = url; link.download = `${node.name}_${command.replace(/[^a-z0-9]+/gi, "") || "export"}.${command.startsWith("/") ? "rsc" : "cfg"}`;
+      link.click(); URL.revokeObjectURL(url);
+      setFeatureMessage(`Exported config from ${node.name}.`);
+    } catch (reason) { setFeatureMessage(`Could not export config: ${reason instanceof Error ? reason.message : "request failed"}`); }
+  }
   async function openCaptureViewer(link: Link, newTab = false, popup = false) {
     if (!link.capturing && !link.capture_file_name) {
       // Never captured: there is no file to open, so start a capture first (as GNS3 does).
@@ -163,6 +176,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [showInterfaceLabels, setShowInterfaceLabels] = useState(false);
   const [topology, setTopology] = useState(props.topology);
   const [deviceQuery, setDeviceQuery] = useState("");
+  const [deviceSidebarExpanded, setDeviceSidebarExpanded] = useState(false);
   const [dockState, setDockState] = useState(() => { try { const saved = JSON.parse(localStorage.getItem("ns.docks") ?? "{}"); return { topology: saved.topology ?? true, servers: saved.servers ?? true }; } catch { return { topology: true, servers: true }; } });
   const topologyDockOpen = dockState.topology;
   const serversDockOpen = dockState.servers;
@@ -174,6 +188,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [copilotOpen, setCopilotOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [logCounts, setLogCounts] = useState({ errors: 0, warnings: 0 });
   const [screenshotOpen, setScreenshotOpen] = useState(false);
@@ -203,7 +218,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const { selectedNodeIds, setSelectedNodeIds, selectedDrawingId, setSelectedDrawingId, selectedDrawing } = useWorkspaceSelection(props.selection, topology);
   const selectedNode = topology.nodes.find((node) => node.node_id === (props.selection?.kind === "node" ? props.selection.id : selectedNodeIds[0])) ?? props.selectedNode;
   const selectedLink = props.selection?.kind === "link" ? topology.links.find((link) => link.link_id === props.selection?.id) ?? props.selectedLink : props.selectedLink;
-  const { placeDrawing, saveEditedDrawing, removeDrawing, moveDrawing, changeDrawingOrder, toggleProjectLock, toggleNodeLock, toggleNodeIsolation, toggleLinkSuspend, saveNodeLabelPosition, saveLinkEndpointLabelPosition } = useWorkspaceActions({ workspace: props, topology, selectedDrawing, pendingDrawing, projectLocked, setTopology, setSelectedNodeIds, setSelectedDrawingId, setPendingDrawing, setFeatureMessage, setDrawingEditOpen, setProjectLocked });
+  const { placeDrawing, saveEditedDrawing, removeDrawing, moveDrawing, resizeDrawing, changeDrawingOrder, toggleProjectLock, toggleNodeLock, toggleNodeIsolation, toggleLinkSuspend, saveNodeLabelPosition, saveLinkEndpointLabelPosition } = useWorkspaceActions({ workspace: props, topology, selectedDrawing, pendingDrawing, projectLocked, setTopology, setSelectedNodeIds, setSelectedDrawingId, setPendingDrawing, setFeatureMessage, setDrawingEditOpen, setProjectLocked });
   const selectedLifecycleNodes = topology.nodes.filter((node) => selectedNodeIds.includes(node.node_id) && !node.locked);
   const onLogCount = useCallback((level: "error" | "warning") => setLogCounts((current) => ({ ...current, [level === "error" ? "errors" : "warnings"]: current[level === "error" ? "errors" : "warnings"] + 1 })), []);
 
@@ -404,12 +419,12 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
 
   return (
     <section className="sim-workspace" aria-label={`Project ${props.project.name}`}>
-      <WorkspaceToolbar workspace={props} topology={topology} selectedNodeIds={selectedNodeIds} selectedLifecycleNodes={selectedLifecycleNodes} projectLocked={projectLocked} gridVisible={gridVisible} setGridVisible={setGridVisible} snapToGrid={snapToGrid} setSnapToGrid={setSnapToGrid} selectedDrawing={selectedDrawing} selectedLink={selectedLink} runBulkLifecycle={runBulkLifecycle} runAllLifecycle={runAllLifecycle} deleteSelectedNodes={deleteSelectedNodes} toggleProjectLock={toggleProjectLock} startDrawingTool={startDrawingTool} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} setSnapshotsOpen={setSnapshotsOpen} setLogOpen={setLogOpen} setScreenshotOpen={setScreenshotOpen} setLinkPropertiesOpen={setLinkPropertiesOpen} setHelpOpen={setHelpOpen} setInfoOpen={setInfoOpen} onToggleConsoleDock={props.onToggleConsoleDock ?? (() => props.onOpenConsoleDock?.())} consoleDockOpen={props.consoleOpen ?? false} onSelectAll={() => { setSelectedNodeIds(topology.nodes.map((node) => node.node_id)); props.onSelectCanvas(); }} onSelectNone={() => { setSelectedNodeIds([]); setSelectedDrawingId(null); props.onSelectCanvas(); }} arrangeSelection={arrangeSelection} toggleSelectedNodeLocks={toggleSelectedNodeLocks} copySelectedNodes={copySelectedNodes} pasteCopiedNodes={() => void pasteCopiedNodes()} topologyDockOpen={topologyDockOpen} serversDockOpen={serversDockOpen} onToggleTopologyDock={() => setTopologyDockOpen(!topologyDockOpen)} onToggleServersDock={() => setServersDockOpen(!serversDockOpen)} zoom={view.zoom} onZoom={(delta) => setView((current) => ({ ...current, zoom: Math.max(0.1, Math.min(maxZoom, Number((current.zoom + delta).toFixed(1)))) }))} onFitTopology={fitTopology} onZoomToSelection={zoomToSelection} onResetZoom={() => setView({ zoom: 1, centerX: 0, centerY: 0 })} showInterfaceLabels={showInterfaceLabels} onToggleInterfaceLabels={() => setShowInterfaceLabels((current) => !current)} />
+      <WorkspaceToolbar workspace={props} topology={topology} selectedNodeIds={selectedNodeIds} selectedLifecycleNodes={selectedLifecycleNodes} projectLocked={projectLocked} gridVisible={gridVisible} setGridVisible={setGridVisible} snapToGrid={snapToGrid} setSnapToGrid={setSnapToGrid} selectedDrawing={selectedDrawing} selectedLink={selectedLink} runBulkLifecycle={runBulkLifecycle} runAllLifecycle={runAllLifecycle} deleteSelectedNodes={deleteSelectedNodes} toggleProjectLock={toggleProjectLock} startDrawingTool={startDrawingTool} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} setSnapshotsOpen={setSnapshotsOpen} setLogOpen={setLogOpen} setScreenshotOpen={setScreenshotOpen} setLinkPropertiesOpen={setLinkPropertiesOpen} setHelpOpen={setHelpOpen} setInfoOpen={setInfoOpen} onToggleConsoleDock={props.onToggleConsoleDock ?? (() => props.onOpenConsoleDock?.())} consoleDockOpen={props.consoleOpen ?? false} copilotOpen={copilotOpen} onToggleCopilot={() => setCopilotOpen((open) => !open)} onSelectAll={() => { setSelectedNodeIds(topology.nodes.map((node) => node.node_id)); props.onSelectCanvas(); }} onSelectNone={() => { setSelectedNodeIds([]); setSelectedDrawingId(null); props.onSelectCanvas(); }} arrangeSelection={arrangeSelection} toggleSelectedNodeLocks={toggleSelectedNodeLocks} copySelectedNodes={copySelectedNodes} pasteCopiedNodes={() => void pasteCopiedNodes()} topologyDockOpen={topologyDockOpen} serversDockOpen={serversDockOpen} onToggleTopologyDock={() => setTopologyDockOpen(!topologyDockOpen)} onToggleServersDock={() => setServersDockOpen(!serversDockOpen)} zoom={view.zoom} onZoom={(delta) => setView((current) => ({ ...current, zoom: Math.max(0.1, Math.min(maxZoom, Number((current.zoom + delta).toFixed(1)))) }))} onFitTopology={fitTopology} onZoomToSelection={zoomToSelection} onResetZoom={() => setView({ zoom: 1, centerX: 0, centerY: 0 })} showInterfaceLabels={showInterfaceLabels} onToggleInterfaceLabels={() => setShowInterfaceLabels((current) => !current)} />
       <WorkspaceIconToolbar workspace={props} selectedLink={selectedLink} setLinkPropertiesOpen={setLinkPropertiesOpen} startDrawingTool={startDrawingTool} runAllLifecycle={runAllLifecycle} showInterfaceLabels={showInterfaceLabels} onToggleInterfaceLabels={() => setShowInterfaceLabels((current) => !current)} zoomIn={() => setView((current) => ({ ...current, zoom: Math.min(maxZoom, Number((current.zoom + 0.1).toFixed(1))) }))} zoomOut={() => setView((current) => ({ ...current, zoom: Math.max(0.1, Number((current.zoom - 0.1).toFixed(1))) }))} fitTopology={fitTopology} />
 
-      <div className={`sim-workspace-grid ${!topologyDockOpen && !serversDockOpen ? "is-docks-closed" : ""}`}>
-        <WorkspaceSidebar workspace={props} deviceQuery={deviceQuery} setDeviceQuery={setDeviceQuery} groupedTemplates={groupedTemplates} />
-        <WorkspaceDocks workspace={props} topology={topology} topologyOpen={topologyDockOpen} serversOpen={serversDockOpen} onCloseTopology={() => setTopologyDockOpen(false)} onCloseServers={() => setServersDockOpen(false)} selectedLink={selectedLink} onConfigureNode={() => selectedNode && setConfigureNode(selectedNode)} onOpenLinkProperties={() => setLinkPropertiesOpen(true)} onToggleLinkSuspend={(link) => void toggleLinkSuspend(link)} renderNodeContextMenu={(nodeId) => { const node = topology.nodes.find((item) => item.node_id === nodeId); return node ? <WorkspaceContextMenu workspace={props} selectedNode={node} selectedLink={null} selectedDrawing={null} setConfigureNode={setConfigureNode} setConfigNode={setConfigFileNode} setSymbolNode={setSymbolNode} toggleNodeIsolation={toggleNodeIsolation} toggleNodeLock={toggleNodeLock} setLinkPropertiesOpen={setLinkPropertiesOpen} toggleLinkSuspend={toggleLinkSuspend} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} /> : null; }} />
+      <div className={`sim-workspace-grid ${deviceSidebarExpanded ? "is-sidebar-expanded" : ""} ${!topologyDockOpen && !serversDockOpen ? "is-docks-closed" : ""}`}>
+        <WorkspaceSidebar workspace={props} deviceQuery={deviceQuery} setDeviceQuery={setDeviceQuery} groupedTemplates={groupedTemplates} expanded={deviceSidebarExpanded} onExpandedChange={setDeviceSidebarExpanded} />
+        <WorkspaceDocks workspace={props} topology={topology} topologyOpen={topologyDockOpen} serversOpen={serversDockOpen} onCloseTopology={() => setTopologyDockOpen(false)} onCloseServers={() => setServersDockOpen(false)} selectedLink={selectedLink} onConfigureNode={() => selectedNode && setConfigureNode(selectedNode)} onOpenLinkProperties={() => setLinkPropertiesOpen(true)} onToggleLinkSuspend={(link) => void toggleLinkSuspend(link)} renderNodeContextMenu={(nodeId) => { const node = topology.nodes.find((item) => item.node_id === nodeId); return node ? <WorkspaceContextMenu workspace={props} selectedNode={node} selectedLink={null} selectedDrawing={null} selectedNodeIds={selectedNodeIds} projectLocked={projectLocked} arrangeSelection={arrangeSelection} setConfigureNode={setConfigureNode} setConfigNode={setConfigFileNode} setSymbolNode={setSymbolNode} toggleNodeIsolation={toggleNodeIsolation} toggleNodeLock={toggleNodeLock} setLinkPropertiesOpen={setLinkPropertiesOpen} toggleLinkSuspend={toggleLinkSuspend} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} /> : null; }} />
         <Card className="sim-canvas-card">
           <ContextMenu>
             <ContextMenuTrigger asChild>
@@ -444,7 +459,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
                   onLinkClick={(id) => { setSelectedDrawingId(null); setSelectedNodeIds([]); props.onSelectLink(id); }}
                   onCanvasClick={(point) => { void placeDrawing(point); }}
                   onPortClick={selectLinkEndpoint}
-                  onNodeContext={(id) => { setSelectedNodeIds([id]); setSelectedDrawingId(null); props.onNodeContext(id); }}
+                  onNodeContext={(id) => { const alreadySelected = selectedNodeIds.includes(id); if (!alreadySelected) setSelectedNodeIds([id]); props.onNodeContext(id); setSelectedDrawingId(null); }}
                   onNodeDoubleClick={(id) => {
                     const node = topology.nodes.find((item) => item.node_id === id);
                     if (!node) return;
@@ -457,7 +472,8 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
                   onNodeMove={props.onNodeMove}
                   onNodeMoveEnd={props.onNodeMoveEnd}
                   onDrawingClick={(id) => { setSelectedDrawingId(id); setSelectedNodeIds([]); props.onSelectCanvas(); }}
-                  onDrawingMove={(id, x, y) => void moveDrawing(id, x, y)}
+                  onDrawingMove={(id, x, y) => moveDrawing(id, x, y)}
+                  onDrawingResize={(id, width, height, svg) => resizeDrawing(id, width, height, svg)}
                   onDeleteSelected={() => { if (selectedDrawing) void removeDrawing(); else if (selectedLink) props.onDeleteSelection(); else deleteSelectedNodes(); }}
                   onCopy={copySelectedNodes}
                   onPaste={() => void pasteCopiedNodes()}
@@ -469,7 +485,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
                 />
               </div>
             </ContextMenuTrigger>
-            <WorkspaceContextMenu workspace={props} selectedNode={selectedNode} selectedLink={selectedLink} selectedDrawing={selectedDrawing} setConfigureNode={setConfigureNode} setConfigNode={setConfigFileNode} setSymbolNode={setSymbolNode} toggleNodeIsolation={toggleNodeIsolation} toggleNodeLock={toggleNodeLock} setLinkPropertiesOpen={setLinkPropertiesOpen} toggleLinkSuspend={toggleLinkSuspend} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} onOpenCaptureViewer={openCaptureViewer} onOpenWebWireshark={openWebWireshark} onRestartWebWireshark={restartWebWireshark} onStopCapture={stopLinkCapture} onResetLink={resetLink} />
+            <WorkspaceContextMenu workspace={props} selectedNode={selectedNode} selectedLink={selectedLink} selectedDrawing={selectedDrawing} selectedNodeIds={selectedNodeIds} projectLocked={projectLocked} arrangeSelection={arrangeSelection} setConfigureNode={setConfigureNode} setConfigNode={setConfigFileNode} setSymbolNode={setSymbolNode} toggleNodeIsolation={toggleNodeIsolation} toggleNodeLock={toggleNodeLock} setLinkPropertiesOpen={setLinkPropertiesOpen} toggleLinkSuspend={toggleLinkSuspend} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} onOpenCaptureViewer={openCaptureViewer} onExportNodeConfig={exportNodeConfig} onOpenWebWireshark={openWebWireshark} onRestartWebWireshark={restartWebWireshark} onStopCapture={stopLinkCapture} onResetLink={resetLink} />
           </ContextMenu>
         </Card>
 
@@ -486,6 +502,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
       <InfoDialog project={props.project} nodeCount={topology.nodes.length} linkCount={topology.links.length} drawingCount={topology.drawings.length} eventCursor={topology.event_cursor} open={infoOpen} onOpenChange={setInfoOpen} />
       <ScreenshotDialog open={screenshotOpen} onOpenChange={setScreenshotOpen} onExport={(request) => void exportScreenshot(request)} pngAvailable={pngScreenshotAvailable()} />
       {captureViewer&&<CaptureWindow url={captureViewer.url} downloadUrl={captureViewer.downloadUrl} title={captureViewer.title} onClose={()=>setCaptureViewer(null)} onPopOut={captureViewer.link ? ()=>{ void openCaptureViewer(captureViewer.link!, true, true); setCaptureViewer(null); } : undefined}/>}
+      {copilotOpen && <CopilotWindow projectId={props.project.project_id} onClose={() => setCopilotOpen(false)} onTopologyMayHaveChanged={() => void props.onReloadTopology?.()} />}
       {wiresharkWindows.map((item) => <WebWiresharkWindow key={item.key} projectId={props.project.project_id} linkId={item.linkId} wsPath={item.wsPath} title={item.title} onClose={() => setWiresharkWindows((current) => current.filter((window) => window.linkId !== item.linkId))} />)}
     </section>
   );

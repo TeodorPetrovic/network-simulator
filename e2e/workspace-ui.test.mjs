@@ -247,7 +247,7 @@ test("device rail category flyouts filter and close, and click add creates a nod
   for (const cat of ["End devices", "Routers", "Switches", "Security devices", "All devices"]) {
     await button(page, cat).click(); await page.getByRole("region", { name: `${cat} templates` }).waitFor();
     assert.ok(await count(page, ".sim-device-template") > 0 || await page.getByText("No templates in this category.").count() === 1, `${cat} template list/empty state`);
-    await button(page, "Close device list").click();
+    await button(page, "Collapse device sidebar").click();
   }
   await button(page, "Routers").click();
   const row = page.locator(".sim-device-template").first(); const templateName = await row.locator("b").innerText();
@@ -260,19 +260,20 @@ test("device rail category flyouts filter and close, and click add creates a nod
 
 test("device rail add-node dialog and link toggle have visible effects", async (t) => {
   const { page, ui } = await workspace(t);
-  await button(page, "Add node or image").click();
+  await page.locator(".sim-canvas-surface").click({ button: "right", position: { x: 500, y: 300 } });
+  await page.getByRole("menuitem", { name: "Import or configure device" }).click();
   await page.getByRole("dialog").waitFor();
   await page.keyboard.press("Escape");
-  await button(page, "Add a link").click();
+  await button(page, "Draw link").click();
   await page.getByText("Link mode is on").waitFor();
-  await button(page, "Add a link").click();
+  await button(page, "Cancel link").click();
   await page.getByText("Link mode is on").waitFor({ state: "detached" });
   await finish(ui);
 });
 
 test("link mode opens a device port picker from a left click", async (t) => {
   const { page, ui } = await workspace(t, { nodes: [{ type: "vpcs", name: "LinkPC" }] });
-  await button(page, "Add a link").click();
+  await button(page, "Draw link").click();
   await button(page, "Node LinkPC").click();
   await page.getByRole("menuitem", { name: /eth/i }).first().waitFor();
   await finish(ui);
@@ -408,7 +409,7 @@ test("keyboard shortcuts select all, clear selection, delete, escape link mode, 
   await page.keyboard.press("ArrowRight");
   await waitFor(async () => { const n = (await server.api("GET", `/projects/${pid}/nodes`)).json[0]; return n.x !== before.x || n.y !== before.y; }, { label: "arrow moved node" });
   await page.keyboard.press("Escape"); await page.locator(".sim-node.is-selected").waitFor({ state: "detached" });
-  await button(page, "Add a link").click(); await canvas.focus(); await page.keyboard.press("Escape"); await page.getByText("Link mode is on").waitFor({ state: "detached" });
+  await button(page, "Draw link").click(); await canvas.focus(); await page.keyboard.press("Escape"); await page.getByText("Link mode is on").waitFor({ state: "detached" });
   await canvas.focus(); await page.keyboard.press("Control+a");
   page.once("dialog", (dialog) => dialog.accept());
   await canvas.press("Delete");
@@ -425,7 +426,7 @@ test("floating console opens, moves, resizes, minimizes, restores, closes, and p
   const before = await dock.boundingBox(); const title = page.getByRole("tablist", { name: "Open consoles" });
   const titleBox = await title.boundingBox();
   await page.mouse.move(titleBox.x + 40, titleBox.y + 16); await page.mouse.down();
-  await page.mouse.move(titleBox.x + 150, titleBox.y + 96, { steps: 6 }); await page.mouse.up();
+  await page.mouse.move(titleBox.x + 150, titleBox.y - 60, { steps: 6 }); await page.mouse.up();
   const moved = await dock.boundingBox(); assert.ok(moved.x !== before.x || moved.y !== before.y);
   const resize = page.locator(".sim-console-resize"); const rb = await resize.boundingBox(); await page.mouse.move(rb.x + 5, rb.y + 5); await page.mouse.down(); await page.mouse.move(rb.x + 50, rb.y + 40, { steps: 3 }); await page.mouse.up();
   const resized = await dock.boundingBox();

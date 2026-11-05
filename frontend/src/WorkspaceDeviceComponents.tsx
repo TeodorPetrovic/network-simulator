@@ -11,7 +11,7 @@ import type { LifecycleAction } from "./lifecycle";
 import { TemplateSettingsDialog } from "./TemplateSettingsDialog";
 import { iconForType, imageName, portCount, portLabel, templateDescription } from "./map/TopologyCanvas";
 
-export function DeviceTemplateCard({ template, onAdd, onSave, onDragEnd, onDragStart }: { template: RuntimeTemplate; onAdd: () => void; onSave: (id: string, patch: Record<string, unknown>) => Promise<void>; onDragEnd?: () => void; onDragStart?: () => void }) {
+export function DeviceTemplateCard({ template, onAdd, onSave }: { template: RuntimeTemplate; onAdd: () => void; onSave: (id: string, patch: Record<string, unknown>) => Promise<void> }) {
   const Icon = iconForType(template.template_type);
   const [settingsOpen, setSettingsOpen] = useState(false);
   return <>
@@ -20,8 +20,7 @@ export function DeviceTemplateCard({ template, onAdd, onSave, onDragEnd, onDragS
     event.dataTransfer.setData("application/x-network-simulator-template", template.template_id);
     event.dataTransfer.setData("text/plain", template.name);
     event.dataTransfer.setDragImage(event.currentTarget, 24, 18);
-    setTimeout(() => onDragStart?.(), 0);
-  }} onDragEnd={onDragEnd}>
+  }}>
     <span className="sim-template-icon" draggable={false} style={{ pointerEvents: "none" }}><Icon size={17} /></span>
     <span className="sim-template-copy"><b title={template.name}>{template.name}</b><small>{templateDescription(template)}</small></span>
     <Button variant="ghost" size="icon-xs" onClick={() => setSettingsOpen(true)} aria-label={`Configure ${template.name} template`} title="Configure template"><Settings2 /></Button>
@@ -44,8 +43,9 @@ export function NodeInspector({ node, links, nodes, onLifecycle, onOpenConsole, 
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(node.name);
   const [saving, setSaving] = useState(false);
-  const linkedPorts = links.flatMap((link) => link.nodes.filter((endpoint) => endpoint.node_id === node.node_id).map((endpoint) => ({
+  const connections = links.flatMap((link) => link.nodes.filter((endpoint) => endpoint.node_id === node.node_id).map((endpoint) => ({
     endpoint,
+    linkId: link.link_id,
     peers: link.nodes.filter((peer) => peer.node_id !== node.node_id).map((peer) => nodes.find((item) => item.node_id === peer.node_id)?.name ?? "Unknown device"),
   })));
   const canOpenConsole = ["docker", "qemu", "vpcs", "dynamips"].includes(node.node_type ?? "") && node.status === "started";
@@ -59,7 +59,7 @@ export function NodeInspector({ node, links, nodes, onLifecycle, onOpenConsole, 
     finally { setSaving(false); }
   }
 
-  return <Card className="mx-3 mb-3 p-3">
+  return <Card className="sim-node-inspector mx-2 mb-2 p-3">
     <div className="flex items-start justify-between gap-2">
       <div className="min-w-0 flex-1">
         <div className="mb-2 flex flex-wrap items-center gap-2"><Badge variant="outline" className="capitalize">{node.node_type ?? "device"}</Badge><Badge variant={node.status === "started" ? "default" : "secondary"} className="capitalize">{node.status ?? "stopped"}</Badge>{node.runtime_supported === false && <Badge variant="destructive">Runtime unavailable</Badge>}</div>
@@ -81,7 +81,13 @@ export function NodeInspector({ node, links, nodes, onLifecycle, onOpenConsole, 
     <div className="space-y-2">
       <div className="sim-detail-row"><span>Interfaces</span><b>{portCount(node)}</b></div>
       <div className="sim-detail-row"><span>Node ID</span><code>{node.node_id.slice(0, 8)}</code></div>
-      {linkedPorts.length ? <div className="space-y-2 pt-1"><p className="text-xs font-medium text-muted-foreground">Connected interfaces</p>{linkedPorts.map(({ endpoint, peers }) => <div key={`${endpoint.adapter_number}:${endpoint.port_number}`} className="flex items-center justify-between gap-2 text-xs"><span className="font-mono">{portLabel(node, endpoint)}</span><span className="truncate text-muted-foreground">{peers.join(", ")}</span></div>)}</div> : <p className="text-xs text-muted-foreground">No connected interfaces.</p>}
+      <section className="sim-connections">
+        <div className="sim-connections-heading"><span>Connections</span><span>{connections.length}</span></div>
+        {connections.length ? connections.map(({ endpoint, peers, linkId }) => <div className="sim-connection-row" key={`${linkId}:${endpoint.adapter_number}:${endpoint.port_number}`}>
+          <div className="sim-connection-copy"><b>{portLabel(node, endpoint)}</b><span>{peers.join(", ")}</span></div>
+          <code>Link {linkId.slice(0, 6)}</code>
+        </div>) : <p className="sim-connection-empty">No connections yet.</p>}
+      </section>
     </div>
   </Card>;
 }

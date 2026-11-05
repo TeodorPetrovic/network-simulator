@@ -33,9 +33,8 @@ export function WorkspaceDocks({ workspace, topology, topologyOpen, serversOpen,
             <span className={`sim-summary-status ${node.status === "started" ? "is-running" : node.status === "suspended" ? "is-suspended" : ""}`} />
             <span className="sim-summary-node-copy"><b>{node.name}</b><small>{node.node_type ?? "device"}</small></span>
           </button></ContextMenuTrigger>{renderNodeContextMenu(node.node_id)}</ContextMenu>
-          {topology.links.filter((link) => link.nodes.some((endpoint) => endpoint.node_id === node.node_id)).map((link) => <div className="sim-summary-link" key={link.link_id}>↳ Link {link.link_id.slice(0, 6)}</div>)}
+          {workspace.selectedNode?.node_id === node.node_id && <NodeInspector key={node.node_id} node={node} links={topology.links} nodes={topology.nodes} onLifecycle={workspace.onNodeLifecycle} onOpenConsole={workspace.onOpenConsole} onRename={workspace.onNodeRename} onConfigure={onConfigureNode} onDelete={workspace.onDeleteSelection} />}
         </div>) : <p className="sim-dock-empty">No devices on this topology.</p>}
-        {workspace.selectedNode && <NodeInspector key={workspace.selectedNode.node_id} node={workspace.selectedNode} links={topology.links} nodes={topology.nodes} onLifecycle={workspace.onNodeLifecycle} onOpenConsole={workspace.onOpenConsole} onRename={workspace.onNodeRename} onConfigure={onConfigureNode} onDelete={workspace.onDeleteSelection} />}
         {selectedLink && <Card className="m-2 p-2"><b className="text-xs">Ethernet segment</b><div className="mt-2 flex flex-wrap gap-1"><Button size="sm" variant="outline" onClick={onOpenLinkProperties}>Link properties</Button><Button size="sm" variant="outline" onClick={onOpenLinkProperties}>Packet capture</Button><Button size="sm" variant="outline" onClick={() => onToggleLinkSuspend(selectedLink)}>{selectedLink.suspend ? "Resume link" : "Suspend link"}</Button></div></Card>}
       </ScrollArea>
     </section>}
