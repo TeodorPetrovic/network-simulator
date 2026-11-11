@@ -220,6 +220,25 @@ impl VpcsRuntime {
         Ok("started".to_owned())
     }
 
+    /// The startup script as it is on disk if VPCS rewrote it (the `save` command) since we wrote
+    /// `expected`. `None` means nothing was saved, so the stored script is still the truth.
+    pub fn saved_startup_script(
+        &self,
+        project_id: &str,
+        node_id: &str,
+        name: &str,
+        expected: Option<&str>,
+    ) -> Option<String> {
+        let path = self
+            .state_dir
+            .join(parse_id(project_id).ok()?.to_string())
+            .join(parse_id(node_id).ok()?.to_string())
+            .join("startup.vpc");
+        let on_disk = fs::read_to_string(path).ok()?;
+        let written = expected.unwrap_or_default().replace("%h", name);
+        (on_disk != written).then_some(on_disk)
+    }
+
     pub async fn remove_node(&self, project_id: &str, node_id: &str) -> Result<(), RuntimeError> {
         self.stop(node_id).await?;
         self.bridge_ports.write().await.remove(node_id);

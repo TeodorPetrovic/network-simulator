@@ -336,3 +336,24 @@ async fn failed_start_cleanup_kills_the_vpcs_process_tree() {
     }
     panic!("forked process survived failed-start cleanup");
 }
+
+#[test]
+fn a_script_saved_inside_vpcs_is_picked_up_but_an_untouched_one_is_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = VpcsRuntime::with_paths("unused-vpcs", dir.path());
+    let project = Uuid::new_v4();
+    let node = Uuid::new_v4();
+    let node_dir = dir.path().join(project.to_string()).join(node.to_string());
+    fs::create_dir_all(&node_dir).unwrap();
+    let (p, n) = (project.to_string(), node.to_string());
+
+    write_startup_script(&node_dir, Some("set pcname %h"), "PC1").unwrap();
+    assert_eq!(runtime.saved_startup_script(&p, &n, "PC1", Some("set pcname %h")), None);
+
+    // `save` in the VPCS console rewrites the file with the live configuration.
+    fs::write(node_dir.join("startup.vpc"), "ip 10.0.0.2/24 10.0.0.1\n").unwrap();
+    assert_eq!(
+        runtime.saved_startup_script(&p, &n, "PC1", Some("set pcname %h")).as_deref(),
+        Some("ip 10.0.0.2/24 10.0.0.1\n")
+    );
+}

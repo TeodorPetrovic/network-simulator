@@ -131,6 +131,16 @@ pub(super) async fn apply_node_lifecycle(
             } else {
                 None
             };
+            let mut saved_script = None;
+            if matches!(action, NodeAction::Stop | NodeAction::Reload) {
+                // `save` in the VPCS console rewrites startup.vpc. Keep it in the node so the next
+                // start (which regenerates the file) boots with the addresses the user configured.
+                let current = vpcs_startup_script(state.store.pool(), project_id, node).await?;
+                saved_script =
+                    state
+                        .vpcs
+                        .saved_startup_script(project_id, node_id, name, current.as_deref());
+            }
             let status = state
                 .vpcs
                 .lifecycle(project_id, node_id, name, startup_script.as_deref(), action)
@@ -145,6 +155,9 @@ pub(super) async fn apply_node_lifecycle(
                         .await;
                     return Err(error);
                 }
+            }
+            if let Some(saved) = saved_script {
+                node["startup_script"] = json!(saved);
             }
             Ok(status)
         }
