@@ -248,6 +248,16 @@ pub(super) async fn set_project_status(
             let node_object = node.as_object_mut().ok_or_else(|| {
                 ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "Stored node is invalid")
             })?;
+            // Switches and hubs are always running and cloud/NAT nodes cannot be stopped: stopping
+            // them is rejected, which used to abort closing the whole project.
+            match node_object.get("node_type").and_then(Value::as_str) {
+                Some("ethernet_switch" | "ethernet_hub") => continue,
+                Some("cloud" | "nat") => {
+                    let _ = detach_node_links(&state, &project_id, &node_id).await;
+                    continue;
+                }
+                _ => {}
+            }
             if node_object.get("status").and_then(Value::as_str) == Some("started")
                 || node_object.get("status").and_then(Value::as_str) == Some("suspended")
                 || node_object.get("node_type").and_then(Value::as_str) == Some("qemu")
