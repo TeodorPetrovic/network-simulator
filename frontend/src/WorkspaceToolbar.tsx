@@ -34,7 +34,7 @@ export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, 
   const draw = (tool: DrawingTool, label: string) => supported(label, () => startDrawingTool(tool));
   const selected = selectedLifecycleNodes.length > 0;
   return <header className="sim-toolbar" aria-label="Project workspace menu">
-    <div className="sim-toolbar-brand"><span className="sim-project-mark"><Network size={16} /></span><strong>{props.project.name}</strong></div>
+    <div className="sim-toolbar-brand"><button type="button" className="sim-project-mark sim-home-button" title="Back to projects" aria-label="Back to projects" onClick={props.onBack}><Network size={16} /></button><strong>{props.project.name}</strong></div>
     <Menubar>
       <MenubarMenu><MenuTrigger label="File" icon={<FolderOpen />} /><MenubarContent>
         {supported("New blank project", () => {}, true)}{supported("Open project…", () => {}, true)}

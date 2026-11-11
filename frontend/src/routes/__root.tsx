@@ -7,6 +7,8 @@ import {
   Outlet,
   Scripts,
 } from "@tanstack/react-router";
+import { TitleTooltips } from "../TitleTooltips";
+import { themeBootScript, watchSystemTheme } from "../theme";
 import appCss from "../styles.css?url";
 
 export const Route = createRootRoute({
@@ -26,6 +28,7 @@ export const Route = createRootRoute({
 function RootComponent() {
   const [clientReady, setClientReady] = useState(false);
   const navigate = useNavigate();
+  useEffect(() => watchSystemTheme(), []);
   useEffect(() => {
     // The desktop app has no same-origin controller: ask for one before anything else loads.
     if (needsServer() && window.location.pathname !== "/connect") void navigate({ to: "/connect", replace: true });
@@ -35,6 +38,7 @@ function RootComponent() {
   return (
     <RootDocument>
       {clientReady && <Outlet />}
+      <TitleTooltips />
     </RootDocument>
   );
 }
@@ -44,6 +48,7 @@ function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
     <html lang="en">
       <head>
         <HeadContent />
+        <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
       </head>
       <body>
         {children}
