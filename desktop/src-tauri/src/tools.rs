@@ -46,7 +46,28 @@ fn motty_binary(app: &AppHandle) -> Option<PathBuf> {
     let exe = if cfg!(windows) { "motty.exe" } else { "motty" };
     let managed = tools_dir(app).ok()?.join("motty").join(exe);
     if managed.is_file() { return Some(managed); }
-    which("motty")
+    // MOTTY_PATH lets a dev build (e.g. motty-dev.exe) stand in for the released one.
+    if let Some(custom) = std::env::var_os("MOTTY_PATH").map(PathBuf::from).filter(|p| p.is_file()) { return Some(custom); }
+    which("motty").or_else(|| which("motty-dev"))
+}
+
+/// Arguments for Motty's `vnc <host> <port>` command line.
+fn vnc_args(host: &str, port: u16) -> Result<Vec<String>, String> {
+    let valid_host = !host.is_empty()
+        && host.len() <= 253
+        && host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '_' | '[' | ']'));
+    if !valid_host || host.starts_with('-') { return Err("Invalid VNC host".into()); }
+    if port == 0 { return Err("Invalid VNC port".into()); }
+    Ok(vec!["vnc".into(), host.into(), port.to_string()])
+}
+
+/// Opens a VNC session in Motty (`motty vnc <host> <port>`).
+#[tauri::command]
+pub fn launch_motty_vnc(app: AppHandle, host: String, port: u16) -> Result<(), String> {
+    let binary = motty_binary(&app).ok_or("Motty is not installed")?;
+    let args = vnc_args(&host, port)?;
+    std::process::Command::new(binary).args(args).spawn().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn wireshark_binary() -> Option<PathBuf> {
@@ -282,6 +303,14 @@ pub fn launch_motty(app: AppHandle, target: Option<String>) -> Result<(), String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vnc_arguments_are_host_then_port_and_reject_junk() {
+        assert_eq!(vnc_args("192.168.233.10", 5900).unwrap(), ["vnc", "192.168.233.10", "5900"]);
+        assert!(vnc_args("host; calc", 5900).is_err());
+        assert!(vnc_args("--flag", 5900).is_err());
+        assert!(vnc_args("host", 0).is_err());
+    }
 
     #[test]
     fn parses_both_checksum_formats() {

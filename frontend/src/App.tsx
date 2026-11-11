@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Activity } from "lucide-react";
 import { api, dockerHttpConsoleUrl, serverHostname } from "./api";
-import { getDesktopPrefs, openInMotty, openInMottyLink } from "./api/desktop";
+import { getDesktopPrefs, openInMottyLink, openVncInMotty } from "./api/desktop";
 import { isDesktop } from "./api/server";
 import { popOutWindow } from "./floating";
 import type { LinkEndpoint, Node, ResourceMonitor, RuntimeInfo } from "./api";
@@ -173,8 +173,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
       if (node.node_type === "qemu" || node.node_type === "docker") {
         if (isDesktop() && getDesktopPrefs().vnc === "motty") {
           const host = typeof node.console_host === "string" && node.console_host ? node.console_host : serverHostname();
-          const address = `${host}:${String(node.console ?? "")}`;
-          void openInMotty(address).then(setNotice).catch((reason: unknown) => {
+          void openVncInMotty(host, Number(node.console)).then(setNotice).catch((reason: unknown) => {
             setNotice(`${reason instanceof Error ? reason.message : "Could not start Motty."} Using the built-in viewer.`);
             setVncTarget({ runtime: node.node_type as "qemu" | "docker", projectId, nodeId: node.node_id, nodeName: node.name });
           });

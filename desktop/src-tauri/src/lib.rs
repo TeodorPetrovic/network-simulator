@@ -30,7 +30,8 @@ fn host_info() -> HostInfo {
 pub fn run() {
     tauri::Builder::default()
         .runtime(tauri_runtime_wry::Wry::default())
-        .invoke_handler(tauri::generate_handler![host_info, tools::tool_status, tools::install_tool, tools::launch_wireshark, tools::open_in_wireshark, tools::launch_motty, windows::open_window])
+        .invoke_handler(tauri::generate_handler![host_info, tools::tool_status, tools::install_tool, tools::launch_wireshark, tools::open_in_wireshark, tools::launch_motty,
+            tools::launch_motty_vnc, windows::open_window])
         .run(tauri::generate_context!())
         .expect("error while running Network Studio");
 }

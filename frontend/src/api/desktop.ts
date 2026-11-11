@@ -59,9 +59,8 @@ export async function openInMottyLink(link: string): Promise<string> {
   return `Opened ${link} in Motty.`;
 }
 
-/** Protocols Motty cannot be started on from outside (VNC): it opens, and the address is copied to paste into a new session. */
-export async function openInMotty(address: string): Promise<string> {
-  await launchMotty();
-  try { await navigator.clipboard.writeText(address); return `Motty opened. ${address} was copied: paste it into a new session.`; }
-  catch { return `Motty opened. Connect to ${address}.`; }
+/** Opens a VNC session in Motty with `motty vnc <host> <port>`. */
+export async function openVncInMotty(host: string, port: number): Promise<string> {
+  await desktopInvoke<void>("launch_motty_vnc", { host, port });
+  return `Opened ${host}:${port} in Motty.`;
 }
