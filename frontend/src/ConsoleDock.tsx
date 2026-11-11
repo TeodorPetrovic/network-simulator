@@ -76,7 +76,7 @@ export function ConsoleDock({
       </div>
       <div className="sim-console-dock-actions">
         <span><Terminal size={14} />Console{minimized && targets.length ? ` · ${targets.length}` : ""}</span>
-        {!minimized && activeNodeId && <Button variant="ghost" size="icon-sm" aria-label="Pop out console" title="Open this console in a new window" onClick={() => { const t = targets.find((item) => item.id === activeNodeId); if (!t) return; const q = new URLSearchParams({ projectId: t.projectId, nodeId: t.nodeId, nodeName: t.nodeName, nodeType: t.nodeType, ...(t.auxiliary ? { auxiliary: "1" } : {}) }); popOutWindow(`/console?${q}`, 820, 520); onClose(t.id); }}><ExternalLink /></Button>}
+        {!minimized && activeNodeId && <Button variant="ghost" size="icon-sm" aria-label="Pop out console" title="Open this console in a new window" onClick={() => { const t = targets.find((item) => item.id === activeNodeId); if (!t) return; const q = new URLSearchParams({ projectId: t.projectId, nodeId: t.nodeId, nodeName: t.nodeName, nodeType: t.nodeType, ...(t.auxiliary ? { auxiliary: "1" } : {}) }); popOutWindow(`/console?${q}`, 820, 520, t.nodeName); onClose(t.id); }}><ExternalLink /></Button>}
         {minimized
           ? <Button variant="ghost" size="icon-sm" onClick={onRestore} aria-label="Restore console dock"><ChevronUp /></Button>
           : <Button variant="ghost" size="icon-sm" onClick={() => { try { localStorage.setItem("ns.console.float", JSON.stringify({...position,minimized:true,open:true})); } catch {} onMinimize(); }} aria-label="Minimize console dock"><ChevronDown /></Button>}

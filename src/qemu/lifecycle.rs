@@ -395,7 +395,7 @@ pub(super) fn qemu_network_arguments(vm: &QemuVm, _links: &[QemuLink]) -> Vec<St
                 "{},id={},netdev={net_id},mac={}",
                 vm.adapter_type,
                 qemu_adapter_device_id(adapter_number),
-                mac_address(&vm.node_id, adapter_number)
+                adapter_mac(vm, adapter_number)
             ),
         ]);
     }

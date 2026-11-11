@@ -1,5 +1,20 @@
 use super::*;
 
+/// MAC for one adapter: the node's stored base address (stable across project import) with the
+/// adapter number added to the last octet, or the legacy node-id derived address.
+pub(super) fn adapter_mac(vm: &QemuVm, adapter_number: u32) -> String {
+    if let Some(base) = vm.mac_base.as_deref() {
+        let mut octets: Vec<u8> = base.split(':').filter_map(|part| u8::from_str_radix(part, 16).ok()).collect();
+        if octets.len() == 6 {
+            let last = u32::from(octets[5]) + adapter_number;
+            octets[5] = (last & 0xff) as u8;
+            octets[4] = octets[4].wrapping_add((last >> 8) as u8);
+            return format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", octets[0], octets[1], octets[2], octets[3], octets[4], octets[5]);
+        }
+    }
+    mac_address(&vm.node_id, adapter_number)
+}
+
 pub(super) fn qemu_keyval_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace(',', "\\,")
 }

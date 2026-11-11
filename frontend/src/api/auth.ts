@@ -1,6 +1,7 @@
 import type { AccessUser, AccessGroup, AccessRole, AccessPrivilege, AccessControlEntry, ResourcePool, UserApiKey } from "../api-types";
 
 import { request, jsonBody, saveAuthToken } from "./client";
+import { serverUrl } from "./server";
 
 
 export const authApi = {
@@ -10,7 +11,7 @@ export const authApi = {
     return result.ticket;
   },
     login: async (username: string, password: string) => {
-    const response = await fetch("/v3/access/users/login", {
+    const response = await fetch(serverUrl("/v3/access/users/login"), {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ username, password }),

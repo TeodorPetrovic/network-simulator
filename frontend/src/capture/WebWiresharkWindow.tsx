@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, ExternalLink, LoaderCircle, RotateCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { api, webWiresharkClientUrl } from "../api";
+import { api, serverOriginOrSelf, webWiresharkClientUrl } from "../api";
 import { clampFloat, popOutWindow, useFloatingFront } from "../floating";
 import "./capture.css";
 
@@ -24,7 +24,7 @@ export function WebWiresharkWindow({ projectId, linkId, wsPath, title, onClose }
   }, [frameKey, loaded, error]);
   useEffect(() => {
     const connected = (event: MessageEvent) => {
-      if (event.source !== frameRef.current?.contentWindow || event.origin !== window.location.origin || event.data?.type !== "xpra-connected") return;
+      if (event.source !== frameRef.current?.contentWindow || event.origin !== serverOriginOrSelf() || event.data?.type !== "xpra-connected") return;
       setLoaded(true);
       setError("");
     };
@@ -44,7 +44,7 @@ export function WebWiresharkWindow({ projectId, linkId, wsPath, title, onClose }
       const stop = () => { setInteracting(false); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); };
       setInteracting(true);
       window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop);
-    }}>{title}<span />{!minimized && <Button size="sm" variant="ghost" onClick={() => void restart()}><RotateCw />Restart Wireshark</Button>}<Button size="icon-xs" variant="ghost" aria-label="Pop out Web Wireshark" title="Open in a new window" onClick={() => { popOutWindow(webWiresharkClientUrl(wsPath)); onClose(); }}><ExternalLink /></Button><Button size="icon-xs" variant="ghost" aria-label={minimized ? "Restore Web Wireshark" : "Minimize Web Wireshark"} onClick={() => setMinimized((value) => !value)}>{minimized ? <ChevronUp /> : <ChevronDown />}</Button><Button size="icon-xs" variant="ghost" aria-label="Close Web Wireshark" onClick={onClose}><X /></Button></header>
+    }}>{title}<span />{!minimized && <Button size="sm" variant="ghost" onClick={() => void restart()}><RotateCw />Restart Wireshark</Button>}<Button size="icon-xs" variant="ghost" aria-label="Pop out Web Wireshark" title="Open in a new window" onClick={() => { popOutWindow(webWiresharkClientUrl(wsPath), 1100, 760, "Web Wireshark"); onClose(); }}><ExternalLink /></Button><Button size="icon-xs" variant="ghost" aria-label={minimized ? "Restore Web Wireshark" : "Minimize Web Wireshark"} onClick={() => setMinimized((value) => !value)}>{minimized ? <ChevronUp /> : <ChevronDown />}</Button><Button size="icon-xs" variant="ghost" aria-label="Close Web Wireshark" onClick={onClose}><X /></Button></header>
     {!minimized && <div className={`web-wireshark-frame ${interacting ? "is-interacting" : ""}`}>{!loaded && <div className="web-wireshark-loading" role="status"><LoaderCircle className="animate-spin" />{error || "Connecting to Web Wireshark…"}{error && <Button size="sm" onClick={() => { setError(""); setLoaded(false); setFrameKey((value) => value + 1); }}>Retry</Button>}</div>}<iframe ref={frameRef} key={frameKey} title="Web Wireshark" src={source} />{!error && !loaded && <span className="sr-only">Waiting for the Wireshark session to connect</span>}</div>}
     {!minimized && <div className="capture-window-resize" onPointerDown={(event) => { event.preventDefault(); const x = event.clientX, y = event.clientY, width = position.width, height = position.height; const move = (pointer: PointerEvent) => setPosition((current) => ({ ...current, width: Math.max(420, Math.min(innerWidth - current.x, width + pointer.clientX - x)), height: Math.max(280, Math.min(innerHeight - current.y, height + pointer.clientY - y)) })); const stop = () => { setInteracting(false); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); }; setInteracting(true); window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); }} />}
   </section>;

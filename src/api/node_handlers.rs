@@ -19,6 +19,15 @@ pub(super) async fn get_node(
     ))
 }
 
+/// Runtime settings accepted by PUT /nodes/{id} for GNS3 compatibility.
+const RUNTIME_PATCH_KEYS: &[&str] = &[
+    "adapters", "custom_adapters", "ports_mapping", "memory", "cpus", "start_command", "image",
+    "environment", "extra_hosts", "extra_volumes", "extra_configs", "startup_config_content",
+    "adapter_type", "hda_disk_image", "ram", "nvram", "ethernet_adapters", "serial_adapters",
+    "startup_script", "disk0", "disk1", "slot0", "slot1", "slot2", "slot3", "slot4", "slot5", "slot6", "slot7",
+    "wic0", "wic1", "wic2", "wic3",
+];
+
 pub(super) async fn update_node(
     State(state): State<AppState>,
     Path((project_id, node_id)): Path<(Uuid, Uuid)>,
@@ -38,6 +47,40 @@ pub(super) async fn update_node(
         .pop()
         .expect("one requested node was supplied");
     check_if_match(&headers, &current)?;
+    // GNS3 lets PUT /nodes/{id} change runtime settings (adapter count, switch port
+    // definitions, memory, ...). Route changed runtime keys through the validated
+    // configuration path so live switches/links stay consistent; the rest stays cosmetic.
+    let mut patch = patch;
+    if let Some(object) = patch.as_object_mut() {
+        let mut runtime = Map::new();
+        for key in RUNTIME_PATCH_KEYS {
+            if let Some(value) = object.get(*key)
+                && current.get(*key) != Some(value)
+            {
+                runtime.insert((*key).to_owned(), value.clone());
+            }
+            object.remove(*key);
+        }
+        if !runtime.is_empty() {
+            update_node_configuration(
+                State(state.clone()),
+                Path((project_id, node_id)),
+                Json(Value::Object(runtime)),
+            )
+            .await?;
+            if object.is_empty() {
+                let refreshed = get_topology_object(
+                    state.store.pool(),
+                    &project_id.to_string(),
+                    "node",
+                    &node_id.to_string(),
+                )
+                .await?
+                .0;
+                return Ok(etag_response(refreshed));
+            }
+        }
+    }
     if let Some(idle_pc) = patch.get("idlepc").and_then(Value::as_str) {
         let node = get_topology_object(
             state.store.pool(),
@@ -266,6 +309,10 @@ pub(super) async fn update_node_configuration(
                     ApiError::bad_request("custom_adapters must be an array of adapter definitions")
                 },
             )?,
+            adapters: updated["adapters"]
+                .as_u64()
+                .and_then(|adapters| u32::try_from(adapters).ok())
+                .unwrap_or(1),
             ..DockerTemplateOptions::default()
         };
         let old_container_id = updated["container_id"]

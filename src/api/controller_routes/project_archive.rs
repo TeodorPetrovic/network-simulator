@@ -5,6 +5,7 @@ pub(super) async fn export_project(
     AxumPath(project_id): AxumPath<Uuid>,
     Query(query): Query<ProjectExportQuery>,
 ) -> Result<Response, ApiError> {
+    let target = super::gns3_export::Target::parse(query.gns3_version.as_deref())?;
     let pid = project_id.to_string();
     let mut project = project_gns3file(State(state.clone()), AxumPath(project_id))
         .await?
@@ -13,6 +14,7 @@ pub(super) async fn export_project(
     if sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM topology_objects
          WHERE project_id = ? AND kind = 'node'
+           AND json_extract(object_json, '$.node_type') NOT IN ('ethernet_switch', 'ethernet_hub', 'cloud', 'nat')
            AND json_extract(object_json, '$.status') IN ('started', 'suspended')",
     )
     .bind(&pid)
@@ -50,6 +52,28 @@ pub(super) async fn export_project(
             row.get::<Vec<u8>, _>("contents"),
         ));
     }
+    // Per-node files (e.g. a Docker node's /etc/network/interfaces) use GNS3's
+    // project-files/docker/<node_id>/... layout so they follow the node on import.
+    let node_file_rows = sqlx::query(
+        "SELECT f.node_id AS node_id, f.file_path AS file_path, f.contents AS contents, json_extract(t.object_json, '$.node_type') AS node_type
+         FROM node_files f JOIN topology_objects t
+           ON t.project_id = f.project_id AND t.kind = 'node' AND t.object_id = f.node_id
+         WHERE f.project_id = ? ORDER BY f.node_id, f.file_path",
+    )
+    .bind(&pid)
+    .fetch_all(state.store.pool())
+    .await?;
+    for row in node_file_rows {
+        let node_type: String = row.get("node_type");
+        files.push((
+            format!(
+                "project-files/{node_type}/{}/{}",
+                row.get::<String, _>("node_id"),
+                row.get::<String, _>("file_path")
+            ),
+            row.get::<Vec<u8>, _>("contents"),
+        ));
+    }
     if query.include_images {
         let image_files = package_project_images(&mut project)?;
         files.extend(image_files);
@@ -64,6 +88,17 @@ pub(super) async fn export_project(
             "Project files and images exceed the 128 MiB export size limit",
         ));
     }
+    let symbols: std::collections::HashMap<String, String> = super::super::templates::available_templates(&state)
+        .await?
+        .into_iter()
+        .filter_map(|template| {
+            Some((
+                template["template_id"].as_str()?.to_owned(),
+                template["symbol"].as_str()?.to_owned(),
+            ))
+        })
+        .collect();
+    super::gns3_export::convert(&mut project, &pid, target, &symbols);
     let topology = serde_json::to_vec(&project).map_err(internal_json_error)?;
     if topology.len() as u64 > MAX_PROJECT_FILE_BYTES {
         return Err(ApiError::new(
@@ -88,6 +123,9 @@ pub(super) async fn export_project(
 pub(super) struct ProjectExportQuery {
     #[serde(default)]
     include_images: bool,
+    /// GNS3 edition the archive is written for: "2.2" (default, also opens in 3.x) or "3.1".
+    #[serde(default)]
+    gns3_version: Option<String>,
 }
 
 pub(super) async fn import_project(
@@ -97,7 +135,7 @@ pub(super) async fn import_project(
     principal: Option<axum::Extension<auth::Principal>>,
     request: Request,
 ) -> Result<Response, ApiError> {
-    let bytes = to_bytes(request.into_body(), 64 * 1024 * 1024)
+    let bytes = to_bytes(request.into_body(), MAX_PROJECT_ARCHIVE_FILES_BYTES as usize)
         .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     let ImportedProjectArchive {
@@ -125,10 +163,11 @@ pub(super) async fn import_project(
     }
     let image_map = install_imported_project_images(&images)?;
     remap_imported_project_images(&mut project, &image_map);
-    regenerate_imported_project_ids(&mut project, &project_id.to_string());
+    let node_id_map = regenerate_imported_project_ids(&mut project, &project_id.to_string());
+    let (project_files, node_files) = split_imported_node_files(project_files, &node_id_map);
     strip_project_runtime_fields(&mut project);
     project_data = project.clone();
-    save_imported_project(state, project_id, &project_data, &project, &project_files).await?;
+    save_imported_project(state, project_id, &project_data, &project, &project_files, &node_files).await?;
     Ok((StatusCode::CREATED, Json(project)).into_response())
 }
 
@@ -160,22 +199,22 @@ pub(super) async fn load_project(
             "Project path must refer to a regular file",
         ));
     }
-    if metadata.len() > MAX_PROJECT_FILE_BYTES {
+    if metadata.len() > MAX_PROJECT_ARCHIVE_FILES_BYTES {
         return Err(ApiError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
-            "Project files must be 64 MiB or smaller",
+            "Project files must be 1 GiB or smaller",
         ));
     }
     let mut data = Vec::with_capacity(metadata.len() as usize);
     let bytes_read = file
-        .take(MAX_PROJECT_FILE_BYTES + 1)
+        .take(MAX_PROJECT_ARCHIVE_FILES_BYTES + 1)
         .read_to_end(&mut data)
         .await
         .map_err(|e| ApiError::bad_request(format!("Could not read project file: {e}")))?;
-    if bytes_read as u64 > MAX_PROJECT_FILE_BYTES {
+    if bytes_read as u64 > MAX_PROJECT_ARCHIVE_FILES_BYTES {
         return Err(ApiError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
-            "Project files must be 64 MiB or smaller",
+            "Project files must be 1 GiB or smaller",
         ));
     }
     let ImportedProjectArchive {
@@ -191,10 +230,11 @@ pub(super) async fn load_project(
     saved["locked"] = json!(false);
     let image_map = install_imported_project_images(&images)?;
     remap_imported_project_images(&mut saved, &image_map);
-    regenerate_imported_project_ids(&mut saved, &project_id.to_string());
+    let node_id_map = regenerate_imported_project_ids(&mut saved, &project_id.to_string());
+    let (project_files, node_files) = split_imported_node_files(project_files, &node_id_map);
     strip_project_runtime_fields(&mut saved);
     project = saved.clone();
-    save_imported_project(state, project_id, &project, &saved, &project_files).await?;
+    save_imported_project(state, project_id, &project, &saved, &project_files, &node_files).await?;
     Ok((StatusCode::CREATED, Json(saved)).into_response())
 }
 
@@ -204,6 +244,7 @@ pub(super) async fn save_imported_project(
     source: &Value,
     project: &Value,
     project_files: &[(String, Vec<u8>)],
+    node_files: &[(String, String, Vec<u8>)],
 ) -> Result<(), ApiError> {
     let pid = project_id.to_string();
     let mut clean_project = project.clone();
@@ -224,6 +265,10 @@ pub(super) async fn save_imported_project(
         .await?;
     tx.commit().await?;
 
+    let builtin_ids: std::collections::HashMap<String, String> = crate::builtin::BuiltinRuntime::templates()
+        .into_iter()
+        .filter_map(|t| Some((t["template_type"].as_str()?.to_owned(), t["template_id"].as_str()?.to_owned())))
+        .collect();
     // Use the same node constructors as the HTTP create route. They allocate
     // QEMU overlays, Docker containers, and Dynamips runtime manifests that a
     // raw database insert would leave missing when a student opens the lab.
@@ -240,6 +285,8 @@ pub(super) async fn save_imported_project(
                     .and_then(Value::as_str)
                     .ok_or_else(|| ApiError::bad_request("Imported node has no node_id"))?
                     .to_owned();
+                let normalised = super::gns3_export::import_node(item, &builtin_ids);
+                let item = &normalised;
                 if matches!(node_type, "docker" | "qemu" | "vpcs" | "dynamips")
                     || crate::builtin::BuiltinRuntime::is_type(node_type)
                 {
@@ -271,8 +318,20 @@ pub(super) async fn save_imported_project(
             }
         }
 
+        // Links go through the regular create-link route so each endpoint gets its runtime
+        // reservation (relay ports, endpoint ids); raw inserts left them unusable at start.
+        if let Some(links) = source.get("links").and_then(Value::as_array) {
+            for item in links {
+                let mut link = item.clone();
+                strip_link_runtime_fields(&mut link);
+                if let Some(object) = link.as_object_mut() {
+                    object.remove("project_id");
+                }
+                crate::api::link_create::create_link(State(state.clone()), AxumPath(project_id), Json(link)).await?;
+            }
+        }
         let mut tx = state.store.begin_write().await?;
-        for (key, kind, id_field) in [("links", "link", "link_id"), ("drawings", "drawing", "drawing_id")] {
+        for (key, kind, id_field) in [("drawings", "drawing", "drawing_id")] {
             if let Some(items) = source.get(key).and_then(Value::as_array) {
                 for item in items {
                     let mut value = item.clone();
@@ -304,6 +363,15 @@ pub(super) async fn save_imported_project(
             let file_path = clean_relative_path(file_path)?;
             sqlx::query("INSERT INTO project_files(project_id,file_path,contents) VALUES(?,?,?)")
                 .bind(&pid)
+                .bind(file_path)
+                .bind(contents)
+                .execute(&mut *tx)
+                .await?;
+        }
+        for (node_id, file_path, contents) in node_files {
+            sqlx::query("INSERT INTO node_files(project_id,node_id,file_path,contents) VALUES(?,?,?,?)")
+                .bind(&pid)
+                .bind(node_id)
                 .bind(file_path)
                 .bind(contents)
                 .execute(&mut *tx)
@@ -436,4 +504,25 @@ pub(super) async fn duplicate_project(
     tx.commit().await?;
     state.store.publish(event);
     Ok((StatusCode::CREATED, Json(new_project)).into_response())
+}
+
+/// Move `<node_type>/<old node id>/<path>` entries out of the project files and key them by the
+/// node's new id, so per-node files survive the id regeneration on import.
+fn split_imported_node_files(
+    project_files: Vec<(String, Vec<u8>)>,
+    node_id_map: &HashMap<String, String>,
+) -> (Vec<(String, Vec<u8>)>, Vec<(String, String, Vec<u8>)>) {
+    let mut plain = Vec::new();
+    let mut per_node = Vec::new();
+    for (path, contents) in project_files {
+        let mut parts = path.splitn(3, '/');
+        let (kind, old_id, rest) = (parts.next(), parts.next(), parts.next());
+        match (kind, old_id.and_then(|id| node_id_map.get(id)), rest) {
+            (Some("docker" | "qemu" | "vpcs" | "dynamips"), Some(new_id), Some(rest)) if !rest.is_empty() => {
+                per_node.push((new_id.clone(), rest.to_owned(), contents));
+            }
+            _ => plain.push((path, contents)),
+        }
+    }
+    (plain, per_node)
 }

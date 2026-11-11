@@ -1,5 +1,20 @@
 use super::*;
 
+const INIT_SH: &str = include_str!("resources/init.sh");
+const RUN_CMD_SH: &str = include_str!("resources/run-cmd.sh");
+
+fn sample_interfaces(adapters: u32) -> String {
+    let mut text = String::from(
+        "#\n# Network configuration applied at boot by /gns3/init.sh (BusyBox ifup).\n# BusyBox only brings up \"auto\" stanzas and needs separate address/netmask lines.\n#\n",
+    );
+    for adapter in 0..adapters {
+        text.push_str(&format!(
+            "\n# Static config for eth{adapter}\n#auto eth{adapter}\n#iface eth{adapter} inet static\n#\taddress 192.168.{adapter}.2\n#\tnetmask 255.255.255.0\n#\tgateway 192.168.{adapter}.1\n\n# DHCP config for eth{adapter}\n#auto eth{adapter}\n#iface eth{adapter} inet dhcp\n"
+        ));
+    }
+    text
+}
+
 impl DockerRuntime {
     pub async fn create_container(
         &self,
@@ -246,9 +261,24 @@ impl DockerRuntime {
                 ]);
             }
         }
+        let shim = self.init_shim_args(&project_id, &node_id, &image_id, options)?;
+        let use_shim = shim.is_some();
+        if let Some((shim_args, _)) = &shim {
+            args.extend(shim_args.clone());
+        }
         args.push(image_id.clone());
-        if let Some(command) = start_command.filter(|command| !command.trim().is_empty()) {
-            args.extend(parse_start_command(command)?);
+        let user_command = match start_command.filter(|command| !command.trim().is_empty()) {
+            Some(command) => Some(parse_start_command(command)?),
+            None => None,
+        };
+        if use_shim {
+            // GNS3 prepends its init script to the image entrypoint; the command
+            // is the start command or, when none is given, the image's own CMD.
+            let (_, image_command) = self.image_entrypoint_and_cmd(&image_id).await;
+            args.extend(image_command.0);
+            args.extend(user_command.unwrap_or(image_command.1));
+        } else if let Some(command) = user_command {
+            args.extend(command);
         }
         let container_id = self.command(args, DOCKER_TIMEOUT).await?.trim().to_owned();
         if !valid_container_id(&container_id) {
@@ -345,8 +375,12 @@ impl DockerRuntime {
 
     pub async fn pull_image(&self, image: &str) -> Result<String, RuntimeError> {
         validate_docker_image_reference(image)?;
-        self.command(["pull", image], Duration::from_secs(30 * 60))
-            .await?;
+        // Images built or loaded locally have no registry to pull from; use them as they are.
+        if let Err(error) = self.command(["pull", image], Duration::from_secs(30 * 60)).await {
+            if self.image_id(image).await.is_err() {
+                return Err(error);
+            }
+        }
         self.image_id(image).await
     }
 
@@ -392,6 +426,97 @@ impl DockerRuntime {
             self.stop_console_host(container_id).await;
         }
         result
+    }
+
+    /// Docker arguments that route the container through the GNS3-style init shim.
+    /// Returns None when it cannot be used (no adapters, or no static BusyBox on the host).
+    fn init_shim_args(
+        &self,
+        project_id: &str,
+        node_id: &str,
+        _image_id: &str,
+        options: &DockerTemplateOptions,
+    ) -> Result<Option<(Vec<String>, PathBuf)>, RuntimeError> {
+        if options.adapters == 0 || runtime_program("NETWORK_SIMULATOR_BUSYBOX", "busybox").is_none() {
+            return Ok(None);
+        }
+        let node_dir = self.state_dir.join(project_id).join(node_id);
+        let shim_dir = node_dir.join("gns3");
+        let network_dir = node_dir.join("etc").join("network");
+        fs::create_dir_all(&shim_dir)
+            .and_then(|()| fs::create_dir_all(&network_dir))
+            .map_err(|error| RuntimeError::Failed(format!("Could not prepare Docker init shim: {error}")))?;
+        for (name, content) in [("init.sh", INIT_SH), ("run-cmd.sh", RUN_CMD_SH)] {
+            let path = shim_dir.join(name);
+            fs::write(&path, content)
+                .and_then(|()| {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+                })
+                .map_err(|error| RuntimeError::Failed(format!("Could not write Docker init shim: {error}")))?;
+        }
+        let shim_dir = shim_dir.canonicalize().unwrap_or(shim_dir);
+        let network_dir = network_dir.canonicalize().unwrap_or(network_dir);
+        let interfaces = network_dir.join("interfaces");
+        if !interfaces.exists() {
+            fs::write(&interfaces, sample_interfaces(options.adapters))
+                .map_err(|error| RuntimeError::Failed(format!("Could not write network config: {error}")))?;
+        }
+        let expected = shim_dir.join("expected-eth");
+        if !expected.exists() {
+            fs::write(&expected, "").map_err(|error| RuntimeError::Failed(format!("Could not write adapter list: {error}")))?;
+        }
+        let max = options.adapters.saturating_sub(1);
+        let args = vec![
+            "--entrypoint".to_owned(),
+            "/gns3/init.sh".to_owned(),
+            "--volume".to_owned(),
+            format!("{}:/gns3/init.sh:ro", shim_dir.join("init.sh").display()),
+            "--volume".to_owned(),
+            format!("{}:/gns3/run-cmd.sh:ro", shim_dir.join("run-cmd.sh").display()),
+            "--volume".to_owned(),
+            format!("{}:/gns3/expected-eth:ro", expected.display()),
+            "--volume".to_owned(),
+            format!("{}:/etc/network/interfaces", interfaces.display()),
+            "--env".to_owned(),
+            format!("GNS3_MAX_ETHERNET=eth{max}"),
+        ];
+        Ok(Some((args, interfaces)))
+    }
+
+    /// Tell the init shim which adapters have links, so it waits for exactly those NICs.
+    pub fn write_expected_adapters(&self, project_id: &str, node_id: &str, adapters: &[u64]) -> Result<(), RuntimeError> {
+        let project_id = validate_docker_topology_id(project_id, "project")?;
+        let node_id = validate_docker_topology_id(node_id, "node")?;
+        let dir = self.state_dir.join(project_id).join(node_id).join("gns3");
+        if !dir.is_dir() {
+            return Ok(());
+        }
+        let text: String = adapters.iter().map(|adapter| format!("eth{adapter}\n")).collect();
+        fs::write(dir.join("expected-eth"), text).map_err(|error| RuntimeError::Failed(format!("Could not write adapter list: {error}")))
+    }
+
+    /// Persist an `/etc/network/interfaces` file for a node (GNS3's "Edit network configuration").
+    pub fn write_network_config(&self, project_id: &str, node_id: &str, content: &[u8]) -> Result<(), RuntimeError> {
+        let project_id = validate_docker_topology_id(project_id, "project")?;
+        let node_id = validate_docker_topology_id(node_id, "node")?;
+        let dir = self.state_dir.join(project_id).join(node_id).join("etc").join("network");
+        fs::create_dir_all(&dir).map_err(|error| RuntimeError::Failed(format!("Could not create network config directory: {error}")))?;
+        fs::write(dir.join("interfaces"), content).map_err(|error| RuntimeError::Failed(format!("Could not write network config: {error}")))
+    }
+
+    /// (image entrypoint, (entrypoint args to keep, image CMD)) -- both empty if inspection fails.
+    async fn image_entrypoint_and_cmd(&self, image_id: &str) -> ((), (Vec<String>, Vec<String>)) {
+        let output = self
+            .command(
+                ["image", "inspect", "--format", "{{json .Config.Entrypoint}}|{{json .Config.Cmd}}", image_id],
+                DOCKER_TIMEOUT,
+            )
+            .await
+            .unwrap_or_default();
+        let (entrypoint, cmd) = output.trim().split_once('|').unwrap_or(("null", "null"));
+        let parse = |text: &str| serde_json::from_str::<Option<Vec<String>>>(text).ok().flatten().unwrap_or_default();
+        ((), (parse(entrypoint), parse(cmd)))
     }
 
     pub(super) async fn image_id(&self, image: &str) -> Result<String, RuntimeError> {

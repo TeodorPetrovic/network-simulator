@@ -24,6 +24,12 @@ pub(super) async fn create_qemu_node(
         ));
     }
     let node_id = parse_or_generate_uuid(object.get("node_id"), "node_id")?;
+    // Persist a base MAC so exported/imported projects keep their adapters' identities
+    // (RouterOS and others bind configuration to interface MACs).
+    if !object.get("mac_address").and_then(Value::as_str).is_some_and(crate::runtime::valid_mac_address) {
+        let bytes = Uuid::parse_str(&node_id).map(|id| *id.as_bytes()).unwrap_or([0; 16]);
+        object.insert("mac_address".into(), json!(format!("52:54:00:{:02x}:{:02x}:{:02x}", bytes[13], bytes[14], bytes[15] & 0xf8)));
+    }
     ensure_project_exists_pool(state.store.pool(), &project_id).await?;
     if let Some(row) = sqlx::query(
         "SELECT object_json FROM topology_objects

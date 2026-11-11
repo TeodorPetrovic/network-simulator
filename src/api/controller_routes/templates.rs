@@ -10,7 +10,17 @@ pub(super) async fn list_api_templates(
         .fetch_all(state.store.pool())
         .await?;
     for row in rows {
-        templates.push(decode_json(row.get("template_json"))?);
+        let stored: Value = decode_json(row.get("template_json"))?;
+        // A generated image template is superseded by the appliance template for the same image.
+        if stored["auto_image_template"] == true
+            && templates.iter().any(|candidate| {
+                candidate.get("appliance_id").is_some()
+                    && super::super::templates::same_image_reference(candidate, &stored)
+            })
+        {
+            continue;
+        }
+        templates.push(stored);
     }
     super::super::templates::mark_missing_images(&mut templates);
     if let Some(name) = query.get("name") {

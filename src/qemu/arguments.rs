@@ -143,8 +143,10 @@ pub(super) fn qemu_runtime_arguments(vm: &QemuVm) -> Result<Vec<String>, Runtime
         args.extend(["-loadvm".to_owned(), "GNS3_SAVED_STATE".to_owned()]);
     }
     validate_extra_options(&vm.extra_options)?;
+    // Registry appliances pass -nographic; the controller already runs QEMU headless with its
+    // own serial console, and -nographic would add a competing stdio serial port.
     let additional = shlex::split(&vm.extra_options).expect("validated QEMU option syntax");
-    args.extend(additional);
+    args.extend(additional.into_iter().filter(|option| option != "-nographic"));
     Ok(args)
 }
 
@@ -162,7 +164,7 @@ pub(super) fn validate_extra_options(options: &str) -> Result<(), RuntimeError> 
         let option = tokens[index].as_str();
         match option {
             "-no-reboot" | "-no-shutdown" | "-no-hpet" | "-no-acpi" | "-nodefaults"
-            | "-no-user-config" => index += 1,
+            | "-no-user-config" | "-nographic" => index += 1,
             "-cpu" | "-rtc" => {
                 let value = tokens.get(index + 1).ok_or_else(|| {
                     RuntimeError::Failed(format!("QEMU additional option '{option}' needs a value"))

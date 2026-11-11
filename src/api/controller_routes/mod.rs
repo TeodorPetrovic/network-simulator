@@ -27,6 +27,7 @@ mod statistics;
 use statistics::*;
 mod project_operations;
 use project_operations::*;
+mod gns3_export;
 mod project_archive;
 use project_archive::*;
 mod snapshots;
@@ -48,7 +49,8 @@ mod archive;
 use archive::*;
 
 const MAX_PROJECT_FILE_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_PROJECT_ARCHIVE_FILES_BYTES: u64 = 128 * 1024 * 1024;
+// Archives may embed IOS/QEMU images, so the total is far larger than the topology/file caps.
+const MAX_PROJECT_ARCHIVE_FILES_BYTES: u64 = 1024 * 1024 * 1024;
 
 pub(super) fn router() -> Router<AppState> {
     Router::new()

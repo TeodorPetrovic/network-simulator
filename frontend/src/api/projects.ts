@@ -37,8 +37,12 @@ export const projectsApi = {
       throw new Error(body?.message ?? `Project readme could not be saved (${response.status})`);
     }
   },
-    exportProject: async (id: string) => {
-    const response = await fetchWithAuth(`/v3/projects/${encodeURIComponent(id)}/export`);
+    exportProject: async (id: string, options: { gns3Version?: string; includeImages?: boolean } = {}) => {
+    const params = new URLSearchParams();
+    if (options.gns3Version) params.set("gns3_version", options.gns3Version);
+    if (options.includeImages) params.set("include_images", "true");
+    const query = params.toString();
+    const response = await fetchWithAuth(`/v3/projects/${encodeURIComponent(id)}/export${query ? `?${query}` : ""}`);
     handleUnauthorized(response, `/projects/${id}/export`);
     if (!response.ok) {
       const body = (await response.json().catch(() => null)) as { message?: string } | null;

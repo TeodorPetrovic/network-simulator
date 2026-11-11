@@ -1,3 +1,5 @@
+import { openAppWindow } from "./api/desktop";
+import { isDesktop } from "./api/server";
 import { useCallback, useEffect, useReducer, useRef } from "react";
 
 // Floating windows (consoles, capture viewers, Web Wireshark) share one ordered stack so the
@@ -42,7 +44,14 @@ export function clampFloat(x: number, y: number, width: number) {
   return { x: Math.max(GRAB - width, Math.min(window.innerWidth - GRAB, x)), y: Math.max(0, Math.min(window.innerHeight - 42, y)) };
 }
 
-export function popOutWindow(url: string, width = 1000, height = 700) {
+export function popOutWindow(url: string, width = 1000, height = 700, title = "Network Studio") {
+  if (isDesktop()) {
+    // A desktop webview has no window.open: ask the shell for a native window. External URLs
+    // (Web Wireshark's Xpra client) are wrapped in the in-app /embed page.
+    const route = /^https?:\/\//i.test(url) ? `/embed?${new URLSearchParams({ url, title })}` : url;
+    void openAppWindow(route, title, width, height).catch(() => undefined);
+    return null;
+  }
   const left = Math.max(0, Math.round(window.screenX + (window.outerWidth - width) / 2));
   const top = Math.max(0, Math.round(window.screenY + (window.outerHeight - height) / 2));
   // No "noopener": a same-origin popup inherits sessionStorage, which carries the access token.

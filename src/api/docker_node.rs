@@ -173,6 +173,11 @@ pub(super) async fn create_docker_node(
         .map_err(|_| {
             ApiError::bad_request("custom_adapters must be an array of adapter definitions")
         })?,
+        adapters: object
+            .get("adapters")
+            .and_then(Value::as_u64)
+            .and_then(|adapters| u32::try_from(adapters).ok())
+            .unwrap_or(1),
         ..DockerTemplateOptions::default()
     };
     let (container_id, image_digest) = state

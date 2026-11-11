@@ -25,6 +25,36 @@ pub(super) async fn apply_node_lifecycle(
                 .get("container_id")
                 .and_then(Value::as_str)
                 .ok_or_else(|| ApiError::conflict("Docker node has no runtime container"))?;
+            if matches!(action, NodeAction::Start | NodeAction::Reload) {
+                let linked: Vec<i64> = sqlx::query_scalar(
+                    "SELECT DISTINCT port_number FROM link_endpoints WHERE project_id = ? AND node_id = ? ORDER BY port_number",
+                )
+                .bind(project_id)
+                .bind(node_id)
+                .fetch_all(state.store.pool())
+                .await?;
+                let linked: Vec<u64> = linked.into_iter().filter_map(|port| u64::try_from(port).ok()).collect();
+                state
+                    .runtime
+                    .write_expected_adapters(project_id, node_id, &linked)
+                    .map_err(runtime_api_error)?;
+                // "Edit network configuration": files written through the node file API
+                // are applied by the init shim (ifup) when the container boots.
+                if let Some(row) = sqlx::query(
+                    "SELECT contents FROM node_files WHERE project_id = ? AND node_id = ? AND file_path = 'etc/network/interfaces'",
+                )
+                .bind(project_id)
+                .bind(node_id)
+                .fetch_optional(state.store.pool())
+                .await?
+                {
+                    let contents: Vec<u8> = row.get("contents");
+                    state
+                        .runtime
+                        .write_network_config(project_id, node_id, &contents)
+                        .map_err(runtime_api_error)?;
+                }
+            }
             let status = state
                 .runtime
                 .lifecycle(container_id, action)

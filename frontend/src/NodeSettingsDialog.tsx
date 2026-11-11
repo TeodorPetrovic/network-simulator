@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { ExternalLink } from "lucide-react";
 import type { Node } from "./api";
-import { dockerHttpConsoleUrl } from "./api";
+import { dockerHttpConsoleUrl, serverHostname } from "./api";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -172,7 +172,7 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
 
   function openHttpConsole() {
     if (!node || (draft.console_type !== "http" && draft.console_type !== "https")) return;
-    const host = typeof node.console_host === "string" && node.console_host ? node.console_host : window.location.hostname;
+    const host = typeof node.console_host === "string" && node.console_host ? node.console_host : serverHostname();
     const url = dockerHttpConsoleUrl(draft.console_type, host, Number(draft.console_http_port), draft.console_http_path || "/");
     if (!url) {
       setError("Enter a valid HTTP console port and path before opening the console.");

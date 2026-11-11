@@ -13,7 +13,10 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppliancesRouteImport } from './routes/appliances'
 import { Route as CaptureRouteImport } from './routes/capture'
 import { Route as ComputesRouteImport } from './routes/computes'
+import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as ConsoleRouteImport } from './routes/console'
+import { Route as DesktopRouteImport } from './routes/desktop'
+import { Route as EmbedRouteImport } from './routes/embed'
 import { Route as InstalledSoftwareRouteImport } from './routes/installed-software'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as PreferencesRouteImport } from './routes/preferences'
@@ -50,9 +53,24 @@ const ComputesRoute = ComputesRouteImport.update({
   path: '/computes',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ConnectRoute = ConnectRouteImport.update({
+  id: '/connect',
+  path: '/connect',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ConsoleRoute = ConsoleRouteImport.update({
   id: '/console',
   path: '/console',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DesktopRoute = DesktopRouteImport.update({
+  id: '/desktop',
+  path: '/desktop',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EmbedRoute = EmbedRouteImport.update({
+  id: '/embed',
+  path: '/embed',
   getParentRoute: () => rootRouteImport,
 } as any)
 const InstalledSoftwareRoute = InstalledSoftwareRouteImport.update({
@@ -137,7 +155,10 @@ export interface FileRoutesByFullPath {
   '/appliances': typeof AppliancesRoute
   '/capture': typeof CaptureRoute
   '/computes': typeof ComputesRoute
+  '/connect': typeof ConnectRoute
   '/console': typeof ConsoleRoute
+  '/desktop': typeof DesktopRoute
+  '/embed': typeof EmbedRoute
   '/installed-software': typeof InstalledSoftwareRoute
   '/login': typeof LoginRoute
   '/preferences': typeof PreferencesRoute
@@ -159,7 +180,10 @@ export interface FileRoutesByTo {
   '/appliances': typeof AppliancesRoute
   '/capture': typeof CaptureRoute
   '/computes': typeof ComputesRoute
+  '/connect': typeof ConnectRoute
   '/console': typeof ConsoleRoute
+  '/desktop': typeof DesktopRoute
+  '/embed': typeof EmbedRoute
   '/installed-software': typeof InstalledSoftwareRoute
   '/login': typeof LoginRoute
   '/preferences': typeof PreferencesRoute
@@ -182,7 +206,10 @@ export interface FileRoutesById {
   '/appliances': typeof AppliancesRoute
   '/capture': typeof CaptureRoute
   '/computes': typeof ComputesRoute
+  '/connect': typeof ConnectRoute
   '/console': typeof ConsoleRoute
+  '/desktop': typeof DesktopRoute
+  '/embed': typeof EmbedRoute
   '/installed-software': typeof InstalledSoftwareRoute
   '/login': typeof LoginRoute
   '/preferences': typeof PreferencesRoute
@@ -206,7 +233,10 @@ export interface FileRouteTypes {
     | '/appliances'
     | '/capture'
     | '/computes'
+    | '/connect'
     | '/console'
+    | '/desktop'
+    | '/embed'
     | '/installed-software'
     | '/login'
     | '/preferences'
@@ -228,7 +258,10 @@ export interface FileRouteTypes {
     | '/appliances'
     | '/capture'
     | '/computes'
+    | '/connect'
     | '/console'
+    | '/desktop'
+    | '/embed'
     | '/installed-software'
     | '/login'
     | '/preferences'
@@ -250,7 +283,10 @@ export interface FileRouteTypes {
     | '/appliances'
     | '/capture'
     | '/computes'
+    | '/connect'
     | '/console'
+    | '/desktop'
+    | '/embed'
     | '/installed-software'
     | '/login'
     | '/preferences'
@@ -273,7 +309,10 @@ export interface RootRouteChildren {
   AppliancesRoute: typeof AppliancesRoute
   CaptureRoute: typeof CaptureRoute
   ComputesRoute: typeof ComputesRoute
+  ConnectRoute: typeof ConnectRoute
   ConsoleRoute: typeof ConsoleRoute
+  DesktopRoute: typeof DesktopRoute
+  EmbedRoute: typeof EmbedRoute
   InstalledSoftwareRoute: typeof InstalledSoftwareRoute
   LoginRoute: typeof LoginRoute
   PreferencesRoute: typeof PreferencesRoute
@@ -320,11 +359,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ComputesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/connect': {
+      id: '/connect'
+      path: '/connect'
+      fullPath: '/connect'
+      preLoaderRoute: typeof ConnectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/console': {
       id: '/console'
       path: '/console'
       fullPath: '/console'
       preLoaderRoute: typeof ConsoleRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/desktop': {
+      id: '/desktop'
+      path: '/desktop'
+      fullPath: '/desktop'
+      preLoaderRoute: typeof DesktopRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/embed': {
+      id: '/embed'
+      path: '/embed'
+      fullPath: '/embed'
+      preLoaderRoute: typeof EmbedRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/installed-software': {
@@ -451,7 +511,10 @@ const rootRouteChildren: RootRouteChildren = {
   AppliancesRoute: AppliancesRoute,
   CaptureRoute: CaptureRoute,
   ComputesRoute: ComputesRoute,
+  ConnectRoute: ConnectRoute,
   ConsoleRoute: ConsoleRoute,
+  DesktopRoute: DesktopRoute,
+  EmbedRoute: EmbedRoute,
   InstalledSoftwareRoute: InstalledSoftwareRoute,
   LoginRoute: LoginRoute,
   PreferencesRoute: PreferencesRoute,

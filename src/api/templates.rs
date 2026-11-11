@@ -27,9 +27,11 @@ pub(super) async fn available_templates(state: &AppState) -> Result<Vec<Value>, 
         .map(|row| decode_json(row.get::<String, _>("template_json")))
         .collect::<Result<Vec<_>, _>>()?;
     templates.extend(marketplace_templates.into_iter().filter(|candidate| {
+        // An appliance-derived template is hidden only by a template the user created
+        // or edited for the same image, never by a generated image template.
         !saved
             .iter()
-            .any(|stored| same_image_reference(candidate, stored))
+            .any(|stored| stored["auto_image_template"] != true && same_image_reference(candidate, stored))
     }));
     // Apply user profiles after combining built-ins and image-backed templates.
     // Image-backed templates are appended below, so applying profiles earlier
@@ -53,7 +55,7 @@ pub(super) async fn available_templates(state: &AppState) -> Result<Vec<Value>, 
     Ok(templates)
 }
 
-fn same_image_reference(left: &Value, right: &Value) -> bool {
+pub(crate) fn same_image_reference(left: &Value, right: &Value) -> bool {
     let key = match left["template_type"].as_str() {
         Some("qemu") => "hda_disk_image",
         Some("dynamips") => "image",

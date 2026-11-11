@@ -159,6 +159,7 @@ impl QemuRuntime {
                 .max(node["cpus"].as_u64().unwrap_or(1) as u32),
             adapters,
             adapter_ports,
+            mac_base: node["mac_address"].as_str().filter(|mac| crate::runtime::valid_mac_address(mac)).map(str::to_owned),
             adapter_type: node["adapter_type"].as_str().unwrap_or("e1000").to_owned(),
             disk_interface,
             boot_priority: node["boot_priority"].as_str().unwrap_or("c").to_owned(),

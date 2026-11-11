@@ -54,6 +54,15 @@ function projectUuid() {
   });
 }
 
+const EXPORT_OPTIONS_KEY = "network-simulator.project-export";
+type ExportOptions = { gns3Version: string; includeImages: boolean };
+function loadExportOptions(): ExportOptions {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(EXPORT_OPTIONS_KEY) ?? "null") as Partial<ExportOptions> | null;
+    return { gns3Version: saved?.gns3Version === "3.1" ? "3.1" : "2.2", includeImages: saved?.includeImages ?? true };
+  } catch { return { gns3Version: "2.2", includeImages: true }; }
+}
+
 export function ProjectsPage({ onNavigateProject, onOpenAppliances }: { onNavigateProject?: (id: string) => void; onOpenAppliances?: () => void } = {}) {
   if (onNavigateProject) return <ProjectsPageContent navigateProject={onNavigateProject} onOpenAppliances={onOpenAppliances} embedded />;
   return <RoutedProjectsPage onOpenAppliances={onOpenAppliances} />;
@@ -73,6 +82,7 @@ function ProjectsPageContent({ navigateProject, onOpenAppliances, embedded = fal
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<{ column: SortColumn; direction: "asc" | "desc" }>({ column: "name", direction: "asc" });
   const [newName, setNewName] = useState("");
+  const [exportOptions, setExportOptions] = useState(loadExportOptions);
   const [importOpen, setImportOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importName, setImportName] = useState("");
@@ -136,10 +146,15 @@ function ProjectsPageContent({ navigateProject, onOpenAppliances, embedded = fal
     finally { setWorking(false); }
   }
 
+  function updateExportOptions(next: ExportOptions) {
+    setExportOptions(next);
+    try { window.localStorage.setItem(EXPORT_OPTIONS_KEY, JSON.stringify(next)); } catch { /* storage unavailable */ }
+  }
+
   async function exportProject(project: Project) {
     setError(""); setWorking(true);
     try {
-      const blob = await api.exportProject(project.project_id);
+      const blob = await api.exportProject(project.project_id, exportOptions);
       const href = URL.createObjectURL(blob); const anchor = document.createElement("a");
       anchor.href = href; anchor.download = `${project.name}.gns3project`; anchor.click(); URL.revokeObjectURL(href);
     } catch (reason) { setError(`Export unavailable: ${message(reason)}`); }
@@ -206,7 +221,7 @@ function ProjectsPageContent({ navigateProject, onOpenAppliances, embedded = fal
     {error && <div role="alert" className="pages-alert">{error}<Button size="sm" variant="ghost" onClick={() => setError("")}>Dismiss</Button></div>}
     {notice && <div role="status" className="pages-notice">{notice}</div>}
 
-    <div className="projects-toolbar"><form className="projects-create" onSubmit={(event) => void createProject(event)}><Input aria-label="New project name" placeholder="Project name" value={newName} onChange={(event) => setNewName(event.target.value)} /><Button type="submit" disabled={working || !newName.trim()}><Plus size={16} />Create project</Button></form><Button variant="outline" onClick={() => { setImportOpen(true); setError(""); }}><FileUp size={16} />Import .gns3project</Button><label className="projects-search"><Search size={15} /><Input aria-label="Search projects by name" placeholder="Search by name…" value={query} onChange={(event) => setQuery(event.target.value)} /></label></div>
+    <div className="projects-toolbar"><form className="projects-create" onSubmit={(event) => void createProject(event)}><Input aria-label="New project name" placeholder="Project name" value={newName} onChange={(event) => setNewName(event.target.value)} /><Button type="submit" disabled={working || !newName.trim()}><Plus size={16} />Create project</Button></form><Button variant="outline" onClick={() => { setImportOpen(true); setError(""); }}><FileUp size={16} />Import .gns3project</Button><label className="flex items-center gap-1.5 text-sm" title="GNS3 edition the exported archive is written for"><span>Export for GNS3</span><select aria-label="Export for GNS3 edition" className="h-9 rounded-md border bg-background px-2" value={exportOptions.gns3Version} onChange={(event) => updateExportOptions({ ...exportOptions, gns3Version: event.target.value })}><option value="2.2">2.2.x (also opens in 3.x)</option><option value="3.1">3.1 (3.x only)</option></select></label><label className="flex items-center gap-1.5 text-sm" title="Embed the disk images the project uses (IOS, QEMU) so it runs on a machine that does not have them"><input type="checkbox" aria-label="Include images in export" checked={exportOptions.includeImages} onChange={(event) => updateExportOptions({ ...exportOptions, includeImages: event.target.checked })} />Include images</label><label className="projects-search"><Search size={15} /><Input aria-label="Search projects by name" placeholder="Search by name…" value={query} onChange={(event) => setQuery(event.target.value)} /></label></div>
 
     <Card className="projects-table-card"><Table><TableHeader><TableRow>
       {([ ["name", "Project"], ["status", "Status"], ["created_at", "Created"] ] as Array<[SortColumn, string]>).map(([key, label]) => <TableHead key={key}><button className="projects-sort" onClick={() => setSortColumn(key)}>{label}{sort.column === key && (sort.direction === "asc" ? <ArrowUp size={13} /> : <ArrowDown size={13} />)}</button></TableHead>)}

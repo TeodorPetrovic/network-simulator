@@ -43,7 +43,13 @@ impl DynamipsRuntime {
                 self.image_dir.display()
             ))
         })?;
-        let path = Path::new(image).canonicalize().map_err(|error| {
+        // GNS3 projects store bare image file names; resolve them inside the image directory.
+        let candidate = if Path::new(image).is_absolute() {
+            PathBuf::from(image)
+        } else {
+            root.join(image)
+        };
+        let path = candidate.canonicalize().map_err(|error| {
             RuntimeError::NotFound(format!("Cisco IOS image '{image}' is unavailable: {error}"))
         })?;
         if !path.starts_with(&root) {

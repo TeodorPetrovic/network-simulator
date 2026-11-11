@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Link, LinkEndpoint, Node, Project, ResourceMonitor, RuntimeInfo, RuntimeTemplate, TopologySnapshot } from "./api";
-import { api, getAuthToken } from "./api";
+import { api, getAuthToken, serverBase } from "./api";
+import { getDesktopPrefs, launchWireshark, openInWireshark } from "./api/desktop";
+import { isDesktop } from "./api/server";
 import { ResourceMonitorPopover } from "./ResourceMonitorPopover";
 import { nodesForLifecycle } from "./lifecycle";
 import type { LifecycleAction } from "./lifecycle";
@@ -100,7 +102,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   function openWebWireshark(link: Link, newTab = false) {
     const wsPath = link.wireshark_ws_path ?? link.ws_path;
     if (typeof wsPath !== "string") return;
-    if (newTab) { window.open(webWiresharkClientUrl(wsPath), "_blank", "noopener"); return; }
+    if (newTab) { if (isDesktop()) popOutWindow(webWiresharkClientUrl(wsPath), 1100, 760, "Web Wireshark"); else window.open(webWiresharkClientUrl(wsPath), "_blank", "noopener"); return; }
     setWiresharkWindows((current) => current.some((item) => item.linkId === link.link_id) ? current : [...current, { linkId: link.link_id, wsPath, title: `Web Wireshark · ${captureDisplayName(link, topology.nodes)}`, key: Date.now() }]);
   }
   async function restartWebWireshark(link: Link) {
@@ -142,9 +144,17 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
     const route = capturing
       ? api.linkCaptureStreamUrl(props.project.project_id, link.link_id)
       : api.linkCaptureFileUrl(props.project.project_id, link.link_id);
-    const url = new URL(route, window.location.href);
+    const url = new URL(route, serverBase());
     if (getAuthToken()) url.searchParams.set("ticket", await api.accessTicket(route));
     const title = captureDisplayName(link, topology.nodes);
+    if (isDesktop() && getDesktopPrefs().capture === "wireshark") {
+      try {
+        if (capturing) await launchWireshark(url.toString(), `Capture · ${title}`);
+        else await openInWireshark(url.toString(), title);
+        setFeatureMessage("Opened the capture in Wireshark.");
+        return;
+      } catch (reason) { setFeatureMessage(`${reason instanceof Error ? reason.message : String(reason)} Using the built-in viewer instead.`); }
+    }
     const viewer = capturing
       ? { url: url.toString(), title: `Capture · ${title}` }
       : { downloadUrl: url.toString(), title: `Capture · ${title}` };
@@ -152,7 +162,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
       const params = new URLSearchParams({ title });
       if (viewer.url) params.set("stream", viewer.url);
       if (viewer.downloadUrl) params.set("download", viewer.downloadUrl);
-      if (popup) popOutWindow(`/capture?${params.toString()}`);
+      if (popup || isDesktop()) popOutWindow(`/capture?${params.toString()}`, 1000, 700, "Capture");
       else window.open(`/capture?${params.toString()}`, "_blank", "noopener");
       return;
     }

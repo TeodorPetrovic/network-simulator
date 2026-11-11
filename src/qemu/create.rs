@@ -326,6 +326,8 @@ impl QemuRuntime {
             maxcpus,
             adapters,
             adapter_ports: self.adapter_udp_ports(&node_id.to_string(), adapters)?,
+            
+            mac_base: None,
             adapter_type: adapter_type.to_owned(),
             disk_interface: disk_interface.to_owned(),
             boot_priority: boot_priority.to_owned(),

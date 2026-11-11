@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-import { api } from "../api";
+import { api, getServerOrigin, isDesktop } from "../api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -29,7 +29,7 @@ function LoginPage() {
       <div className="login-mark">NS</div>
       <div className="pages-eyebrow">NETWORK STUDIO</div>
       <h1>Sign in</h1>
-      <p>Use your controller account to continue.</p>
+      <p>{isDesktop() ? <>Signing in to <strong>{getServerOrigin()}</strong>. <a href="/connect">Change server</a></> : "Use your controller account to continue."}</p>
       <form className="login-form" onSubmit={(event) => void submit(event)}>
         <label htmlFor="login-username">Username</label>
         <Input id="login-username" autoComplete="username" required value={username} onChange={(event) => setUsername(event.target.value)} />

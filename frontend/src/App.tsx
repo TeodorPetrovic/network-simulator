@@ -1,6 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Activity } from "lucide-react";
-import { api, dockerHttpConsoleUrl } from "./api";
+import { api, dockerHttpConsoleUrl, serverHostname } from "./api";
+import { getDesktopPrefs, openInMotty, openInMottyLink } from "./api/desktop";
+import { isDesktop } from "./api/server";
+import { popOutWindow } from "./floating";
 import type { LinkEndpoint, Node, ResourceMonitor, RuntimeInfo } from "./api";
 import { nodesForLifecycle } from "./lifecycle";
 import { errorMessage, samePort, upsertLink } from "./appUtils";
@@ -168,6 +171,15 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
     }
     if (!auxiliary && consoleType === "vnc") {
       if (node.node_type === "qemu" || node.node_type === "docker") {
+        if (isDesktop() && getDesktopPrefs().vnc === "motty") {
+          const host = typeof node.console_host === "string" && node.console_host ? node.console_host : serverHostname();
+          const address = `${host}:${String(node.console ?? "")}`;
+          void openInMotty(address).then(setNotice).catch((reason: unknown) => {
+            setNotice(`${reason instanceof Error ? reason.message : "Could not start Motty."} Using the built-in viewer.`);
+            setVncTarget({ runtime: node.node_type as "qemu" | "docker", projectId, nodeId: node.node_id, nodeName: node.name });
+          });
+          return;
+        }
         setVncTarget({ runtime: node.node_type, projectId, nodeId: node.node_id, nodeName: node.name });
         return;
       }
@@ -179,16 +191,29 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
       return;
     }
     if (!auxiliary && node.node_type === "docker" && (consoleType === "http" || consoleType === "https")) {
-      const host = typeof node.console_host === "string" && node.console_host ? node.console_host : window.location.hostname;
+      const host = typeof node.console_host === "string" && node.console_host ? node.console_host : serverHostname();
       const url = dockerHttpConsoleUrl(consoleType, host, Number(node.console_http_port ?? 80), String(node.console_http_path ?? "/"));
       if (!url) {
         setNotice("The HTTP console address is invalid. Check its host, port, and path in device settings.");
         return;
       }
-      window.open(url, "_blank", "noopener,noreferrer");
+      if (isDesktop()) popOutWindow(url, 1000, 700, node.name); else window.open(url, "_blank", "noopener,noreferrer");
       setNotice("Opened the configured HTTP console. The container port must be reachable from your browser.");
       return;
     }
+    if (isDesktop() && getDesktopPrefs().console === "motty" && !auxiliary && consoleType === "telnet") {
+      const host = typeof node.console_host === "string" && node.console_host ? node.console_host : serverHostname();
+      void openInMottyLink(`telnet://${host}:${String(node.console ?? "")}/`).then(setNotice).catch((reason: unknown) => {
+        setNotice(`${reason instanceof Error ? reason.message : "Could not start Motty."} Using the built-in terminal.`);
+        openBuiltinConsole(node, auxiliary);
+      });
+      return;
+    }
+    openBuiltinConsole(node, auxiliary);
+  }
+
+  function openBuiltinConsole(node: Node, auxiliary: boolean) {
+    if (!projectId) return;
     const targetId = `${node.node_id}:${auxiliary ? "aux" : "main"}`;
     const target: ConsoleTarget = { id: targetId, projectId, nodeId: node.node_id, nodeName: node.name, nodeType: node.node_type as ConsoleTarget["nodeType"], auxiliary };
     setConsoleTargets((current) => current.some((item) => item.id === targetId) ? current : [...current, target]);

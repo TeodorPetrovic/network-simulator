@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { isDesktop } from "./api/server";
 import { Boxes, Copy, ExternalLink, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import type { RuntimeTemplate } from "./api";
 import { api } from "./api";
@@ -172,7 +173,7 @@ export function PreferencesPage({ fromProject }: { fromProject?: string } = {}) 
 
   return <PagesShell active="Preferences" fromProject={fromProject}><div className="pages-content">
     <PageTitle eyebrow="CONTROLLER" title="Preferences" description="Manage runtime templates and the defaults used for new nodes." actions={<>{fromProject && <Button variant="ghost" onClick={() => void navigate({ to: "/projects/$projectId" as never, params: { projectId: fromProject } as never })}>Back to project</Button>}<Button variant="outline" onClick={() => void navigate({ to: "/appliances" as never, search: { fromProject } as never })}>Appliances</Button><Button variant="outline" onClick={() => void navigate({ to: "/settings" as never })}>General settings</Button><Button onClick={() => void navigate({ to: "/templates/new" as never })}><Plus size={15} />New template wizard</Button></>} />
-    {error && <div role="alert" className="pages-alert">{error}</div>}{notice && <div role="status" className="pages-notice">{notice}</div>}
+    {isDesktop() && <div role="status" className="pages-notice">Wireshark, Motty and the console and capture viewers for this computer are set up under <a className="underline" href="/desktop">Desktop tools</a>.</div>}{error && <div role="alert" className="pages-alert">{error}</div>}{notice && <div role="status" className="pages-notice">{notice}</div>}
     <div className="preferences-layout"><Card className="preferences-sidebar"><div className="preferences-sidebar-title"><Boxes size={17} />Template types</div>{runtimeOrder.map((key) => <button key={key} className={`preferences-runtime${runtime === key ? " is-active" : ""}`} onClick={() => setRuntime(key)}>{runtimeLabels[key]}{unsupported.has(key) && <Badge variant="outline">Unsupported</Badge>}</button>)}</Card>
       <section className="min-w-0"><div className="flex items-start justify-between gap-4"><div><h2 className="text-lg font-semibold">{runtimeLabels[runtime]} templates</h2><p className="mt-1 text-sm text-muted-foreground">{unsupported.has(runtime) ? "This runtime is not implemented by the controller." : "Templates are shared across projects and supply defaults when a node is created."}</p></div>{supported.has(runtime) && <div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => void refresh()} disabled={busy}><RefreshCw size={14} />Refresh</Button><Button size="sm" onClick={() => setCreateOpen(true)}><Plus size={14} />Add template</Button></div>}</div>
         {runtime === "iou" && <p className="mt-3 text-sm text-amber-700">Template and node data are saved, but this controller cannot execute IOU without its runtime binary.</p>}

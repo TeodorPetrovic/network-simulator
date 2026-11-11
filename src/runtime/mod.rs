@@ -66,6 +66,9 @@ pub struct DockerTemplateOptions {
     pub aux_type: String,
     #[serde(default)]
     pub custom_adapters: Vec<DockerCustomAdapter>,
+    /// Number of Ethernet adapters; when non-zero the GNS3-style init shim waits for them.
+    #[serde(default)]
+    pub adapters: u32,
 }
 
 impl Default for DockerTemplateOptions {
@@ -83,6 +86,7 @@ impl Default for DockerTemplateOptions {
             console_vnc_port: None,
             aux_type: default_docker_aux_type(),
             custom_adapters: Vec::new(),
+            adapters: 0,
         }
     }
 }
@@ -154,6 +158,7 @@ impl Default for DockerRuntime {
 mod helpers;
 pub use self::helpers::validate_docker_extra_configs;
 use self::helpers::*;
+pub(crate) use self::helpers::valid_mac_address;
 
 #[derive(Serialize)]
 pub struct RuntimeInfo {

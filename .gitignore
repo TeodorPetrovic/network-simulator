@@ -11,3 +11,4 @@ frontend/dist/
 *.image
 # Dynamips writes <platform>_i<N>_log.txt into its working directory.
 *_i[0-9]*_log.txt
+labs/projects/

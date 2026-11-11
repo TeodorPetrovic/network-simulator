@@ -53,6 +53,8 @@ pub struct QemuVm {
     pub maxcpus: u32,
     pub adapters: u32,
     pub adapter_ports: Vec<(u16, u16)>,
+    /// Base MAC address (GNS3 `mac_address`); adapter N adds N to its last octet.
+    pub mac_base: Option<String>,
     pub adapter_type: String,
     pub disk_interface: String,
     pub boot_priority: String,

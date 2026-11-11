@@ -37,6 +37,7 @@ use uuid::Uuid;
 pub(crate) mod auth;
 #[path = "controller_routes/mod.rs"]
 mod controller_routes;
+mod cors;
 mod copilot;
 mod copilot_llm;
 mod mcp;
@@ -401,6 +402,7 @@ fn router_with_client_dir(state: AppState, client_dir: &FsPath) -> Router {
             )),
         state.clone(),
     )
+    .layer(cors::layer())
     .with_state(state)
 }
 

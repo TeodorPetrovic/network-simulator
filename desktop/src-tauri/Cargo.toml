@@ -1,0 +1,40 @@
+[package]
+name = "network-studio-desktop"
+version = "0.1.0"
+description = "Network Studio desktop client: a native shell around the web UI that connects to a remote controller"
+authors = ["Teodor Petrovic"]
+license = ""
+repository = ""
+edition = "2024"
+rust-version = "1.95"
+
+# Standalone package (not part of the controller's build): the controller must keep building
+# on servers that have no GUI libraries installed.
+[workspace]
+
+[lib]
+name = "network_studio_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "3.0.0-alpha.4", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "3.0.0-alpha.6", features = [] }
+tauri-runtime-wry = { version = "3.0.0-alpha.6" }
+tokio = { version = "1", features = ["process", "io-util", "rt", "macros"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "json"] }
+futures-util = "0.3"
+sha2 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+flate2 = "1"
+tar = "0.4"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

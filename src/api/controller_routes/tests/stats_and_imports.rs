@@ -514,7 +514,7 @@ async fn load_project_rejects_non_regular_and_oversized_files() {
 
     let oversized_path = directory.path().join("oversized.gns3");
     let oversized = std::fs::File::create(&oversized_path).unwrap();
-    oversized.set_len(64 * 1024 * 1024 + 1).unwrap();
+    oversized.set_len(1024 * 1024 * 1024 + 1).unwrap();
     let too_large = send(
         &app,
         Method::POST,

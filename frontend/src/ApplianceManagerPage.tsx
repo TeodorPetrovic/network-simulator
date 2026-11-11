@@ -15,21 +15,30 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 type ManagerTab = "installed" | "registry";
+
+const STATE_KEY = "network-simulator.appliance-manager";
+type PersistedState = { tab?: ManagerTab; file?: string; version?: string; query?: string; registry?: string };
+function loadPersisted(): PersistedState {
+  try { return JSON.parse(window.localStorage.getItem(STATE_KEY) ?? "{}") as PersistedState; } catch { return {}; }
+}
+function savePersisted(patch: PersistedState) {
+  try { window.localStorage.setItem(STATE_KEY, JSON.stringify({ ...loadPersisted(), ...patch })); } catch { /* storage unavailable */ }
+}
 import { applianceRuntimeLabel, CreateCustomApplianceDialog, EmptyState, errorMessage, FilePickerButton, formatBytes, ImageAssignmentCard, RegistryDetails, versionIsReady } from "./ApplianceManagerComponents";
 
 type LibraryEntry = { id: string; name: string; runtime: string; appliance: Gns3Appliance };
 
 export function ApplianceManagerPage({ onBack, onOpenPreferences, onOpenImageCatalog, onTemplatesChanged }: { onBack: () => void; onOpenPreferences?: () => void; onOpenImageCatalog?: () => void; onTemplatesChanged?: (templates: Awaited<ReturnType<typeof api.templates>>) => void }) {
-  const [tab, setTab] = useState<ManagerTab>("installed");
+  const [tab, setTab] = useState<ManagerTab>(() => loadPersisted().tab === "registry" ? "registry" : "installed");
   const [appliances, setAppliances] = useState<Gns3Appliance[]>([]);
   const [localImages, setLocalImages] = useState<LocalApplianceImage[]>([]);
   const [customImageOptions, setCustomImageOptions] = useState<RuntimeTemplate[]>([]);
   const [runtimeApplianceTemplates, setRuntimeApplianceTemplates] = useState<Array<{ id: string; name: string; type: string; applianceId: string; version: string }>>([]);
-  const [selectedFile, setSelectedFile] = useState("");
-  const [selectedVersion, setSelectedVersion] = useState("");
+  const [selectedFile, setSelectedFile] = useState(() => loadPersisted().file ?? "");
+  const [selectedVersion, setSelectedVersion] = useState(() => loadPersisted().version ?? "");
   const [customDialogOpen, setCustomDialogOpen] = useState(false);
   const [applianceFilter, setApplianceFilter] = useState("");
-  const [registryQuery, setRegistryQuery] = useState("");
+  const [registryQuery, setRegistryQuery] = useState(() => loadPersisted().query ?? "");
   const [registryResults, setRegistryResults] = useState<Gns3ApplianceSearchResult[]>([]);
   const [registryLoaded, setRegistryLoaded] = useState(false);
   const [openRuntimeGroups, setOpenRuntimeGroups] = useState<Record<string, boolean>>({});
@@ -39,6 +48,8 @@ export function ApplianceManagerPage({ onBack, onOpenPreferences, onOpenImageCat
   const [imageLibraryOpen, setImageLibraryOpen] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+
+  useEffect(() => { savePersisted({ tab, file: selectedFile, version: selectedVersion, query: registryQuery, registry: selectedRegistry?.file_name ?? "" }); }, [tab, selectedFile, selectedVersion, registryQuery, selectedRegistry]);
 
   useEffect(() => {
     if (!error && !notice) return;
@@ -113,18 +124,23 @@ export function ApplianceManagerPage({ onBack, onOpenPreferences, onOpenImageCat
     }
   }
 
-  useEffect(() => { void refreshManager({ fileName: "", versionName: "" }); }, []);
+  useEffect(() => { void refreshManager("keep"); }, []);
 
   useEffect(() => {
     if (tab !== "registry" || registryLoaded) return;
     let active = true;
     setBusy(true);
     setError("");
-    api.searchGns3Appliances("")
-      .then((results) => {
+    api.searchGns3Appliances(registryQuery.trim())
+      .then(async (results) => {
         if (!active) return;
         setRegistryResults(results);
         setRegistryLoaded(true);
+        const wanted = loadPersisted().registry;
+        if (wanted && !selectedRegistry) {
+          const detail = await api.gns3Appliance(wanted).catch(() => null);
+          if (active && detail) setSelectedRegistry(detail);
+        }
       })
       .catch((reason: unknown) => {
         if (active) setError(errorMessage(reason));
@@ -166,6 +182,28 @@ export function ApplianceManagerPage({ onBack, onOpenPreferences, onOpenImageCat
       await refreshManager({ fileName: selectedRegistry.file_name, versionName: selectedRegistry.versions?.[0]?.name });
       setTab("installed");
       setNotice(`${selectedRegistry.name} is now in the appliance library. Assign or verify its local image below.`);
+    } catch (reason) { setError(errorMessage(reason)); }
+    finally { setBusy(false); }
+  }
+
+  async function installRegistryAppliance() {
+    if (!selectedRegistry) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      if (!selectedRegistry.imported) await api.importGns3Appliance(selectedRegistry.file_name);
+      const dockerRefs = [...new Set((selectedRegistry.versions ?? []).flatMap((version) => version.docker_image ? [version.docker_image] : []))];
+      const toPull = dockerRefs.slice(0, 1);
+      for (const ref of toPull) {
+        setNotice(`Pulling ${ref}…`);
+        await api.pullDockerImage(ref);
+      }
+      await refreshManager({ fileName: selectedRegistry.file_name, versionName: selectedRegistry.versions?.[0]?.name });
+      setTab("installed");
+      setNotice(toPull.length
+        ? `${selectedRegistry.name} is installed: ${toPull[0]} was pulled and the template is in the device picker.`
+        : `${selectedRegistry.name} is in the appliance library. Assign or verify its local image below.`);
     } catch (reason) { setError(errorMessage(reason)); }
     finally { setBusy(false); }
   }
@@ -339,7 +377,7 @@ export function ApplianceManagerPage({ onBack, onOpenPreferences, onOpenImageCat
             <form className="flex gap-2 border-b p-3" onSubmit={(event) => void searchRegistry(event)}><div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input value={registryQuery} onChange={(event) => setRegistryQuery(event.target.value)} aria-label="Search GNS3 registry" placeholder="Search devices, e.g. Cisco 7200" className="pl-9" /></div><Button type="submit" disabled={busy}><Search />Search</Button></form>
             <ScrollArea className="appliance-library-scroll"><div className="space-y-1 p-2">{registryResults.map((item) => <button key={item.file_name} type="button" className={`appliance-library-item ${selectedRegistry?.file_name === item.file_name ? "selected" : ""}`} onClick={() => void inspectRegistry(item)}><span className="grid size-9 shrink-0 place-items-center rounded-md border text-primary"><Server size={17} /></span><span className="grid min-w-0 flex-1 gap-1 text-left"><b className="truncate text-sm font-medium">{item.name}</b><small className="truncate text-muted-foreground">{item.file_name}</small></span><Badge variant={item.imported ? "secondary" : "outline"}>{item.imported ? "Imported" : "GNS3"}</Badge></button>)}{!busy && registryResults.length === 0 && <EmptyState icon={<Search />} title={registryLoaded ? "No registry entries found" : "Loading the GNS3 registry"} text={registryLoaded ? "Try a different name or runtime keyword." : "The appliance catalog is being loaded."} />}</div></ScrollArea>
           </Card>
-          <Card className="appliance-config-panel">{selectedRegistry ? <RegistryDetails appliance={selectedRegistry} busy={busy} onImport={() => void importRegistryDefinition()} /> : <EmptyState icon={<FileUp />} title="GNS3 appliance definition" text="Registry results show the actual .gns3a definition, versions, required files, and hashes." />}</Card>
+          <Card className="appliance-config-panel">{selectedRegistry ? <RegistryDetails appliance={selectedRegistry} busy={busy} onImport={() => void importRegistryDefinition()} onInstall={() => void installRegistryAppliance()} /> : <EmptyState icon={<FileUp />} title="GNS3 appliance definition" text="Registry results show the actual .gns3a definition, versions, required files, and hashes." />}</Card>
         </div>
       </TabsContent>
     </Tabs>

@@ -76,8 +76,8 @@ pub(super) fn read_project_archive(bytes: &[u8]) -> Result<ImportedProjectArchiv
         }
         let advertised_size = entry.size();
         let remaining = MAX_PROJECT_ARCHIVE_FILES_BYTES.saturating_sub(expanded_size);
-        let max_size = if is_topology {
-            MAX_PROJECT_FILE_BYTES.min(remaining)
+        let max_size = if image_path.is_some() {
+            remaining
         } else {
             MAX_PROJECT_FILE_BYTES.min(remaining)
         };
@@ -313,7 +313,7 @@ pub(super) fn remap_imported_project_images(
     }
 }
 
-pub(super) fn regenerate_imported_project_ids(project: &mut Value, project_id: &str) {
+pub(super) fn regenerate_imported_project_ids(project: &mut Value, project_id: &str) -> HashMap<String, String> {
     project["project_id"] = json!(project_id);
     let mut node_ids = HashMap::new();
     if let Some(nodes) = project.get_mut("nodes").and_then(Value::as_array_mut) {
@@ -333,6 +333,7 @@ pub(super) fn regenerate_imported_project_ids(project: &mut Value, project_id: &
             strip_node_runtime_fields(node);
         }
     }
+    let node_id_map = node_ids.clone();
     if let Some(links) = project.get_mut("links").and_then(Value::as_array_mut) {
         for link in links {
             link["link_id"] = json!(Uuid::new_v4());
@@ -355,6 +356,7 @@ pub(super) fn regenerate_imported_project_ids(project: &mut Value, project_id: &
             drawing["project_id"] = json!(project_id);
         }
     }
+    node_id_map
 }
 
 pub(super) fn archive_bad_request(message: impl Into<String>) -> ApiError {

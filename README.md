@@ -40,6 +40,10 @@ Dynamips execution uses the upstream `dynamips` executable from `PATH`, `NETWORK
 
 Mixed-runtime links require the upstream [GNS3 uBridge](https://github.com/GNS3/ubridge) executable. Set `NETWORK_SIMULATOR_UBRIDGE` to its path if it is not on `PATH`. On Ubuntu, build it from the upstream source and run `sudo make install`; upstream installation sets the required `cap_net_admin,cap_net_raw` file capabilities. The controller prefers an executable found on `PATH` (such as the root-owned system install) over its user-local fallback. Confirm the installed file's capabilities with `getcap "$(command -v ubridge)"`. The runtime panel checks whether uBridge can create and remove a Linux bridge, rather than only checking whether its executable exists.
 
+## Desktop app
+
+`desktop/` is a Tauri 3 (alpha) desktop client that connects to a controller on another machine, so the runtime stays on the server. See [docs/desktop.md](docs/desktop.md).
+
 ## Verify
 
 ```sh

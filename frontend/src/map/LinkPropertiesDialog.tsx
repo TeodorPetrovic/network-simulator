@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { api, getAuthToken } from "../api";
+import { api, getAuthToken, serverBase } from "../api";
 import type { Link, LinkFilterDescription, Node } from "../api";
 import { captureDisplayName, defaultCaptureName, defaultEndpointLabelPosition, endpointName } from "./helpers";
 import { Badge } from "@/components/ui/badge";
@@ -122,7 +122,7 @@ export function LinkPropertiesDialog({ projectId, link, nodes, open, onOpenChang
   }
   const streamUrl = async () => {
     const path = api.linkCaptureStreamUrl(projectId, activeLink.link_id);
-    const url = new URL(path, window.location.href);
+    const url = new URL(path, serverBase());
     if (getAuthToken()) url.searchParams.set("ticket", await api.accessTicket(path));
     return url.toString();
   };

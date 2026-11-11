@@ -239,6 +239,8 @@ fn qemu_runtime_arguments_cover_disks_direct_boot_console_and_extra_options() {
         maxcpus: 4,
         adapters: 0,
         adapter_ports: vec![],
+        
+        mac_base: None,
         adapter_type: "virtio-net-pci".to_owned(),
         disk_interface: "ide".to_owned(),
         boot_priority: "dc".to_owned(),

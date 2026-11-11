@@ -146,6 +146,25 @@ pub(super) fn appliance_runtime_templates(
                 format!("{runtime}:{}:{version_name}", base_template["template_id"]).as_bytes()
             ));
         }
+        // Same rules as GNS3's appliance-to-template conversion, so nodes get the icon the
+        // appliance defines (a multilayer switch for Open vSwitch, a router for IOS, ...).
+        let category = appliance["category"].as_str().unwrap_or_default();
+        template["category"] = json!(if category == "multilayer_switch" { "switch" } else { category });
+        let symbol = appliance["symbol"].as_str().map(str::to_owned).unwrap_or_else(|| {
+            match category {
+                "guest" if appliance.get("docker").is_some() || runtime == "docker" => "docker_guest.svg",
+                "guest" => "qemu_guest.svg",
+                "router" => "router.svg",
+                "switch" => "ethernet_switch.svg",
+                "multilayer_switch" => "multilayer_switch.svg",
+                "firewall" => "firewall.svg",
+                _ => "",
+            }
+            .to_owned()
+        });
+        if !symbol.is_empty() {
+            template["symbol"] = json!(symbol);
+        }
         template["appliance_id"] = json!(record.appliance_id);
         template["appliance_file"] = json!(record.file_name);
         template["appliance_description"] = json!(record.description);

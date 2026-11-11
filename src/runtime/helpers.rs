@@ -439,7 +439,7 @@ pub(super) fn validate_docker_topology_id(value: &str, kind: &str) -> Result<Str
         .map_err(|_| RuntimeError::Failed(format!("Docker {kind} ID must be a valid UUID")))
 }
 
-pub(super) fn valid_mac_address(value: &str) -> bool {
+pub(crate) fn valid_mac_address(value: &str) -> bool {
     let octets = value.split(':').collect::<Vec<_>>();
     octets.len() == 6
         && octets

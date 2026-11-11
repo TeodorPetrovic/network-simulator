@@ -20,7 +20,7 @@ pub(super) fn validate_node_configuration_patch(
             "replicate_network_connection_state",
             "hda_disk_interface",
             "boot_priority",
-            "hda_disk_image", "hdb_disk_image", "hdc_disk_image", "hdd_disk_image", "cdrom_image",
+            "hda_disk_image", "hdb_disk_image", "hdc_disk_image", "hdd_disk_image", "cdrom_image", "hda_disk_image_backing_file", "hda_disk_image_md5sum",
             "hdb_disk_interface", "hdc_disk_interface", "hdd_disk_interface", "console_type", "process_priority", "options", "maxcpus", "config_export_command", "config_export_username", "config_export_password",
         ],
         "docker" => &[
@@ -44,7 +44,7 @@ pub(super) fn validate_node_configuration_patch(
             "custom_adapters",
         ],
         "vpcs" => &["name", "startup_script", "console_type"],
-        "dynamips" => &["name", "startup_config", "ram", "nvram", "idlepc", "slot0", "slot1", "slot2", "slot3", "slot4", "slot5", "slot6", "slot7", "wic0", "wic1", "wic2", "wic3"],
+        "dynamips" => &["name", "startup_config", "ram", "nvram", "disk0", "disk1", "idlepc", "slot0", "slot1", "slot2", "slot3", "slot4", "slot5", "slot6", "slot7", "wic0", "wic1", "wic2", "wic3"],
         "iou" => &[
             "name",
             "path",
@@ -191,7 +191,7 @@ pub(super) fn validate_node_configuration_patch(
             "config_export_username" | "config_export_password" => json!(value.as_str().filter(|v| v.len() <= 256 && !v.contains(['\r', '\n'])).ok_or_else(|| ApiError::bad_request(format!("{key} must be a single line")))?),
             "config_export_command" => json!(value.as_str().filter(|v| v.len() <= 512 && !v.contains(['\r', '\n'])).ok_or_else(|| ApiError::bad_request("config_export_command must be a single line under 512 characters"))?.trim()),
             "maxcpus" => json!(value.as_u64().filter(|v| (1..=256).contains(v)).ok_or_else(|| ApiError::bad_request("maxcpus must be from 1 to 256"))?),
-            "ram" | "nvram" => json!(value.as_u64().filter(|v| *v <= 1_048_576).ok_or_else(|| ApiError::bad_request(format!("{key} is outside the supported range")))?),
+            "ram" | "nvram" | "disk0" | "disk1" => json!(value.as_u64().filter(|v| *v <= 1_048_576).ok_or_else(|| ApiError::bad_request(format!("{key} is outside the supported range")))?),
             "start_command" | "image" | "environment" | "extra_hosts" => {
                 let text = value
                     .as_str()
@@ -325,6 +325,12 @@ pub(super) fn validate_node_configuration_patch(
                     ApiError::bad_request("custom_adapters contain an invalid adapter definition")
                 })?;
                 json!(value)
+            }
+            "hda_disk_image_backing_file" | "hda_disk_image_md5sum" => {
+                if !(value.is_null() || value.as_str().is_some_and(|text| text.len() <= 1024)) {
+                    return Err(ApiError::bad_request(format!("{key} must be text or null")));
+                }
+                value.clone()
             }
             _ => unreachable!("keys were restricted above"),
         };

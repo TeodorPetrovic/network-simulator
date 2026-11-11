@@ -89,6 +89,11 @@ vi.mock("./api", () => ({
   dockerAuxConsoleUrl: vi.fn((projectId: string, nodeId: string) => `ws://localhost/${projectId}/${nodeId}/docker-aux-console`),
   vpcsConsoleUrl: vi.fn((projectId: string, nodeId: string) => `ws://localhost/${projectId}/${nodeId}/vpcs-console`),
   dynamipsConsoleUrl: vi.fn((projectId: string, nodeId: string) => `ws://localhost/${projectId}/${nodeId}/dynamips-console`),
+  needsServer: () => false,
+  isDesktop: () => false,
+  getServerOrigin: () => "",
+  serverHostname: () => "localhost",
+  serverBase: () => "http://localhost:3000/",
   dockerHttpConsoleUrl: vi.fn((protocol: string, host: string, port: number, path: string) => `${protocol}://${host}:${port}${path}`),
   symbolRawUrl: vi.fn((symbolId: string) => `/v3/symbols/${encodeURIComponent(symbolId)}/raw`),
 }));

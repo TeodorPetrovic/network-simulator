@@ -3,7 +3,7 @@ import { dissect } from "./dissect";
 import { readPcap } from "./pcap";
 import { compileDisplayFilter, DisplayFilterError, type PacketRecord } from "./filter";
 import { CaptureFilterBar, CaptureStatusBar, CaptureToolbar, FollowStreamDialog, PacketDetails, PacketList, StatisticsPanel } from "./CaptureComponents";
-import { api, getAuthToken } from "../api";
+import { api, getAuthToken, serverBase } from "../api";
 import "./capture.css";
 
 export type CaptureViewerProps = {
@@ -236,7 +236,7 @@ export function CaptureViewer({ streamUrl, downloadUrl, title = "Capture Viewer"
 /** Access tickets are single-use: mint a new one when this tab is signed in; otherwise (new tab) the URL's ticket is all there is. */
 async function freshTicketUrl(source: string): Promise<string> {
   if (!getAuthToken()) return source;
-  const url = new URL(source, window.location.href);
+  const url = new URL(source, serverBase());
   if (!url.searchParams.has("ticket")) return source;
   url.searchParams.set("ticket", await api.accessTicket(url.pathname));
   return url.toString();

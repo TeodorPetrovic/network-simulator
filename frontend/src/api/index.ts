@@ -8,17 +8,19 @@ import { appliancesApi } from "./appliances";
 import { systemApi } from "./system";
 import { copilotApi } from "./copilot";
 import { getAuthToken } from "./client";
+import { serverBase } from "./server";
 
 export const api = { ...authApi, ...systemApi, ...templatesApi, ...appliancesApi, ...projectsApi, ...computesApi, ...nodesApi, ...linksApi, ...copilotApi };
 export type * from "./copilot";
 export type * from "../api-types";
 export { getAuthToken } from "./client";
+export * from "./server";
 
 export function projectNotificationsUrl(projectId: string, after: number): Promise<string> {
   return withSocketTicket(`/v3/projects/${projectId}/notifications/ws`, { after: String(after) });
 }
 async function withSocketTicket(path: string, query: Record<string, string> = {}): Promise<string> {
-  const url = new URL(path, window.location.href);
+  const url = new URL(path, serverBase());
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
   if (getAuthToken()) url.searchParams.set("ticket", await api.accessTicket(path));
@@ -36,13 +38,13 @@ export function vpcsConsoleUrl(projectId: string, nodeId: string): Promise<strin
 export function dynamipsConsoleUrl(projectId: string, nodeId: string): Promise<string> { return withSocketTicket(`/v3/compute/projects/${projectId}/dynamips/nodes/${nodeId}/console/ws`); }
 export function vncConsoleUrl(runtime: "qemu" | "docker", projectId: string, nodeId: string): Promise<string> { return withSocketTicket(`/v3/compute/projects/${projectId}/${runtime}/nodes/${nodeId}/vnc/ws`); }
 export function webWiresharkUrl(path: string): string {
-  const url = new URL(path, window.location.href);
+  const url = new URL(path, serverBase());
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   if (getAuthToken()) url.searchParams.set("token", getAuthToken()!);
   return url.toString();
 }
 export function webWiresharkClientUrl(path: string): string {
-  const target = new URL("/xpra/index.html", window.location.href);
+  const target = new URL("/xpra/index.html", serverBase());
   const socket = new URL(webWiresharkUrl(path));
   target.searchParams.set("server", socket.hostname);
   if (socket.port) target.searchParams.set("port", socket.port);
