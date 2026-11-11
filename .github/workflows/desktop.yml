@@ -75,8 +75,11 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Checksums
-        run: cd dist && sha256sum * > SHA256SUMS
+        run: |
+          mkdir out
+          find dist -type f -exec cp {} out/ \;
+          cd out && sha256sum * > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: out/*
           draft: true
