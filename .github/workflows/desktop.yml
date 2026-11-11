@@ -17,9 +17,12 @@ jobs:
       matrix:
         include:
           - os: ubuntu-22.04
-            artifacts: "desktop/src-tauri/target/release/bundle/deb/*.deb desktop/src-tauri/target/release/bundle/appimage/*.AppImage"
+            artifacts: |
+              desktop/src-tauri/target/release/bundle/deb/*.deb
+              desktop/src-tauri/target/release/bundle/appimage/*.AppImage
           - os: windows-latest
-            artifacts: "desktop/src-tauri/target/release/bundle/nsis/*.exe"
+            artifacts: |
+              desktop/src-tauri/target/release/bundle/nsis/*.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
