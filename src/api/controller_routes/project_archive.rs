@@ -285,7 +285,18 @@ pub(super) async fn save_imported_project(
                     .and_then(Value::as_str)
                     .ok_or_else(|| ApiError::bad_request("Imported node has no node_id"))?
                     .to_owned();
-                let normalised = super::gns3_export::import_node(item, &builtin_ids);
+                let mut normalised = super::gns3_export::import_node(item, &builtin_ids);
+                // GNS3 keeps a VPCS node's startup script as project-files/vpcs/<id>/startup.vpc.
+                if node_type == "vpcs"
+                    && normalised.get("startup_script").and_then(Value::as_str).is_none_or(str::is_empty)
+                {
+                    if let Some((_, _, contents)) = node_files
+                        .iter()
+                        .find(|(id, path, _)| *id == node_id && path == "startup.vpc")
+                    {
+                        normalised["startup_script"] = json!(String::from_utf8_lossy(contents));
+                    }
+                }
                 let item = &normalised;
                 if matches!(node_type, "docker" | "qemu" | "vpcs" | "dynamips")
                     || crate::builtin::BuiltinRuntime::is_type(node_type)
@@ -320,8 +331,11 @@ pub(super) async fn save_imported_project(
 
         // Links go through the regular create-link route so each endpoint gets its runtime
         // reservation (relay ports, endpoint ids); raw inserts left them unusable at start.
-        if let Some(links) = source.get("links").and_then(Value::as_array) {
-            for item in links {
+        let source_nodes = source.get("nodes").and_then(Value::as_array).cloned().unwrap_or_default();
+        let mut source_links = source.get("links").and_then(Value::as_array).cloned().unwrap_or_default();
+        super::gns3_export::docker_link_endpoints(&source_nodes, &mut source_links);
+        {
+            for item in &source_links {
                 let mut link = item.clone();
                 strip_link_runtime_fields(&mut link);
                 if let Some(object) = link.as_object_mut() {

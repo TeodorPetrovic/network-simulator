@@ -216,12 +216,38 @@ fn convert_node(node: &mut Value, target: Target, symbols: &HashMap<String, Stri
     }
 }
 
+/// GNS3 numbers a Docker node's Ethernet ports as adapter N / port 0; this app keeps them as
+/// adapter 0 / port N. Swapping the two converts the link endpoints of `docker` nodes in either
+/// direction (the swap is its own inverse).
+pub(super) fn docker_link_endpoints(nodes: &[Value], links: &mut [Value]) {
+    let docker: std::collections::HashSet<&str> = nodes
+        .iter()
+        .filter(|node| node.get("node_type").and_then(Value::as_str) == Some("docker"))
+        .filter_map(|node| node.get("node_id").and_then(Value::as_str))
+        .collect();
+    for link in links {
+        for endpoint in link.get_mut("nodes").and_then(Value::as_array_mut).into_iter().flatten() {
+            if !endpoint.get("node_id").and_then(Value::as_str).is_some_and(|id| docker.contains(id)) {
+                continue;
+            }
+            let adapter = endpoint["adapter_number"].as_u64().unwrap_or(0);
+            let port = endpoint["port_number"].as_u64().unwrap_or(0);
+            endpoint["adapter_number"] = json!(port);
+            endpoint["port_number"] = json!(adapter);
+        }
+    }
+}
+
 /// Turn the app's own export into a topology file GNS3 `target` loads.
 pub(super) fn convert(project: &mut Value, project_id: &str, target: Target, symbols: &HashMap<String, String>) {
     project["project_id"] = json!(project_id);
     project["type"] = json!("topology");
     project["revision"] = json!(target.revision());
     if let Some(topology) = project.get_mut("topology") {
+        let node_list = topology.get("nodes").and_then(Value::as_array).cloned().unwrap_or_default();
+        if let Some(links) = topology.get_mut("links").and_then(Value::as_array_mut) {
+            docker_link_endpoints(&node_list, links);
+        }
         for node in topology.get_mut("nodes").and_then(Value::as_array_mut).into_iter().flatten() {
             convert_node(node, target, symbols);
         }
@@ -394,5 +420,24 @@ mod tests {
         assert_eq!(Target::parse(Some("2.2.61")).unwrap(), Target::V22);
         assert_eq!(Target::parse(Some("3.1")).unwrap(), Target::V3);
         assert!(Target::parse(Some("1.5")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod docker_port_tests {
+    use super::*;
+
+    #[test]
+    fn docker_endpoints_swap_between_gns3_and_app_numbering() {
+        let nodes = vec![json!({"node_id": "d", "node_type": "docker"}), json!({"node_id": "v", "node_type": "vpcs"})];
+        let mut links = vec![json!({"nodes": [
+            {"node_id": "d", "adapter_number": 3, "port_number": 0},
+            {"node_id": "v", "adapter_number": 0, "port_number": 0}]})];
+        docker_link_endpoints(&nodes, &mut links);
+        assert_eq!(links[0]["nodes"][0]["adapter_number"], 0);
+        assert_eq!(links[0]["nodes"][0]["port_number"], 3);
+        assert_eq!(links[0]["nodes"][1]["port_number"], 0);
+        docker_link_endpoints(&nodes, &mut links);
+        assert_eq!(links[0]["nodes"][0]["adapter_number"], 3);
     }
 }

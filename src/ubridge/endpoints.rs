@@ -359,7 +359,13 @@ impl UbridgeRuntime {
                 .command(&format!("brctl delif \"{interface}\" \"{tap}\""))
                 .await;
         }
-        self.command(&format!("bridge delete {bridge}")).await?;
+        // A bridge uBridge no longer knows (daemon restarted, earlier partial teardown) is
+        // already gone: forget it instead of failing the stop/close that is cleaning up.
+        match self.command(&format!("bridge delete {bridge}")).await {
+            Ok(_) => {}
+            Err(error) if error.message().contains("doesn't exist") => {}
+            Err(error) => return Err(error),
+        }
         self.link_bridges.lock().await.remove(endpoint_id);
         self.host_bridge_taps.lock().await.remove(endpoint_id);
         Ok(())
