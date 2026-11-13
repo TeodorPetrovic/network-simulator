@@ -124,10 +124,10 @@ export function TemplateSettingsDialog({ template, open, onOpenChange, onSave }:
     }
   }
 
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="template-settings-dialog">
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="w-full max-w-3xl">
     <DialogHeader><DialogTitle>Configure template</DialogTitle><DialogDescription>These settings are saved globally and used for new devices based on this template.</DialogDescription></DialogHeader>
-    <form className="template-settings-form" onSubmit={(event) => void save(event)}>
-      <div className="template-settings-grid">
+    <form className="grid min-w-0 gap-4" onSubmit={(event) => void save(event)}>
+      <div className="grid min-w-0 gap-3 sm:grid-cols-2">
         {field("name", "Template name")}
         {(template.template_type === "qemu" || template.template_type === "docker") && field("adapters", "Network adapters", "number")}
         {(template.template_type === "qemu" || template.template_type === "docker" || template.template_type === "dynamips") && field("memory", template.template_type === "qemu" ? "RAM (MB)" : template.template_type === "dynamips" ? "RAM (MB)" : "Memory limit (MB)", "number", template.template_type === "docker" ? "0 means no Docker memory limit." : undefined)}
@@ -137,7 +137,7 @@ export function TemplateSettingsDialog({ template, open, onOpenChange, onSave }:
           {selectField("hda_disk_interface", "Primary disk interface", ["ide", "scsi", "virtio", "sd"])}
           {selectField("boot_priority", "Boot priority", ["c", "d", "n", "dc", "cd"])}
         </>}
-        {template.template_type === "docker" && <div className="template-settings-wide">
+        {template.template_type === "docker" && <div className="sm:col-span-2">
           {textArea("start_command", "Start command", "Shell-like command arguments passed to Docker; leave blank to use the image default.")}
           {textArea("environment", "Environment variables", "One KEY=VALUE entry per line.")}
           {textArea("extra_hosts", "Extra hosts", "One host:address entry per line.")}
@@ -150,7 +150,7 @@ export function TemplateSettingsDialog({ template, open, onOpenChange, onSave }:
           {field("nvram", "NVRAM (KB)", "number")}
           {field("idlepc", "Idle-PC value", "text", "Leave blank to let the router use its normal idle behavior.")}
         </>}
-        {template.template_type === "vpcs" && <div className="template-settings-wide">{textArea("startup_script", "Startup script", "VPCS commands executed when a node starts.")}</div>}
+        {template.template_type === "vpcs" && <div className="sm:col-span-2">{textArea("startup_script", "Startup script", "VPCS commands executed when a node starts.")}</div>}
       </div>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       <DialogFooter><Button type="button" variant="ghost" disabled={saving} onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" disabled={saving}>{saving ? "Saving…" : "Save template"}</Button></DialogFooter>

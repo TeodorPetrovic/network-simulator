@@ -8,6 +8,7 @@ const it = (name: string, fn: any, timeout = 15_000) => registerTest(name, fn, t
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("./PagesShell", () => ({
+  PageLayout: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   PagesShell: ({ children }: { children: ReactNode }) => <main>{children}</main>,
   PageTitle: ({ title }: { title: string }) => <h1>{title}</h1>,
 }));

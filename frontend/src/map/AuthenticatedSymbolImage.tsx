@@ -20,7 +20,7 @@ export function AuthenticatedSymbolImage({ symbolId, fallback }: { symbolId: str
     };
   }, [symbolId]);
   return url
-    ? <image className="sim-node-symbol" href={url} x="-32" y="-32" width="64" height="64" preserveAspectRatio="xMidYMid meet" />
+    ? <image className="[pointer-events:none]" href={url} x="-32" y="-32" width="64" height="64" preserveAspectRatio="xMidYMid meet" />
     : fallback;
 }
 

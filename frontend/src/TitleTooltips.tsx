@@ -56,5 +56,5 @@ export function TitleTooltips() {
   if (!tip) return null;
   const half = 140;
   const x = Math.max(half + 8, Math.min(window.innerWidth - half - 8, tip.x));
-  return <div role="tooltip" className="app-tooltip app-title-tip" style={{ left: x, top: tip.y, transform: `translate(-50%, ${tip.below ? "8px" : "calc(-100% - 8px)"})` }}>{tip.text}</div>;
+  return <div role="tooltip" className="fixed z-[1000] pointer-events-none max-w-[280px] overflow-wrap-anywhere rounded-[7px] border border-border bg-popover px-[9px] py-[5px] text-xs font-medium leading-[1.35] text-popover-foreground shadow-[0_6px_20px_oklch(0.2_0.02_255/0.18),0_1px_3px_oklch(0.2_0.02_255/0.12)]" style={{ left: x, top: tip.y, transform: `translate(-50%, ${tip.below ? "8px" : "calc(-100% - 8px)"})` }}>{tip.text}</div>;
 }

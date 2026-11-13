@@ -37,8 +37,8 @@ export function CaptureToolbar({
   onSave: () => void;
   onOpenSaved: () => void;
 }) {
-  return <div className="capture-toolbar">
-    <strong>{title}</strong><span className="capture-spacer" />
+  return <div className="flex flex-wrap items-center gap-2 border-b border-border px-2 py-1.5">
+    <strong>{title}</strong><span className="flex-1" />
     <Button size="sm" variant="outline" onClick={onToggleTime}>{relativeTime ? "Relative time" : "Absolute time"}</Button>
     <Button size="sm" variant="outline" onClick={onToggleScroll}>{autoScroll ? "Auto-scroll on" : "Auto-scroll off"}</Button>
     <Button size="sm" variant="outline" onClick={onTogglePause}>{paused ? <Play /> : <Pause />}{paused ? "Resume" : "Pause"}</Button>
@@ -51,7 +51,7 @@ export function CaptureToolbar({
 }
 
 export function CaptureStatusBar({ status, displayed, total }: { status: string; displayed: number; total: number }) {
-  return <footer className="capture-status-bar"><span>{status}</span><span>{displayed} displayed / {total} packets</span></footer>;
+  return <footer className="flex items-center justify-between gap-2 border-t border-border px-2 py-1.5"><span>{status}</span><span>{displayed} displayed / {total} packets</span></footer>;
 }
 
 export function PacketList({
@@ -90,17 +90,17 @@ export function PacketList({
     else if (bottom > container.scrollTop + container.clientHeight) container.scrollTop = bottom - container.clientHeight;
   }, [packets, selectedNumber]);
 
-  return <div className="capture-list-frame">
-    <div className="capture-head" role="row">
+  return <div className="flex min-h-0 flex-1 flex-col">
+    <div className="grid grid-cols-[48px_105px_minmax(80px,1fr)_minmax(80px,1fr)_75px_55px_minmax(100px,2fr)] items-center gap-1.5 bg-muted px-2 py-1 text-left font-bold" role="row">
       <span>No.</span><span>Time</span><span>Source</span><span>Destination</span><span>Protocol</span><span>Length</span><span>Info</span>
     </div>
-    <div ref={scrollContainer} className="capture-rows" role="grid" aria-label="Packets" onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}>
+    <div ref={scrollContainer} className="min-h-0 flex-1 overflow-auto" role="grid" aria-label="Packets" onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}>
       <div style={{ height: start * PACKET_ROW_HEIGHT }} />
       {rows.map((packet) => <button
         key={packet.number}
         role="row"
         aria-selected={selectedNumber === packet.number}
-        className={`capture-row ${selectedNumber === packet.number ? "selected" : ""} protocol-${packet.decoded.protocol.toLowerCase()}`}
+        className={`grid h-[27px] w-full grid-cols-[48px_105px_minmax(80px,1fr)_minmax(80px,1fr)_75px_55px_minmax(100px,2fr)] items-center gap-1.5 overflow-hidden whitespace-nowrap border-0 border-b border-border/50 bg-transparent px-2 py-1 text-left text-inherit hover:bg-muted ${selectedNumber === packet.number ? "bg-accent text-accent-foreground" : ""}`}
         onClick={() => onSelect(packet)}
         onContextMenu={(event) => {
           const target = (event.target as HTMLElement).closest("[data-column]") as HTMLElement | null;
@@ -114,13 +114,13 @@ export function PacketList({
           if (filters[column]) { event.preventDefault(); onApplyFilter(filters[column]); }
         }}
       >
-        <span data-column="number">{packet.number}</span>
-        <span data-column="time">{relativeTime ? (packet.timestamp - firstTimestamp).toFixed(6) : packet.timestamp.toFixed(6)}</span>
-        <span data-column="source" title={packet.decoded.src}>{packet.decoded.src || "—"}</span>
-        <span data-column="destination" title={packet.decoded.dst}>{packet.decoded.dst || "—"}</span>
-        <span data-column="protocol">{packet.decoded.protocol}</span>
-        <span data-column="length">{packet.originalLength}</span>
-        <span data-column="info" title={packet.decoded.info}>{packet.decoded.info}</span>
+        <span className="truncate" data-column="number">{packet.number}</span>
+        <span className="truncate" data-column="time">{relativeTime ? (packet.timestamp - firstTimestamp).toFixed(6) : packet.timestamp.toFixed(6)}</span>
+        <span className="truncate" data-column="source" title={packet.decoded.src}>{packet.decoded.src || "—"}</span>
+        <span className="truncate" data-column="destination" title={packet.decoded.dst}>{packet.decoded.dst || "—"}</span>
+        <span className="truncate" data-column="protocol">{packet.decoded.protocol}</span>
+        <span className="truncate" data-column="length">{packet.originalLength}</span>
+        <span className="truncate" data-column="info" title={packet.decoded.info}>{packet.decoded.info}</span>
       </button>)}
       <div style={{ height: Math.max(0, (packets.length - end) * PACKET_ROW_HEIGHT) }} />
     </div>
@@ -139,10 +139,10 @@ export function PacketDetails({
   const layers = packet?.decoded.layers ?? [];
   const fields = layers.flatMap((layer) => layer.fields);
 
-  return <div className="capture-inspector">
-    <div className="capture-tree" role="tree" aria-label="Packet details">
+  return <div className="grid min-h-0 flex-1 grid-cols-2 border-t border-border">
+    <div className="min-h-0 overflow-auto p-1" role="tree" aria-label="Packet details">
       {layers.map((layer, index) => <div key={`${layer.name}-${index}`}>
-        <button className="capture-layer" aria-expanded={expanded.has(index)} onClick={() => {
+        <button className="flex w-full items-center gap-1 p-1 text-left text-inherit" aria-expanded={expanded.has(index)} onClick={() => {
           setExpanded((current) => {
             const next = new Set(current);
             if (next.has(index)) next.delete(index);
@@ -154,7 +154,7 @@ export function PacketDetails({
         </button>
         {expanded.has(index) && layer.fields.map((field) => <button
           key={`${field.label}-${field.byteOffset}`}
-          className="capture-field"
+          className="flex w-full items-center gap-1 border-0 bg-transparent py-1 pl-[22px] text-left text-muted-foreground hover:bg-muted"
           onMouseEnter={() => setHighlight(field)}
           onFocus={() => setHighlight(field)}
           onClick={() => setHighlight(field)}
@@ -195,17 +195,17 @@ export function HexPane({
 }) {
   const bytes = packet?.data ?? new Uint8Array();
   const rows = Math.ceil(bytes.length / 16);
-  return <div className="capture-hex" aria-label="Packet bytes">
+  return <div className="min-h-0 overflow-auto bg-muted p-1 font-mono text-[11px]" aria-label="Packet bytes">
     {Array.from({ length: rows }, (_, row) => {
       const start = row * 16;
       const chunk = bytes.subarray(start, start + 16);
       const ascii = Array.from(chunk, (value) => value >= 32 && value < 127 ? String.fromCharCode(value) : ".").join("");
-      return <div className="hex-row" key={row}>
+      return <div className="grid grid-cols-[44px_minmax(240px,1fr)_minmax(120px,0.7fr)] gap-2 whitespace-pre" key={row}>
         <span>{start.toString(16).padStart(4, "0")}</span>
         <code>{Array.from(chunk, (value, index) => {
           const selected = highlight && start + index >= highlight.byteOffset && start + index < highlight.byteOffset + highlight.length;
           const byteField = fields.find((field) => start + index >= field.byteOffset && start + index < field.byteOffset + field.length) ?? null;
-          return <button key={index} className={selected ? "highlight" : ""} aria-label={`Byte ${start + index}: ${value.toString(16).padStart(2, "0")}`} onMouseEnter={() => onHighlight(byteField)} onFocus={() => onHighlight(byteField)}>{value.toString(16).padStart(2, "0")} </button>;
+          return <button key={index} className={selected ? "bg-chart-4 text-foreground" : ""} aria-label={`Byte ${start + index}: ${value.toString(16).padStart(2, "0")}`} onMouseEnter={() => onHighlight(byteField)} onFocus={() => onHighlight(byteField)}>{value.toString(16).padStart(2, "0")} </button>;
         })}</code>
         <code>{ascii}</code>
       </div>;
@@ -224,10 +224,10 @@ export function CaptureFilterBar({
   onChange: (value: string) => void;
   inputRef?: RefObject<HTMLInputElement | null>;
 }) {
-  return <div className={`capture-filter ${error ? "invalid" : ""}`}>
+  return <div className="flex items-center gap-2 border-b border-border px-2 py-1.5">
     <label htmlFor="capture-display-filter">Display filter</label>
-    <input ref={inputRef} id="capture-display-filter" aria-label="Display filter" value={value} onChange={(event) => onChange(event.target.value)} placeholder="tcp.port == 80 && ip" />
-    <span role={error ? "alert" : undefined}>{error || "Filter"}</span>
+    <input className={`min-w-[100px] flex-1 rounded border border-input bg-background p-1 ${error ? "border-destructive" : ""}`} ref={inputRef} id="capture-display-filter" aria-label="Display filter" value={value} onChange={(event) => onChange(event.target.value)} placeholder="tcp.port == 80 && ip" />
+    <span className={error ? "text-destructive" : "text-muted-foreground"} role={error ? "alert" : undefined}>{error || "Filter"}</span>
   </div>;
 }
 
@@ -268,14 +268,14 @@ export function StatisticsPanel({ packets }: { packets: PacketRecord[] }) {
     return { protocols, conversations, graph };
   }, [packets]);
 
-  return <div className="capture-stats">
-    <h3>Protocol Hierarchy</h3>
-    {[...statistics.protocols].map(([name, value]) => <p key={name}>{name}<span>{value.packets} packets · {value.bytes} bytes</span></p>)}
-    <h3>Conversations</h3>
-    {[...statistics.conversations].map(([name, value]) => <p key={name}>{name}<span>{value.packets} packets · {value.bytes} bytes · {(value.end - value.start).toFixed(3)} s</span></p>)}
-    <h3>Packets per second</h3>
-    <div className="capture-io-graph" aria-label="Packets per second">
-      {[...statistics.graph].sort(([a], [b]) => a - b).map(([second, count]) => <span key={second} title={`${second}s: ${count} packets`} style={{ height: `${Math.max(3, count * 12)}px` }} />)}
+  return <div className="flex-1 overflow-auto p-3">
+    <h3 className="my-2 font-bold">Protocol Hierarchy</h3>
+    {[...statistics.protocols].map(([name, value]) => <p className="flex justify-between gap-3 border-b border-border p-1" key={name}>{name}<span>{value.packets} packets · {value.bytes} bytes</span></p>)}
+    <h3 className="my-2 font-bold">Conversations</h3>
+    {[...statistics.conversations].map(([name, value]) => <p className="flex justify-between gap-3 border-b border-border p-1" key={name}>{name}<span>{value.packets} packets · {value.bytes} bytes · {(value.end - value.start).toFixed(3)} s</span></p>)}
+    <h3 className="my-2 font-bold">Packets per second</h3>
+    <div className="flex min-h-[100px] items-end gap-0.5 bg-muted p-2" aria-label="Packets per second">
+      {[...statistics.graph].sort(([a], [b]) => a - b).map(([second, count]) => <span className="min-h-[3px] w-2 bg-chart-1" key={second} title={`${second}s: ${count} packets`} style={{ height: `${Math.max(3, count * 12)}px` }} />)}
     </div>
   </div>;
 }
@@ -294,18 +294,18 @@ export function FollowStreamDialog({
   const clientText = renderStream(client, format);
   const serverText = renderStream(server, format);
   const byteCount = client.length + server.length;
-  return <div className="capture-dialog-backdrop" role="presentation" onClick={onClose}>
-    <section role="dialog" aria-modal="true" aria-label="Follow stream" className="capture-follow-dialog" onClick={(event) => event.stopPropagation()}>
-      <header><strong>Follow stream</strong><span />
+  return <div className="fixed inset-0 z-[60] grid place-items-center bg-background/80" role="presentation" onClick={onClose}>
+    <section role="dialog" aria-modal="true" aria-label="Follow stream" className="flex h-[min(650px,80vh)] w-[min(900px,90vw)] flex-col rounded-lg border border-border bg-card shadow-xl" onClick={(event) => event.stopPropagation()}>
+      <header className="flex items-center gap-2.5 border-b border-border p-2.5"><strong>Follow stream</strong><span className="flex-1" />
         <label>Format <select value={format} onChange={(event) => setFormat(event.target.value as typeof format)}><option value="ascii">ASCII</option><option value="hex">Hex dump</option><option value="raw">Raw</option></select></label>
         <label>Direction <select value={direction} onChange={(event) => setDirection(event.target.value as typeof direction)}><option value="both">Both</option><option value="client">Client → server</option><option value="server">Server → client</option></select></label>
         <button onClick={() => onClose()}>Close</button>
       </header>
-      <div className="capture-follow-streams">
-        {direction !== "server" && <section className="capture-stream-client"><h4>Client → server</h4><pre>{clientText}</pre></section>}
-        {direction !== "client" && <section className="capture-stream-server"><h4>Server → client</h4><pre>{serverText}</pre></section>}
+      <div className="grid min-h-0 flex-1 grid-cols-2">
+        {direction !== "server" && <section className="min-w-0 overflow-auto bg-success/10 p-2 text-success"><h4 className="font-bold">Client → server</h4><pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-3 [overflow-wrap:anywhere]">{clientText}</pre></section>}
+        {direction !== "client" && <section className="min-w-0 overflow-auto bg-chart-1/10 p-2 text-chart-1"><h4 className="font-bold">Server → client</h4><pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-3 [overflow-wrap:anywhere]">{serverText}</pre></section>}
       </div>
-      <footer>{packets.length} packets · {byteCount} bytes</footer>
+      <footer className="flex items-center gap-2.5 border-t border-border p-2.5">{packets.length} packets · {byteCount} bytes</footer>
     </section>
   </div>;
 }

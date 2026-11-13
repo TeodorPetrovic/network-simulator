@@ -4,6 +4,9 @@ import { getServerOrigin, isDesktop, normalizeServerUrl, recentServers, setServe
 import { saveAuthToken } from "../api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export const Route = createFileRoute("/connect")({ component: ConnectPage });
 
@@ -38,23 +41,27 @@ function ConnectPage() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not connect"); }
     finally { setBusy(false); }
   }
-  return <main className="login-page">
-    <section className="login-card">
-      <div className="login-mark">NS</div>
-      <div className="pages-eyebrow">NETWORK STUDIO</div>
-      <h1>Connect to a server</h1>
-      <p>{isDesktop()
+  return <main className="flex min-h-svh items-center justify-center bg-muted/40 p-6">
+    <Card className="w-full max-w-sm">
+      <CardHeader className="text-center">
+      <div className="mx-auto mb-2 flex size-10 items-center justify-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground">NS</div>
+      <p className="text-xs font-medium tracking-wide text-muted-foreground">NETWORK STUDIO</p>
+      <CardTitle className="text-2xl font-semibold tracking-tight">Connect to a server</CardTitle>
+      <CardDescription>{isDesktop()
         ? "Devices and consoles run on the server you choose; this app is only the interface."
-        : "This page is for the desktop app. In a browser the controller that served it is used automatically."}</p>
-      <form className="login-form" onSubmit={(event) => void submit(event)}>
-        <label htmlFor="server-address">Server address</label>
+        : "This page is for the desktop app. In a browser the controller that served it is used automatically."}</CardDescription>
+      </CardHeader>
+      <CardContent>
+      <form className="grid gap-4" onSubmit={(event) => void submit(event)}>
+        <Label htmlFor="server-address">Server address</Label>
         <Input id="server-address" placeholder="lab-server:3080 or https://lab.example.com" autoFocus required value={address} onChange={(event) => setAddress(event.target.value)} />
         {recent.length > 0 && <div className="flex flex-wrap gap-2" aria-label="Recent servers">
           {recent.map((entry) => <Button key={entry} type="button" variant="outline" size="sm" onClick={() => setAddress(entry)}>{entry}</Button>)}
         </div>}
-        {error && <div role="alert" className="pages-alert">{error}</div>}
+        {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
         <Button type="submit" className="w-full" disabled={busy}>{busy ? "Connecting…" : "Connect"}</Button>
       </form>
-    </section>
+      </CardContent>
+    </Card>
   </main>;
 }

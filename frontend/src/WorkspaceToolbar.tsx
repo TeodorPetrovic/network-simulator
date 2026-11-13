@@ -33,8 +33,8 @@ export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, 
   const supported = (label: string, action: () => void, disabled = false) => <MenubarItem disabled={disabled} onSelect={action}>{label}</MenubarItem>;
   const draw = (tool: DrawingTool, label: string) => supported(label, () => startDrawingTool(tool));
   const selected = selectedLifecycleNodes.length > 0;
-  return <header className="sim-toolbar" aria-label="Project workspace menu">
-    <div className="sim-toolbar-brand"><button type="button" className="sim-project-mark sim-home-button" title="Back to projects" aria-label="Back to projects" onClick={props.onBack}><Network size={16} /></button><strong>{props.project.name}</strong></div>
+  return <header className="z-5 flex min-h-9 min-w-0 items-center gap-3 border-b bg-background px-2 py-0.5 [&>[data-slot=menubar]]:min-w-0 [&>[data-slot=menubar]]:flex-1 [&>[data-slot=menubar]]:overflow-x-auto [&>[data-slot=menubar]]:[scrollbar-width:none]" aria-label="Project workspace menu">
+    <div className="flex min-w-30 items-center gap-2 overflow-hidden text-xs"><button type="button" className="grid size-6 shrink-0 place-items-center rounded-md border bg-muted text-primary hover:bg-accent" title="Back to projects" aria-label="Back to projects" onClick={props.onBack}><Network size={16} /></button><strong className="truncate">{props.project.name}</strong></div>
     <Menubar>
       <MenubarMenu><MenuTrigger label="File" icon={<FolderOpen />} /><MenubarContent>
         {supported("New blank project", () => {}, true)}{supported("Open project…", () => {}, true)}
@@ -79,27 +79,27 @@ export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, 
 }
 
 function MenuTrigger({ label, icon }: { label: string; icon: ReactNode }) {
-  return <MenubarTrigger className="sim-toolbar-menu-trigger" aria-label={`${label} menu`}><span className="sim-toolbar-menu-icon" aria-hidden="true">{icon}</span><span className="sim-toolbar-menu-label">{label}</span></MenubarTrigger>;
+  return <MenubarTrigger className="inline-flex items-center gap-1.5 whitespace-nowrap" aria-label={`${label} menu`}><span className="inline-flex items-center text-muted-foreground [&>svg]:size-3.5" aria-hidden="true">{icon}</span><span>{label}</span></MenubarTrigger>;
 }
 
 export function WorkspaceIconToolbar({ workspace, startDrawingTool, runAllLifecycle, selectedLink, setLinkPropertiesOpen, zoomIn, zoomOut, fitTopology, showInterfaceLabels, onToggleInterfaceLabels }: { workspace: SimulatorWorkspaceProps; startDrawingTool: (tool: DrawingTool) => void; runAllLifecycle: (action: "start" | "stop" | "suspend" | "reload") => void; selectedLink: Link | null | undefined; setLinkPropertiesOpen: (open: boolean) => void; zoomIn: () => void; zoomOut: () => void; fitTopology: () => void; showInterfaceLabels: boolean; onToggleInterfaceLabels: () => void }) {
-  return <div className="sim-icon-toolbar" role="toolbar" aria-label="Workspace tools">
+  return <div className="flex min-h-9 min-w-0 items-center gap-0.5 overflow-x-auto overflow-y-hidden border-b bg-muted px-2 py-0.5 [scrollbar-width:none] [&_[data-slot=button]]:shrink-0" role="toolbar" aria-label="Workspace tools">
     <IconAction label="Start all" icon={<Play />} onClick={workspace.onStartAll} disabled={workspace.batchLifecycleRunning} />
     <IconAction label="Suspend all" icon={<Pause />} onClick={() => runAllLifecycle("suspend")} disabled={workspace.batchLifecycleRunning || !nodesForLifecycle(workspace.topology.nodes, "suspend").length} />
     <IconAction label="Stop all" icon={<Square />} onClick={workspace.onStopAll} />
     <IconAction label="Reload all" icon={<Activity />} onClick={() => runAllLifecycle("reload")} disabled={workspace.batchLifecycleRunning || !nodesForLifecycle(workspace.topology.nodes, "reload").length} />
     <IconAction label="Console all" icon={<Terminal />} onClick={() => workspace.topology.nodes.filter((node) => node.status === "started").forEach((node) => workspace.onOpenConsole(node))} disabled={!workspace.topology.nodes.some((node) => node.status === "started")} />
-    <span className="sim-toolbar-divider" />
+    <span className="mx-1.5 h-5.5 w-px shrink-0 bg-border" />
     <IconAction label={showInterfaceLabels ? "Hide interface labels" : "Show interface labels"} icon={<Network />} onClick={onToggleInterfaceLabels} pressed={showInterfaceLabels} />
-    <span className="sim-toolbar-divider" />
+    <span className="mx-1.5 h-5.5 w-px shrink-0 bg-border" />
     <IconAction label="Zoom in" icon={<ZoomIn />} onClick={zoomIn} /><IconAction label="Zoom out" icon={<ZoomOut />} onClick={zoomOut} /><IconAction label="Fit to window" icon={<Scan />} onClick={fitTopology} />
-    <span className="sim-toolbar-divider" />
+    <span className="mx-1.5 h-5.5 w-px shrink-0 bg-border" />
     <IconAction label="Add note" icon={<Type />} onClick={() => startDrawingTool("text")} /><IconAction label="Add image" icon={<Image />} onClick={() => startDrawingTool("image")} /><IconAction label="Rectangle" icon={<RectangleHorizontal />} onClick={() => startDrawingTool("rectangle")} /><IconAction label="Ellipse" icon={<Circle />} onClick={() => startDrawingTool("ellipse")} /><IconAction label="Line" icon={<Minus />} onClick={() => startDrawingTool("line")} />
-    <span className="sim-toolbar-divider" />
+    <span className="mx-1.5 h-5.5 w-px shrink-0 bg-border" />
     <IconAction label="Packet capture" icon={<Camera />} disabled={!selectedLink} onClick={() => setLinkPropertiesOpen(true)} /><IconAction label={workspace.connecting ? "Cancel link" : "Draw link"} icon={<Cable />} onClick={workspace.onToggleConnect} pressed={workspace.connecting} />
   </div>;
 }
 
 function IconAction({ label, icon, onClick, disabled = false, pressed = false }: { label: string; icon: ReactNode; onClick?: () => void; disabled?: boolean; pressed?: boolean }) {
-  return <Button variant={pressed ? "secondary" : "ghost"} size="icon-sm" className="sim-icon-action" title={label} aria-label={label} aria-pressed={pressed} disabled={disabled} onClick={onClick}>{icon}</Button>;
+  return <Button variant={pressed ? "secondary" : "ghost"} size="icon-sm" className="size-7" title={label} aria-label={label} aria-pressed={pressed} disabled={disabled} onClick={onClick}>{icon}</Button>;
 }

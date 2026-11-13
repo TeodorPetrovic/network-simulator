@@ -15,14 +15,14 @@ export function DeviceTemplateCard({ template, onAdd, onSave }: { template: Runt
   const Icon = iconForType(template.template_type);
   const [settingsOpen, setSettingsOpen] = useState(false);
   return <>
-  <div className="sim-device-template" draggable onDragStart={(event) => {
+  <div className="group flex items-center gap-2 rounded-md border border-transparent px-2 py-2 hover:border-border hover:bg-accent/50" draggable onDragStart={(event) => {
     event.dataTransfer.effectAllowed = "copy";
     event.dataTransfer.setData("application/x-network-simulator-template", template.template_id);
     event.dataTransfer.setData("text/plain", template.name);
     event.dataTransfer.setDragImage(event.currentTarget, 24, 18);
   }}>
-    <span className="sim-template-icon" draggable={false} style={{ pointerEvents: "none" }}><Icon size={17} /></span>
-    <span className="sim-template-copy"><b title={template.name}>{template.name}</b><small>{templateDescription(template)}</small></span>
+    <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground" draggable={false} style={{ pointerEvents: "none" }}><Icon size={17} /></span>
+    <span className="flex min-w-0 flex-1 flex-col"><b className="truncate text-xs font-medium" title={template.name}>{template.name}</b><small className="truncate text-[11px] text-muted-foreground">{templateDescription(template)}</small></span>
     <Button variant="ghost" size="icon-xs" onClick={() => setSettingsOpen(true)} aria-label={`Configure ${template.name} template`} title="Configure template"><Settings2 /></Button>
     <Button variant="ghost" size="icon-xs" onClick={onAdd} aria-label={`Add ${template.name}`} title="Add to topology"><Plus /></Button>
   </div>
@@ -59,11 +59,11 @@ export function NodeInspector({ node, links, nodes, onLifecycle, onOpenConsole, 
     finally { setSaving(false); }
   }
 
-  return <Card className="sim-node-inspector mx-2 mb-2 p-3">
+  return <Card className="mx-2 mb-2 p-3">
     <div className="flex items-start justify-between gap-2">
       <div className="min-w-0 flex-1">
         <div className="mb-2 flex flex-wrap items-center gap-2"><Badge variant="outline" className="capitalize">{node.node_type ?? "device"}</Badge><Badge variant={node.status === "started" ? "default" : "secondary"} className="capitalize">{node.status ?? "stopped"}</Badge>{node.runtime_supported === false && <Badge variant="destructive">Runtime unavailable</Badge>}</div>
-        {node.node_type === "iou" && node.runtime_supported === false && <p role="status" className="mb-2 text-xs text-amber-700">IOU configuration is saved with this project. Install an IOU runtime binary to start this node.</p>}
+        {node.node_type === "iou" && node.runtime_supported === false && <p role="status" className="mb-2 text-xs text-warning">IOU configuration is saved with this project. Install an IOU runtime binary to start this node.</p>}
         {editing ? <div className="flex gap-1"><Input data-rename-node autoFocus value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void saveName(); if (event.key === "Escape") { setEditing(false); setName(node.name); } }} aria-label="Device name" /><Button size="icon" disabled={saving || !name.trim()} onClick={() => void saveName()} aria-label="Save device name"><Check /></Button></div> : <div className="flex items-center gap-1"><h3 className="truncate text-sm font-semibold" title={node.name}>{node.name}</h3><Button variant="ghost" size="icon-xs" onClick={() => { setName(node.name); setEditing(true); }} aria-label="Rename device"><Pencil /></Button></div>}
         <p className="mt-1 truncate text-xs text-muted-foreground">{imageName(node)}</p>
       </div>
@@ -79,14 +79,14 @@ export function NodeInspector({ node, links, nodes, onLifecycle, onOpenConsole, 
     </div>
     <Separator className="my-3" />
     <div className="space-y-2">
-      <div className="sim-detail-row"><span>Interfaces</span><b>{portCount(node)}</b></div>
-      <div className="sim-detail-row"><span>Node ID</span><code>{node.node_id.slice(0, 8)}</code></div>
-      <section className="sim-connections">
-        <div className="sim-connections-heading"><span>Connections</span><span>{connections.length}</span></div>
-        {connections.length ? connections.map(({ endpoint, peers, linkId }) => <div className="sim-connection-row" key={`${linkId}:${endpoint.adapter_number}:${endpoint.port_number}`}>
-          <div className="sim-connection-copy"><b>{portLabel(node, endpoint)}</b><span>{peers.join(", ")}</span></div>
+      <div className="flex justify-between gap-2 text-xs"><span className="text-muted-foreground">Interfaces</span><b>{portCount(node)}</b></div>
+      <div className="flex justify-between gap-2 text-xs"><span className="text-muted-foreground">Node ID</span><code className="font-mono text-[10px]">{node.node_id.slice(0, 8)}</code></div>
+      <section className="rounded-md border p-2">
+        <div className="mb-2 flex justify-between text-xs font-medium"><span>Connections</span><span className="text-muted-foreground">{connections.length}</span></div>
+        {connections.length ? connections.map(({ endpoint, peers, linkId }) => <div className="flex items-center justify-between gap-2 border-t py-2 text-xs last:pb-0" key={`${linkId}:${endpoint.adapter_number}:${endpoint.port_number}`}>
+          <div className="flex min-w-0 flex-col"><b>{portLabel(node, endpoint)}</b><span className="truncate text-muted-foreground">{peers.join(", ")}</span></div>
           <code>Link {linkId.slice(0, 6)}</code>
-        </div>) : <p className="sim-connection-empty">No connections yet.</p>}
+        </div>) : <p className="text-xs text-muted-foreground">No connections yet.</p>}
       </section>
     </div>
   </Card>;

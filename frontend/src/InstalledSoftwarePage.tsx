@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { CheckCircle2, Download, PackageCheck, RefreshCw, XCircle } from "lucide-react";
 import type { RuntimeInfo } from "./api";
 import { api } from "./api";
-import { PagesShell, PageTitle } from "./PagesShell";
+import { PagesShell, PageLayout, PageSection, PageTitle } from "./PagesShell";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -31,10 +32,10 @@ export function InstalledSoftwarePage() {
     { key: "ubridge", label: "uBridge", available: runtime.ubridge.available, version: runtime.ubridge.version ?? runtime.ubridge.binary, detail: "Ethernet link and NIO bridge service.", error: runtime.ubridge.error },
   ] : [];
 
-  return <PagesShell active="Installed software"><div className="pages-content">
+  return <PagesShell active="Installed software"><PageLayout>
     <PageTitle eyebrow="LOCAL HOST" title="Installed software" description="Runtime binaries detected by the controller and their current availability." actions={<Button size="sm" variant="outline" onClick={() => void refresh()} disabled={busy}><RefreshCw size={15} />Refresh</Button>} />
-    {error && <div role="alert" className="pages-alert">{error}</div>}
-    {busy && !runtime ? <Card className="pages-empty-state">Checking installed software…</Card> : rows.length ? <div className="software-list">{rows.map((item) => <Card className="software-row" key={item.key}><div className="software-row-icon">{item.available ? <CheckCircle2 size={19} /> : <XCircle size={19} />}</div><div className="software-row-main"><div className="software-row-title"><h2>{item.label}</h2><Badge variant={item.available ? "default" : "secondary"}>{item.available ? "Installed" : "Unavailable"}</Badge></div><p>{item.detail}</p><small>{item.version}{!item.available && item.error ? ` · ${item.error}` : ""}</small></div><Button variant="outline" size="sm" disabled title="Software installation is not exposed by this controller"><Download size={14} />Install unavailable</Button></Card>)}</div> : <Card className="pages-empty-state"><PackageCheck size={18} />No runtime software information was returned by the controller.</Card>}
-    <p className="software-note">Installation and upgrade actions are not exposed by the current controller API. This page reports runtime status and does not make local system changes.</p>
-  </div></PagesShell>;
+    {error && <Alert variant="destructive" className="mt-6"><AlertDescription>{error}</AlertDescription></Alert>}
+    <PageSection>{busy && !runtime ? <Card className="p-6 text-center text-sm text-muted-foreground">Checking installed software…</Card> : rows.length ? <div className="grid min-w-0 gap-3">{rows.map((item) => <Card className="flex min-w-0 flex-wrap items-start gap-4 p-4" key={item.key}><div className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">{item.available ? <CheckCircle2 size={19} /> : <XCircle size={19} />}</div><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="font-medium">{item.label}</h2><Badge variant={item.available ? "default" : "secondary"}>{item.available ? "Installed" : "Unavailable"}</Badge></div><p className="mt-1 text-sm text-muted-foreground">{item.detail}</p><small className="text-xs text-muted-foreground">{item.version}{!item.available && item.error ? ` · ${item.error}` : ""}</small></div><Button variant="outline" size="sm" disabled title="Software installation is not exposed by this controller"><Download size={14} />Install unavailable</Button></Card>)}</div> : <Card className="flex items-center gap-2 p-6 text-sm text-muted-foreground"><PackageCheck size={18} />No runtime software information was returned by the controller.</Card>}</PageSection>
+    <p className="text-xs text-muted-foreground">Installation and upgrade actions are not exposed by the current controller API. This page reports runtime status and does not make local system changes.</p>
+  </PageLayout></PagesShell>;
 }

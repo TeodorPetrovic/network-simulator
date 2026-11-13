@@ -385,7 +385,7 @@ export function TopologyCanvas(props: CanvasProps) {
       if (!templateId) return;
       const rect = svgRef.current.getBoundingClientRect();
       // Dropping back on the device sidebar cancels; a drop on the docks beside the map still lands on the map edge.
-      if ((event.target as Element | null)?.closest?.(".sim-device-rail")) return;
+      if ((event.target as Element | null)?.closest?.("[data-device-rail]")) return;
       const x = Math.min(Math.max(event.clientX, rect.left + 40), rect.right - 40);
       const y = Math.min(Math.max(event.clientY, rect.top + 40), rect.bottom - 40);
       const point = scenePoint(x, y, rect);
@@ -402,22 +402,22 @@ export function TopologyCanvas(props: CanvasProps) {
         const live = drawingSizes[drawing.drawing_id];
         const width = live?.width ?? Number(drawing.width ?? 160); const height = live?.height ?? Number(drawing.height ?? 90);
         const shownMarkup = live ? sanitizeDrawingSvg(resizeSvgMarkup(typeof drawing.svg === "string" ? drawing.svg : "", live.width, live.height)) || markup : markup;
-        return <g key={drawing.drawing_id} className={`sim-drawing ${selected ? "is-selected" : ""}`} transform={`translate(${position.x},${position.y}) rotate(${Number(drawing.rotation ?? 0)})`} onPointerDown={(event) => startDrawingMove(event, drawing)} onClick={(event) => { event.stopPropagation(); props.onDrawingClick(drawing.drawing_id); }} onContextMenu={() => props.onDrawingClick(drawing.drawing_id)}>
-          {selected && <rect className="sim-drawing-selection" x="-3" y="-3" width={width + 6} height={height + 6} />}
+        return <g key={drawing.drawing_id} data-canvas-drawing="true" className="cursor-move" transform={`translate(${position.x},${position.y}) rotate(${Number(drawing.rotation ?? 0)})`} onPointerDown={(event) => startDrawingMove(event, drawing)} onClick={(event) => { event.stopPropagation(); props.onDrawingClick(drawing.drawing_id); }} onContextMenu={() => props.onDrawingClick(drawing.drawing_id)}>
+          {selected && <rect className="fill-none stroke-primary stroke-2 [stroke-dasharray:6_4]" x="-3" y="-3" width={width + 6} height={height + 6} />}
           <g dangerouslySetInnerHTML={{ __html: shownMarkup }} />
-          {selected && !props.projectLocked && <rect className="sim-drawing-handle" x={width - 5} y={height - 5} width="10" height="10" rx="2" onPointerDown={(event) => startDrawingResize(event, drawing)} style={{ cursor: "nwse-resize" }} />}
+          {selected && !props.projectLocked && <rect className="fill-primary stroke-card stroke-2 [cursor:nwse-resize]" x={width - 5} y={height - 5} width="10" height="10" rx="2" onPointerDown={(event) => startDrawingResize(event, drawing)} />}
         </g>;
       });
-  return <div ref={surfaceRef} className={`sim-canvas-surface ${dropActive ? "is-drop-active" : ""}`} onDragOver={(event) => { if (event.dataTransfer.types.includes("application/x-network-simulator-template")) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDropActive(true); } }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) setDropActive(false); }} onDrop={dropTemplate}>
+  return <div ref={surfaceRef} className={`relative h-full min-h-0 w-full overflow-hidden bg-background ${dropActive ? "outline outline-2 outline-primary" : ""}`} onDragOver={(event) => { if (event.dataTransfer.types.includes("application/x-network-simulator-template")) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDropActive(true); } }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) setDropActive(false); }} onDrop={dropTemplate}>
     <svg ref={svgRef} viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`} role="group" aria-label="Network topology canvas" tabIndex={0} onPointerDown={startPan} onPointerMove={moveNode} onPointerUp={endMove} onPointerCancel={endMove} onKeyDown={onKeyDown} onKeyUp={onKeyUp} onBlur={onBlur}  onClick={(event) => {
       if (panMovedRef.current) { panMovedRef.current = false; return; }
       if (event.target === event.currentTarget || (event.target as Element).tagName === "rect") {
         const point = scenePoint(event.clientX, event.clientY, svgRef.current!.getBoundingClientRect());
         props.onCanvasClick(point);
       }
-    }} onContextMenu={(event) => { if ((event.target as Element).tagName === "rect" && !(event.target as Element).closest(".sim-node, .sim-link, .sim-drawing")) props.onClearSelection(); }}>
+    }} onContextMenu={(event) => { if ((event.target as Element).tagName === "rect" && !(event.target as Element).closest("[data-canvas-node], [data-canvas-link], [data-canvas-drawing]")) props.onClearSelection(); }}>
       <defs><pattern id="sim-grid" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="currentColor" /></pattern></defs>
-      <rect className={`sim-grid-fill ${props.gridVisible ? "" : "is-hidden"}`} x={view.x} y={view.y} width={view.width} height={view.height} fill="url(#sim-grid)" />
+      <rect className={`fill-foreground/10 ${props.gridVisible ? "" : "hidden"}`} x={view.x} y={view.y} width={view.width} height={view.height} fill="url(#sim-grid)" />
       {drawingLayer(false)}
       {props.links.map((link) => {
         const endpoints = (link.nodes ?? []).map((endpoint) => ({ endpoint, node: nodeMap.get(endpoint.node_id) })).filter((item): item is { endpoint: LinkEndpoint; node: Node } => Boolean(item.node));
@@ -427,18 +427,18 @@ export function TopologyCanvas(props: CanvasProps) {
         const sourcePoint = portPoint(source.node, source.endpoint);
         const targetPoint = portPoint(endpoints[1].node, endpoints[1].endpoint);
         const style = (link.link_style && typeof link.link_style === "object" ? link.link_style : {}) as Record<string, unknown>;
-        const stroke = selected ? "#1683df" : typeof style.color === "string" ? style.color : "#555";
+        const stroke = typeof style.color === "string" ? style.color : undefined;
         const strokeWidth = Number.isFinite(Number(style.width)) && Number(style.width) > 0 ? Number(style.width) : 2;
         const dash = link.suspend ? "6 4" : linkDash(style.type);
-        return <g key={link.link_id} className={`sim-link ${selected ? "is-selected" : ""} ${link.suspend ? "is-suspended" : ""}`} onClick={(event) => { event.stopPropagation(); props.onLinkClick(link.link_id); }} onContextMenu={() => props.onLinkClick(link.link_id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") props.onLinkClick(link.link_id); }} role="button" aria-label={`Ethernet segment connecting ${endpoints.map(({ node }) => node.name).join(", ")}`} tabIndex={0}>
-          {endpoints.slice(1).map(({ endpoint, node }) => { const point = portPoint(node, endpoint); const d = linkPath(sourcePoint, point, style); return <g key={`${endpoint.node_id}:${endpoint.adapter_number}:${endpoint.port_number}`}><path className="sim-link-stroke" d={d} fill="none" style={{ stroke, strokeWidth: selected ? Math.max(strokeWidth, 2.5) : strokeWidth, strokeDasharray: dash, opacity: Number(style.type) === 0 ? 0 : undefined }} /><path className="sim-link-hit" d={d} /></g>; })}
-          {Boolean(link.capturing) && <g pointerEvents="none" transform={`translate(${(sourcePoint.x+targetPoint.x)/2},${(sourcePoint.y+targetPoint.y)/2-12})`}><rect x="-25" y="-10" width="50" height="18" rx="9" fill={link.wireshark ? "#7c3aed" : "#dc2626"}/><text y="3" textAnchor="middle" fill="white" fontSize="10" fontWeight="700">{link.wireshark ? "◉ WS" : "● CAP"}</text></g>}
+        return <g key={link.link_id} data-canvas-link="true" className="cursor-pointer" onClick={(event) => { event.stopPropagation(); props.onLinkClick(link.link_id); }} onContextMenu={() => props.onLinkClick(link.link_id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") props.onLinkClick(link.link_id); }} role="button" aria-label={`Ethernet segment connecting ${endpoints.map(({ node }) => node.name).join(", ")}`} tabIndex={0}>
+          {endpoints.slice(1).map(({ endpoint, node }) => { const point = portPoint(node, endpoint); const d = linkPath(sourcePoint, point, style); return <g key={`${endpoint.node_id}:${endpoint.adapter_number}:${endpoint.port_number}`}><path className={`${selected ? "stroke-primary" : "stroke-foreground"} ${link.suspend ? "[stroke-dasharray:6_4]" : ""}`} d={d} fill="none" style={{ stroke, strokeWidth: selected ? Math.max(strokeWidth, 2.5) : strokeWidth, strokeDasharray: dash, opacity: Number(style.type) === 0 ? 0 : undefined }} /><path className="fill-none stroke-transparent [stroke-width:14]" d={d} /></g>; })}
+          {Boolean(link.capturing) && <g className="pointer-events-none" transform={`translate(${(sourcePoint.x+targetPoint.x)/2},${(sourcePoint.y+targetPoint.y)/2-12})`}><rect className={link.wireshark ? "fill-primary" : "fill-destructive"} x="-25" y="-10" width="50" height="18" rx="9"/><text className="fill-primary-foreground" y="3" textAnchor="middle" fontSize="10" fontWeight="700">{link.wireshark ? "◉ WS" : "● CAP"}</text></g>}
           {endpoints.map(({ endpoint, node }, index) => {
             const other = endpoints[index === 0 ? 1 : 0]?.node;
             const dx = other ? Number(other.x ?? 0) - Number(node.x ?? 0) : 0;
             const dy = other ? Number(other.y ?? 0) - Number(node.y ?? 0) : 0;
             const distance = Math.hypot(dx, dy) || 1;
-            return <circle key={`status:${endpoint.node_id}`} className={`sim-link-status ${node.status === "started" ? "running" : "stopped"}`} cx={Number(node.x ?? 0) + dx / distance * 27} cy={Number(node.y ?? 0) + dy / distance * 27} r="3" />;
+            return <circle key={`status:${endpoint.node_id}`} className={node.status === "started" ? "fill-success" : "fill-muted-foreground"} cx={Number(node.x ?? 0) + dx / distance * 27} cy={Number(node.y ?? 0) + dy / distance * 27} r="3" />;
           })}
           {endpoints.map(({ endpoint, node }) => {
             const localPort = localPortPoint(portIndex(node, endpoint), portCount(node));
@@ -454,7 +454,7 @@ export function TopologyCanvas(props: CanvasProps) {
             void localPort;
             const position = linkLabelPositions[key] ?? { x: Number(savedLabel?.x ?? along.x), y: Number(savedLabel?.y ?? along.y) };
             return <g key={`label:${endpoint.node_id}`} transform={`translate(${Number(node.x ?? 0)},${Number(node.y ?? 0)})`}>
-              <text className="sim-link-label" style={svgTextStyle(savedLabel?.style)} x={position.x} y={position.y} transform={Number(savedLabel?.rotation) ? `rotate(${Number(savedLabel?.rotation)}, ${position.x}, ${position.y})` : undefined} onPointerDown={(event) => startLinkLabelMove(event, link, endpoint, node)} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.stopPropagation()}>{text}</text>
+              <text className="fill-foreground text-[11px] [paint-order:stroke] [stroke:var(--background)] [stroke-width:3px]" style={svgTextStyle(savedLabel?.style)} x={position.x} y={position.y} transform={Number(savedLabel?.rotation) ? `rotate(${Number(savedLabel?.rotation)}, ${position.x}, ${position.y})` : undefined} onPointerDown={(event) => startLinkLabelMove(event, link, endpoint, node)} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.stopPropagation()}>{text}</text>
             </g>;
           })}
         </g>;
@@ -464,7 +464,7 @@ export function TopologyCanvas(props: CanvasProps) {
         const node = nodeMap.get(endpoint.node_id);
         if (!node) return null;
         const point = portPoint(node, endpoint);
-        return <line className="sim-link-preview" x1={point.x} y1={point.y} x2={cursorPoint.x} y2={cursorPoint.y} />;
+        return <line className="stroke-primary [stroke-width:2] [stroke-dasharray:6_4]" x1={point.x} y1={point.y} x2={cursorPoint.x} y2={cursorPoint.y} />;
       })()}
       {props.nodes.map((node) => {
         const x = Number(node.x ?? 0);
@@ -478,8 +478,9 @@ export function TopologyCanvas(props: CanvasProps) {
         const suspended = node.status === "suspended" || node.status === "suspending";
         return <g
           key={node.node_id}
+          data-canvas-node="true"
           transform={`translate(${x},${y})`}
-          className={`sim-node ${selected ? "is-selected" : ""} ${props.connecting ? "is-connecting" : ""} ${node.locked || props.projectLocked ? "is-locked" : ""}`}
+          className={`[pointer-events:all] ${props.connecting ? "cursor-crosshair" : node.locked || props.projectLocked ? "cursor-not-allowed" : "cursor-move"} ${selected ? "[filter:drop-shadow(0_0_0.2rem_var(--primary))]" : ""}`}
           style={{ pointerEvents: "all" }}
           onPointerDown={(event) => startMove(event, node)}
           onClick={(event) => {
@@ -515,20 +516,20 @@ export function TopologyCanvas(props: CanvasProps) {
           aria-label={`Node ${node.name}`}
           tabIndex={0}
         >
-          <rect className="sim-node-hit-area" x="-48" y="-36" width="96" height="104" fill="transparent" pointerEvents="all" />
-          {selected && <rect className="sim-node-selection" x="-48" y="-36" width="96" height="101" rx="6" />}
+          <rect className="fill-transparent [pointer-events:all]" x="-48" y="-36" width="96" height="104" pointerEvents="all" />
+          {selected && <rect className="fill-primary/10 stroke-primary stroke-2" x="-48" y="-36" width="96" height="101" rx="6" />}
           {symbol.kind === "custom" ? <AuthenticatedSymbolImage symbolId={symbol.symbolId} fallback={null} /> : <>
-            <Icon className="sim-node-icon" x={-24} y={-24} width={48} height={48} strokeWidth={1.5} />
-            {symbolAsset && <image className="sim-node-symbol" href={defaultSymbolUrls[symbolAsset]} x="-32" y="-32" width="64" height="64" preserveAspectRatio="xMidYMid meet" />}
+            <Icon className="stroke-foreground" x={-24} y={-24} width={48} height={48} strokeWidth={1.5} />
+            {symbolAsset && <image className="[pointer-events:none]" href={defaultSymbolUrls[symbolAsset]} x="-32" y="-32" width="64" height="64" preserveAspectRatio="xMidYMid meet" />}
           </>}
-          <circle className={`sim-node-status ${node.status === "started" ? "running" : suspended ? "suspended" : "stopped"}`} cx="22" cy="-21" r="4" />
-          {(node.locked || props.projectLocked) && <text className="sim-node-lock" x="-22" y="-17" aria-label="Locked">🔒</text>}
-          <text className="sim-node-name" data-node-label="true" style={svgTextStyle(label.style)} transform={Number(label.rotation) ? `rotate(${Number(label.rotation)}, ${labelPosition.x}, ${labelPosition.y})` : undefined} x={labelPosition.x} y={labelPosition.y} onPointerDown={(event) => startLabelMove(event, node)} onClick={(event) => event.stopPropagation()}>{String(label.text ?? node.name)}</text>
+          <circle className={node.status === "started" ? "fill-success" : suspended ? "fill-warning" : "fill-muted-foreground"} cx="22" cy="-21" r="4" />
+          {(node.locked || props.projectLocked) && <text className="fill-muted-foreground text-xs" x="-22" y="-17" aria-label="Locked">🔒</text>}
+          <text className="fill-foreground text-xs [text-anchor:middle] [paint-order:stroke] [stroke:var(--background)] [stroke-width:4px]" data-node-label="true" style={svgTextStyle(label.style)} transform={Number(label.rotation) ? `rotate(${Number(label.rotation)}, ${labelPosition.x}, ${labelPosition.y})` : undefined} x={labelPosition.x} y={labelPosition.y} onPointerDown={(event) => startLabelMove(event, node)} onClick={(event) => event.stopPropagation()}>{String(label.text ?? node.name)}</text>
         </g>;
         })}
       {drawingLayer(true)}
-      {selectionBox && <rect className="sim-selection-box" x={selectionBox.x} y={selectionBox.y} width={selectionBox.width} height={selectionBox.height} />}
-      {props.nodes.length === 0 && <g className="sim-canvas-empty"><Network x={-16} y={-30} width={32} height={32} /><text y="54">Your canvas is ready</text><text className="sim-empty-subtitle" y="77">Drop a device here or add one from the library on the left.</text></g>}
+      {selectionBox && <rect className="fill-primary/10 stroke-primary [stroke-dasharray:5_3]" x={selectionBox.x} y={selectionBox.y} width={selectionBox.width} height={selectionBox.height} />}
+      {props.nodes.length === 0 && <g className="fill-muted-foreground text-sm [text-anchor:middle]"><Network className="stroke-muted-foreground" x={-16} y={-30} width={32} height={32} /><text y="54">Your canvas is ready</text><text className="fill-muted-foreground text-xs" y="77">Drop a device here or add one from the library on the left.</text></g>}
     </svg>
   </div>;
 }

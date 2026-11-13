@@ -315,13 +315,13 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
 
   return (
     <TooltipProvider>
-      <div className="app-shell">
+      <div className="flex h-dvh min-h-0 w-full flex-col overflow-hidden bg-background">
         {!projectId && !showApplianceManager && <AppNavigationHeader connection={connection} onNavigateHome={() => navigateToProject(null)} />}
 
         <GlobalToast error={error} notice={notice} onDismiss={() => { setError(""); setNotice(""); }} />
 
-        <main className="main-area">
-          {showApplianceManager ? <PagesShell active="Appliances"><ApplianceManagerPage onBack={onBackFromApplianceManager ?? (() => navigateToProject(projectId))} onOpenPreferences={onOpenPreferences} onOpenImageCatalog={() => setMarketplaceOpen(true)} onTemplatesChanged={setTemplates} /></PagesShell> : projectId ? (busy || !project || !topology ? <div className="sim-loading"><Activity className="animate-pulse" />Loading project topology…</div> : <SimulatorWorkspace
+        <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {showApplianceManager ? <PagesShell active="Appliances"><ApplianceManagerPage onBack={onBackFromApplianceManager ?? (() => navigateToProject(projectId))} onOpenPreferences={onOpenPreferences} onOpenImageCatalog={() => setMarketplaceOpen(true)} onTemplatesChanged={setTemplates} /></PagesShell> : projectId ? (busy || !project || !topology ? <div className="flex min-h-0 flex-1 items-center justify-center gap-2 text-sm text-muted-foreground"><Activity className="animate-pulse" />Loading project topology…</div> : <SimulatorWorkspace
             project={project}
             topology={topology}
             templates={templates}
@@ -370,7 +370,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
           />) : <ProjectsPage onNavigateProject={(id) => navigateToProject(id)} onOpenAppliances={navigateToApplianceManager} />}
         </main>
 
-        {projectId && consoleDockOpen && <Suspense fallback={<div className="sim-console-loading">Loading console…</div>}><ConsoleDock
+        {projectId && consoleDockOpen && <Suspense fallback={<div className="fixed bottom-4 right-4 z-50 rounded-md border bg-card p-3 text-sm text-muted-foreground">Loading console…</div>}><ConsoleDock
           targets={consoleTargets}
           activeNodeId={activeConsoleId}
           minimized={consoleMinimized}
@@ -384,7 +384,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
 
       <NodeDialog open={nodeDialogOpen} onOpenChange={setNodeDialogOpen} onSubmit={addNode} nodeName={nodeName} setNodeName={setNodeName} templates={templates} templateId={templateId} setTemplateId={setTemplateId} setNodeCommand={setNodeCommand} setNodeStartupScript={setNodeStartupScript} setNodeStartupConfig={setNodeStartupConfig} setNodeIdlePc={setNodeIdlePc} nodeCommand={nodeCommand} nodeStartupScript={nodeStartupScript} nodeStartupConfig={nodeStartupConfig} nodeIdlePc={nodeIdlePc} runtimeInfo={runtimeInfo} loadingTemplates={loadingTemplates} creatingNode={creatingNode} uploadingImage={uploadingImage} uploadingQemuImage={uploadingQemuImage} onImportImage={(file) => void importDynamipsImage(file)} onImportQemuImage={(file) => void importQemuImage(file)} />
 
-      {marketplaceOpen && <Suspense fallback={<div className="sim-dialog-loading">Loading image catalog…</div>}><MarketplaceDialog onClose={() => setMarketplaceOpen(false)} /></Suspense>}
+      {marketplaceOpen && <Suspense fallback={<div className="fixed inset-0 z-50 grid place-items-center bg-background/80 text-sm text-muted-foreground">Loading image catalog…</div>}><MarketplaceDialog onClose={() => setMarketplaceOpen(false)} /></Suspense>}
       </div>
     </TooltipProvider>
   );

@@ -3,7 +3,6 @@ import { clampFloat, useFloatingFront } from "../floating";
 import { ChevronDown, ChevronUp, ExternalLink, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CaptureViewer } from "./CaptureViewer";
-import "./capture.css";
 
 type CaptureWindowProps = {
   url?: string;
@@ -20,11 +19,11 @@ export function CaptureWindow({ url, downloadUrl, title, onClose, onPopOut }: Ca
   const [drag, setDrag] = useState<{ x: number; y: number; pointerX: number; pointerY: number } | null>(null);
 
   return <section
-    className={`capture-window ${minimized ? "minimized" : ""}`}
+    className={`fixed z-[45] flex min-h-[280px] min-w-[420px] flex-col overflow-hidden rounded-lg border border-border bg-card shadow-[0_12px_36px_oklch(0_0_0/0.45)] ${minimized ? "min-w-[240px] min-h-[42px]" : ""}`}
     style={{ left: position.x, top: position.y, width: minimized ? 240 : position.width, height: minimized ? 42 : position.height, zIndex: z }}
     onPointerDownCapture={front}
   >
-    <header
+    <header className="flex h-[42px] min-h-[42px] cursor-move items-center gap-2 bg-muted px-2 font-semibold [&>span]:flex-1"
       onPointerDown={(event) => setDrag({ x: position.x, y: position.y, pointerX: event.clientX, pointerY: event.clientY })}
       onPointerMove={(event) => {
         if (!drag || !event.buttons) return;
@@ -38,7 +37,7 @@ export function CaptureWindow({ url, downloadUrl, title, onClose, onPopOut }: Ca
       <Button size="icon-xs" variant="ghost" aria-label="Close capture viewer" onClick={onClose}><X /></Button>
     </header>
     {!minimized && <CaptureViewer streamUrl={url} downloadUrl={downloadUrl} title={title} />}
-    {!minimized && <div className="capture-window-resize" onPointerDown={(event) => {
+    {!minimized && <div className="absolute bottom-0 right-0 z-[3] h-[22px] w-[22px] cursor-nwse-resize touch-none opacity-70 hover:opacity-100 bg-[linear-gradient(135deg,transparent_0_55%,var(--muted-foreground)_55%_62%,transparent_62%_72%,var(--muted-foreground)_72%_79%,transparent_79%)]" onPointerDown={(event) => {
       event.preventDefault();
       const start = { x: event.clientX, y: event.clientY, width: position.width, height: position.height };
       const move = (pointer: PointerEvent) => setPosition((current) => ({

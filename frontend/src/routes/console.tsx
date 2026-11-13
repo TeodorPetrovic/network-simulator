@@ -16,7 +16,7 @@ export const Route = createFileRoute("/console")({
 function ConsoleRoute() {
   const q = useSearch({ from: "/console" });
   const target: ConsoleTarget = { id: q.nodeId, projectId: q.projectId, nodeId: q.nodeId, nodeName: q.nodeName, nodeType: q.nodeType as ConsoleTarget["nodeType"], auxiliary: q.auxiliary };
-  return <main className="sim-console-dock" style={{ position: "fixed", inset: 0, width: "auto", height: "auto", borderRadius: 0, border: 0 }}>
-    <div className="sim-console-panes"><ConsoleSession target={target} active /></div>
+  return <main className="fixed inset-0 flex flex-col bg-background text-foreground">
+    <div className="relative flex min-h-0 flex-1"><ConsoleSession target={target} active /></div>
   </main>;
 }

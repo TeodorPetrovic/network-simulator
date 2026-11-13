@@ -182,12 +182,12 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
   }
 
   if (!node || !supported) return null;
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="template-settings-dialog">
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="w-full max-w-3xl">
     <DialogHeader><DialogTitle>Configure {node.name}</DialogTitle><DialogDescription>
       Settings apply to this device only. Stop it before saving.{kind === "docker" ? " Docker settings replace its stopped container; configured persistent paths keep their data." : ""}
     </DialogDescription></DialogHeader>
-    <form className="template-settings-form" onSubmit={(event) => void save(event)}>
-      <div className="template-settings-grid">
+    <form className="grid min-w-0 gap-4" onSubmit={(event) => void save(event)}>
+      <div className="grid min-w-0 gap-3 sm:grid-cols-2">
         {field("name", "Device name")}
         {(kind === "qemu" || kind === "docker") && field("adapters", "Network adapters", "number", node.status !== "stopped" ? "Stop the device to change the number of adapters" : "The count cannot be reduced below ports already used by links.", undefined, node.status !== "stopped")}
         {(["ethernet_switch", "ethernet_hub", "hub"].includes(kind ?? "")) && <>
@@ -196,8 +196,8 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
           {textArea("port_vlans", "Port VLANs", "One VLAN ID per port.")}
           {textArea("port_types", "Port VLAN types", "One type per port, such as access or dot1q.")}
         </>}
-        {kind === "cloud" && <div className="template-settings-wide">{textArea("interfaces", "Ethernet interfaces", "One host interface per line.")}</div>}
-        {kind === "nat" && <div className="template-settings-wide">{textArea("allow_host_interfaces", "Allowed host interfaces", "Explicitly allow these host interfaces for the NAT node, one per line.")}</div>}
+        {kind === "cloud" && <div className="sm:col-span-2">{textArea("interfaces", "Ethernet interfaces", "One host interface per line.")}</div>}
+        {kind === "nat" && <div className="sm:col-span-2">{textArea("allow_host_interfaces", "Allowed host interfaces", "Explicitly allow these host interfaces for the NAT node, one per line.")}</div>}
         {(kind === "qemu" || kind === "docker") && field("memory", kind === "qemu" ? "RAM (MB)" : "Memory limit (MB)", "number", kind === "docker" ? "0 means no Docker memory limit." : undefined)}
         {(kind === "qemu" || kind === "docker") && field("cpus", kind === "qemu" ? "vCPUs" : "CPU limit", "number", kind === "docker" ? "0 means no Docker CPU limit." : undefined, kind === "docker" ? "0.25" : "1")}
         {kind === "qemu" && <>
@@ -207,11 +207,11 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
           {selectField("hdb_disk_interface", "HDB disk interface", ["ide", "scsi", "virtio", "sd"])}{selectField("hdc_disk_interface", "HDC disk interface", ["ide", "scsi", "virtio", "sd"])}{selectField("hdd_disk_interface", "HDD disk interface", ["ide", "scsi", "virtio", "sd"])}
           {selectField("boot_priority", "Boot priority", ["c", "d", "n", "dc", "cd"])}
           {field("maxcpus", "Maximum CPUs", "number")}{selectField("console_type", "Console type", ["telnet", "vnc"])}{selectField("process_priority", "Process priority", ["low", "normal", "high"])}
-          <div className="template-settings-wide">{field("config_export_command", "Export config command", "text", "Console command whose output is the exported config, e.g. /export on MikroTik RouterOS (used by Export config in the device menu).")}</div>
+          <div className="sm:col-span-2">{field("config_export_command", "Export config command", "text", "Console command whose output is the exported config, e.g. /export on MikroTik RouterOS (used by Export config in the device menu).")}</div>
           {field("config_export_username", "Export login user", "text", "Console login used before the export command. MikroTik defaults to admin.")}{field("config_export_password", "Export login password", "password", "Empty for a fresh RouterOS CHR.")}
-          <div className="template-settings-wide">{textArea("options", "Additional QEMU options", "Command line options passed to QEMU.")}</div>
+          <div className="sm:col-span-2">{textArea("options", "Additional QEMU options", "Command line options passed to QEMU.")}</div>
         </>}
-        {kind === "docker" && <div className="template-settings-wide">
+        {kind === "docker" && <div className="sm:col-span-2">
           {field("image", "Docker image")}
           {selectField("console_type", "Console type", ["telnet", "vnc", "http", "https", "none"])}
           {draft.console_type === "http" || draft.console_type === "https" ? <div className="grid gap-2 rounded-md border p-3 sm:col-span-2">
@@ -231,14 +231,14 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
           {textArea("extra_hosts", "Extra hosts", "One host:address entry per line.")}
           {textArea("extra_volumes", "Persistent container paths", "One absolute path inside the container per line. Data lives in the project runtime directory.")}
         </div>}
-        {kind === "vpcs" && <div className="template-settings-wide">{selectField("console_type", "Console type", ["telnet", "ssh", "none"])}{textArea("startup_script", "Startup script", "VPCS commands run when this device starts.")}</div>}
+        {kind === "vpcs" && <div className="sm:col-span-2">{selectField("console_type", "Console type", ["telnet", "ssh", "none"])}{textArea("startup_script", "Startup script", "VPCS commands run when this device starts.")}</div>}
         {kind === "dynamips" && <>
           {field("memory", "RAM (MB)", "number")}{field("nvram", "NVRAM (KB)", "number")}{field("idlepc", "Idle-PC")}
           {Array.from({ length: 8 }, (_, i) => field(`slot${i}`, `Slot ${i}`))}{Array.from({ length: 4 }, (_, i) => field(`wic${i}`, `WIC ${i}`))}
-          <div className="template-settings-wide">{textArea("startup_config", "Startup configuration", "IOS configuration written before the router starts.", 8)}</div>
+          <div className="sm:col-span-2">{textArea("startup_config", "Startup configuration", "IOS configuration written before the router starts.", 8)}</div>
         </>}
-        {kind === "iou" && <div className="template-settings-wide grid gap-3 sm:grid-cols-2">
-          <p role="status" className="text-sm text-amber-700 sm:col-span-2">IOU runtime is unavailable here. These settings are still saved with the project node.</p>
+        {kind === "iou" && <div className="sm:col-span-2 grid gap-3 sm:grid-cols-2">
+          <p role="status" className="text-sm text-warning sm:col-span-2">IOU runtime is unavailable here. These settings are still saved with the project node.</p>
           {field("path", "IOU image path")}{field("ram", "RAM (MB)", "number")}{field("nvram", "NVRAM (KB)", "number")}
           {field("ethernet_adapters", "Ethernet adapters", "number")}{field("serial_adapters", "Serial adapters", "number")}
           {selectField("console_type", "Console type", ["telnet", "none"])}

@@ -4,7 +4,6 @@ import { readPcap } from "./pcap";
 import { compileDisplayFilter, DisplayFilterError, type PacketRecord } from "./filter";
 import { CaptureFilterBar, CaptureStatusBar, CaptureToolbar, FollowStreamDialog, PacketDetails, PacketList, StatisticsPanel } from "./CaptureComponents";
 import { api, getAuthToken, serverBase } from "../api";
-import "./capture.css";
 
 export type CaptureViewerProps = {
   streamUrl?: string;
@@ -181,7 +180,7 @@ export function CaptureViewer({ streamUrl, downloadUrl, title = "Capture Viewer"
     setFollowPackets(peer);
   }
 
-  return <div className="capture-viewer" onKeyDown={(event) => {
+  return <div className="flex h-full min-h-0 flex-col overflow-hidden bg-card font-mono text-xs text-card-foreground" onKeyDown={(event) => {
     if (event.key === "f" && event.altKey) followSelectedStream();
   }}>
     <CaptureToolbar
@@ -210,15 +209,15 @@ export function CaptureViewer({ streamUrl, downloadUrl, title = "Capture Viewer"
         event.target.value = "";
       }} />
     <CaptureFilterBar value={filter} error={filtered.error} onChange={setFilter} inputRef={filterInput} />
-    <div className="capture-tabs">
-      <button onClick={() => setTab("packets")} aria-selected={tab === "packets"}>Packets</button>
-      <button onClick={() => setTab("statistics")} aria-selected={tab === "statistics"}>Statistics</button>
+    <div className="flex items-center gap-2 border-b border-border px-[9px] py-1.5">
+      <button className="px-2.5 py-1 aria-selected:border-b-2 aria-selected:border-primary" onClick={() => setTab("packets")} aria-selected={tab === "packets"}>Packets</button>
+      <button className="px-2.5 py-1 aria-selected:border-b-2 aria-selected:border-primary" onClick={() => setTab("statistics")} aria-selected={tab === "statistics"}>Statistics</button>
     </div>
     {tab === "packets" ? <>
-      <div className="capture-table" style={{ height: `${paneHeight}%` }}>
+      <div className="flex min-h-[120px] flex-col" style={{ height: `${paneHeight}%` }}>
         <PacketList packets={filtered.packets} selectedNumber={selected?.number ?? null} relativeTime={relativeTime} autoScroll={autoScroll} onSelect={(packet) => setSelectedNumber(packet.number)} onApplyFilter={setFilter} />
       </div>
-      <div className="capture-splitter" role="separator" aria-orientation="horizontal" onPointerDown={(event) => {
+      <div className="h-1.5 basis-1.5 cursor-row-resize border-y border-border bg-muted" role="separator" aria-orientation="horizontal" onPointerDown={(event) => {
         const startY = event.clientY;
         const initial = paneHeight;
         const move = (pointer: PointerEvent) => setPaneHeight(Math.max(20, Math.min(75, initial + ((pointer.clientY - startY) / Math.max(1, innerHeight)) * 100)));

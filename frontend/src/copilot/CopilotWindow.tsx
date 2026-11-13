@@ -97,8 +97,8 @@ export function CopilotWindow({ projectId, onClose, onTopologyMayHaveChanged }: 
   }
 
   const noModel = configs !== null && configs.length === 0;
-  return <section className={`capture-window copilot-window ${minimized ? "minimized" : ""}`} style={{ left: position.x, top: position.y, width: minimized ? 300 : position.width, height: minimized ? 42 : position.height, zIndex: z }} onPointerDownCapture={front} aria-label="AI copilot">
-    <header onPointerDown={(event) => {
+  return <section className={`fixed z-[45] flex min-h-[280px] min-w-[420px] flex-col overflow-hidden rounded-lg border border-border bg-card shadow-[0_12px_36px_oklch(0_0_0/0.45)] ${minimized ? "min-w-[240px] min-h-[42px]" : ""}`} style={{ left: position.x, top: position.y, width: minimized ? 300 : position.width, height: minimized ? 42 : position.height, zIndex: z }} onPointerDownCapture={front} aria-label="AI copilot">
+    <header className="flex h-[42px] min-h-[42px] cursor-move items-center gap-2 bg-muted px-2 font-semibold [&>span]:flex-1" onPointerDown={(event) => {
       if ((event.target as HTMLElement).closest("button,select")) return;
       const x = event.clientX, y = event.clientY, startX = position.x, startY = position.y;
       const move = (pointer: PointerEvent) => setPosition((current) => ({ ...current, ...clampFloat(startX + pointer.clientX - x, startY + pointer.clientY - y, current.width) }));
@@ -141,6 +141,6 @@ export function CopilotWindow({ projectId, onClose, onTopologyMayHaveChanged }: 
         </div>
       </>}
     </div>}
-    {!minimized && <div className="capture-window-resize" onPointerDown={(event) => { event.preventDefault(); const x = event.clientX, y = event.clientY, width = position.width, height = position.height; const move = (pointer: PointerEvent) => setPosition((current) => ({ ...current, width: Math.max(340, Math.min(innerWidth - current.x, width + pointer.clientX - x)), height: Math.max(280, Math.min(innerHeight - current.y, height + pointer.clientY - y)) })); const stop = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); }; window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); }} />}
+    {!minimized && <div className="absolute bottom-0 right-0 z-[3] h-[22px] w-[22px] cursor-nwse-resize touch-none opacity-70 hover:opacity-100 bg-[linear-gradient(135deg,transparent_0_55%,var(--muted-foreground)_55%_62%,transparent_62%_72%,var(--muted-foreground)_72%_79%,transparent_79%)]" onPointerDown={(event) => { event.preventDefault(); const x = event.clientX, y = event.clientY, width = position.width, height = position.height; const move = (pointer: PointerEvent) => setPosition((current) => ({ ...current, width: Math.max(340, Math.min(innerWidth - current.x, width + pointer.clientX - x)), height: Math.max(280, Math.min(innerHeight - current.y, height + pointer.clientY - y)) })); const stop = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); }; window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); }} />}
   </section>;
 }

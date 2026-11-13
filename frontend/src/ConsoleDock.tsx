@@ -66,16 +66,16 @@ export function ConsoleDock({
     const stop = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); window.removeEventListener("pointercancel", stop); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); window.addEventListener("pointercancel", stop);
   };
-  return <section onPointerDownCapture={front} style={{left:position.x,top:position.y,width:minimized?150:position.width,height:minimized?42:position.height,zIndex:z}} className={`sim-console-dock ${minimized ? "is-minimized" : ""}`} aria-label="Device consoles">
-    <header className="sim-console-tabs is-draggable" onPointerDown={(event) => { if ((event.target as HTMLElement).closest(".sim-console-dock-actions button, .sim-console-tab > button[aria-label^='Close']")) return; beginDrag(event); }}>
-      <div className="sim-console-tab-list" role="tablist" aria-label="Open consoles">
-        {targets.map((target) => <div className={`sim-console-tab ${activeNodeId === target.id ? "is-active" : ""}`} key={target.id}>
-          <Button variant="ghost" className="sim-console-tab-select" role="tab" aria-selected={activeNodeId === target.id} onClick={() => { onSelect(target.id); onRestore(); }}><span className="sim-console-tab-dot" />{target.nodeName}{target.auxiliary ? " · Aux" : ""}</Button>
+  return <section onPointerDownCapture={front} style={{left:position.x,top:position.y,width:minimized?150:position.width,height:minimized?42:position.height,zIndex:z}} className={`fixed z-40 flex flex-col overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-xl ${minimized ? "" : ""}`} aria-label="Device consoles">
+    <header className="flex h-[38px] min-h-[38px] items-stretch justify-between border-b border-border bg-card select-none touch-none cursor-grab active:cursor-grabbing" onPointerDown={(event) => { if ((event.target as HTMLElement).closest("button")) return; beginDrag(event); }}>
+      <div className={`flex min-w-0 overflow-x-auto ${minimized ? "hidden" : ""}`} role="tablist" aria-label="Open consoles">
+        {targets.map((target) => <div className={`flex min-w-[125px] items-center gap-1 border-r border-border pl-2.5 ${activeNodeId === target.id ? "border-t-2 border-t-primary bg-card" : ""}`} key={target.id}>
+          <Button variant="ghost" className={`flex min-w-0 flex-1 justify-start gap-2 overflow-hidden px-0 text-[11px] ${activeNodeId === target.id ? "text-foreground" : "text-muted-foreground"}`} role="tab" aria-selected={activeNodeId === target.id} onClick={() => { onSelect(target.id); onRestore(); }}><span className="size-1.5 shrink-0 rounded-full bg-success" />{target.nodeName}{target.auxiliary ? " · Aux" : ""}</Button>
           <Button variant="ghost" size="icon-xs" aria-label={`Close ${target.nodeName}${target.auxiliary ? " auxiliary" : ""} console`} onClick={() => onClose(target.id)}><X /></Button>
         </div>)}
       </div>
-      <div className="sim-console-dock-actions">
-        <span><Terminal size={14} />Console{minimized && targets.length ? ` · ${targets.length}` : ""}</span>
+      <div className="flex items-center gap-1.5 px-2">
+        <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground"><Terminal size={14} />Console{minimized && targets.length ? ` · ${targets.length}` : ""}</span>
         {!minimized && activeNodeId && <Button variant="ghost" size="icon-sm" aria-label="Pop out console" title="Open this console in a new window" onClick={() => { const t = targets.find((item) => item.id === activeNodeId); if (!t) return; const q = new URLSearchParams({ projectId: t.projectId, nodeId: t.nodeId, nodeName: t.nodeName, nodeType: t.nodeType, ...(t.auxiliary ? { auxiliary: "1" } : {}) }); popOutWindow(`/console?${q}`, 820, 520, t.nodeName); onClose(t.id); }}><ExternalLink /></Button>}
         {minimized
           ? <Button variant="ghost" size="icon-sm" onClick={onRestore} aria-label="Restore console dock"><ChevronUp /></Button>
@@ -83,10 +83,10 @@ export function ConsoleDock({
         {!minimized && <Button variant="ghost" size="icon-sm" onClick={() => { try { localStorage.setItem("ns.console.float", JSON.stringify({...position,minimized:false,open:false})); } catch {} onHide(); }} aria-label="Close console dock"><PanelTopClose /></Button>}
       </div>
     </header>
-    <div className="sim-console-panes">
-      {targets.length ? targets.map((target) => <ConsoleSession key={target.id} target={target} active={target.id === activeNodeId && !minimized} />) : <div className="sim-console-empty">Console · Open a device console to start a session.</div>}
+    <div className={`relative flex min-h-0 flex-1 ${minimized ? "hidden" : ""}`}>
+      {targets.length ? targets.map((target) => <ConsoleSession key={target.id} target={target} active={target.id === activeNodeId && !minimized} />) : <div className="grid min-h-0 flex-1 place-items-center text-[11px] text-muted-foreground">Console · Open a device console to start a session.</div>}
     </div>
-    {!minimized && <div className="sim-console-resize" role="separator" aria-label="Resize console dock" onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); const start = { x: e.clientX, y: e.clientY, width: position.width, height: position.height, userSelect: document.body.style.userSelect }; resize.current = start; document.body.style.userSelect = "none"; const move = (event: PointerEvent) => { if (!resize.current || event.buttons === 0) return; save({ ...position, width: Math.max(360, Math.min(window.innerWidth - position.x, start.width + event.clientX - start.x)), height: Math.max(160, Math.min(window.innerHeight - position.y, start.height + event.clientY - start.y)) }); }; const stop = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); window.removeEventListener("pointercancel", stop); if (resize.current) document.body.style.userSelect = resize.current.userSelect; resize.current = null; }; window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); window.addEventListener("pointercancel", stop); }} />}
+    {!minimized && <div className="pointer-events-auto absolute right-0 bottom-0 z-20 size-4.5 cursor-nwse-resize touch-none bg-[linear-gradient(135deg,transparent_50%,var(--muted-foreground)_50%,var(--muted-foreground)_58%,transparent_58%,transparent_70%,var(--muted-foreground)_70%,var(--muted-foreground)_78%,transparent_78%)]" role="separator" aria-label="Resize console dock" onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); const start = { x: e.clientX, y: e.clientY, width: position.width, height: position.height, userSelect: document.body.style.userSelect }; resize.current = start; document.body.style.userSelect = "none"; const move = (event: PointerEvent) => { if (!resize.current || event.buttons === 0) return; save({ ...position, width: Math.max(360, Math.min(window.innerWidth - position.x, start.width + event.clientX - start.x)), height: Math.max(160, Math.min(window.innerHeight - position.y, start.height + event.clientY - start.y)) }); }; const stop = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); window.removeEventListener("pointercancel", stop); if (resize.current) document.body.style.userSelect = resize.current.userSelect; resize.current = null; }; window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); window.addEventListener("pointercancel", stop); }} />}
   </section>;
 }
 
@@ -171,9 +171,9 @@ export function ConsoleSession({ target, active }: { target: ConsoleTarget; acti
     return () => cancelAnimationFrame(frame);
   }, [active]);
 
-  return <div className={`sim-console-session ${active ? "is-active" : ""}`} role="region" aria-label={`${target.auxiliary ? "Auxiliary console" : "Console"} for ${target.nodeName}`} aria-hidden={!active}>
-    <div className="sim-console-session-meta"><span className="sim-console-tab-dot" />{target.nodeName}<span className="text-muted-foreground">{consoleKind(target.nodeType, target.auxiliary)}</span></div>
-    <div ref={terminalElement} className="sim-xterm" />
+  return <div className={`${active ? "flex" : "hidden"} h-full flex-col`} role="region" aria-label={`${target.auxiliary ? "Auxiliary console" : "Console"} for ${target.nodeName}`} aria-hidden={!active}>
+    <div className="flex h-[27px] min-h-[27px] items-center gap-2 px-3 text-[10px]"><span className="size-1.5 rounded-full bg-success" />{target.nodeName}<span className="text-muted-foreground">{consoleKind(target.nodeType, target.auxiliary)}</span></div>
+    <div ref={terminalElement} className="min-h-0 flex-1 px-2.5 py-1.5 [&_.xterm]:h-full [&_.xterm-viewport]:!overflow-y-auto" />
   </div>;
 }
 

@@ -281,11 +281,11 @@ export function ApplianceManagerPage({ onBack, onOpenPreferences, onOpenImageCat
     setNotice(`${appliance.name} was created in the appliance library and is available to projects when its runtime is ready.`);
   }
 
-  return <main className="appliance-manager-page">
-    <header className="appliance-manager-header">
+  return <div className="mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col gap-4 p-6">
+    <header className="flex flex-wrap items-center justify-between gap-4 border-b pb-4">
       <div className="flex min-w-0 items-center gap-3">
         <Button variant="outline" size="icon" onClick={onBack} aria-label="Back"><ArrowLeft /></Button>
-        <div className="min-w-0"><h1>Appliance library</h1><p>GNS3 imports and appliances you create are the only device definitions shared with projects.</p></div>
+        <div className="min-w-0"><h1 className="text-xl font-semibold tracking-tight">Appliance library</h1><p className="mt-1 text-sm text-muted-foreground">GNS3 imports and appliances you create are the only device definitions shared with projects.</p></div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs text-muted-foreground">{appliances.length} appliances · {readyCount} ready configurations</span>
@@ -294,18 +294,18 @@ export function ApplianceManagerPage({ onBack, onOpenPreferences, onOpenImageCat
         <CreateCustomApplianceDialog open={customDialogOpen} onOpenChange={setCustomDialogOpen} imageOptions={customImageOptions} onCreated={customApplianceCreated} />
         <Dialog open={imageLibraryOpen} onOpenChange={setImageLibraryOpen}>
           <DialogTrigger asChild><Button variant="outline"><HardDrive />Global images<Badge variant="secondary">{localImages.length}</Badge></Button></DialogTrigger>
-          <DialogContent className="appliance-image-library-dialog">
+          <DialogContent className="flex max-h-[82dvh] w-[min(760px,calc(100vw-32px))] max-w-[min(760px,calc(100vw-32px))] flex-col overflow-hidden">
             <DialogHeader>
               <DialogTitle>Global image library</DialogTitle>
               <DialogDescription>Images are stored once and shared by all appliances and projects.</DialogDescription>
             </DialogHeader>
-            <div className="appliance-image-library-content">
+            <div className="grid min-h-0 grid-cols-[220px_minmax(0,1fr)] gap-4 max-sm:grid-cols-1">
               <div className="grid content-start gap-2">
                 <FilePickerButton icon={<Upload />} label={uploading ? "Validating image…" : "Add QEMU image"} accept=".qcow2,.qcow,.raw,.img,.vmdk,.vdi" disabled={uploading} onSelect={(file) => uploadImage("qemu", file)} />
                 <FilePickerButton icon={<Upload />} label={uploading ? "Validating image…" : "Add Dynamips IOS image"} accept=".bin,.image,.img,.elf" disabled={uploading} onSelect={(file) => uploadImage("dynamips", file)} />
               </div>
-              <ScrollArea className="appliance-local-image-scroll"><div className="appliance-local-image-table">
-                {localImages.map((image) => <div key={image.image_id} className="appliance-local-image-row"><span className="grid min-w-0 gap-0.5"><b className="truncate" title={image.name}>{image.name}</b><small className="truncate text-muted-foreground" title={image.path}>{image.path}</small></span><Badge variant="outline">{image.template_type.toUpperCase()}</Badge><small className="text-muted-foreground">{formatBytes(image.size)}</small></div>)}
+              <ScrollArea className="max-h-[52dvh] min-h-[120px] rounded-md border px-3 max-sm:max-h-[42dvh]"><div className="grid gap-0 px-1">
+                {localImages.map((image) => <div key={image.image_id} className="grid min-h-12 grid-cols-[minmax(0,1fr)_auto_56px] items-center gap-2 border-t text-xs"><span className="grid min-w-0 gap-0.5"><b className="truncate" title={image.name}>{image.name}</b><small className="truncate text-muted-foreground" title={image.path}>{image.path}</small></span><Badge variant="outline">{image.template_type.toUpperCase()}</Badge><small className="text-muted-foreground">{formatBytes(image.size)}</small></div>)}
                 {!localImages.length && <EmptyState icon={<HardDrive />} title="No images in the global library" text="Add a QEMU disk or Dynamips IOS image. Appliance definitions will then match files by name, MD5, and size." />}
               </div></ScrollArea>
             </div>
@@ -316,25 +316,25 @@ export function ApplianceManagerPage({ onBack, onOpenPreferences, onOpenImageCat
       </div>
     </header>
 
-    {(error || notice) && <div className="appliance-toast-viewport" aria-live="polite" aria-atomic="true">
-      <div className={`appliance-toast ${error ? "is-error" : ""}`} role={error ? "alert" : "status"}>
+    {(error || notice) && <div className="fixed bottom-4 right-4 z-50 w-[min(420px,calc(100vw-32px))]" aria-live="polite" aria-atomic="true">
+      <div className={`flex min-h-12 items-center gap-2 rounded-lg border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-lg ${error ? "border-destructive text-destructive" : ""}`} role={error ? "alert" : "status"}>
         {error ? <span>{error}</span> : <><Check aria-hidden="true" /><span>{notice}</span></>}
         <Button variant="ghost" size="icon-xs" onClick={() => { setError(""); setNotice(""); }} aria-label="Dismiss notification"><X /></Button>
       </div>
     </div>}
 
-    <Tabs value={tab} onValueChange={(value) => setTab(value as ManagerTab)} className="appliance-manager-tabs">
+    <Tabs value={tab} onValueChange={(value) => setTab(value as ManagerTab)} className="flex min-h-0 flex-1 flex-col">
       <TabsList><TabsTrigger value="installed"><Server />Appliance library</TabsTrigger><TabsTrigger value="registry"><Search />GNS3 registry <Badge variant="secondary" className="ml-1">{registryResults.length}</Badge></TabsTrigger></TabsList>
-      <TabsContent value="installed" className="appliance-manager-panel">
-        <div className="appliance-manager-grid">
-          <Card className="appliance-library-list">
-            <div className="appliance-library-heading"><div><h2>Appliances</h2><p>Only imported GNS3 definitions and custom appliances appear here.</p></div><Badge variant="outline">{appliances.length}</Badge></div>
-            <div className="appliance-library-filter"><Search aria-hidden="true" /><Input value={applianceFilter} onChange={(event) => setApplianceFilter(event.target.value)} aria-label="Filter installed appliances" placeholder="Filter appliances" /></div>
-            <ScrollArea className="appliance-library-scroll"><div className="space-y-2 p-2">
+      <TabsContent value="installed" className="mt-3 flex min-h-0 flex-1 flex-col">
+        <div className="grid min-h-0 flex-1 grid-cols-[minmax(250px,0.35fr)_minmax(0,1fr)] gap-4 max-md:grid-cols-1">
+          <Card className="flex min-h-0 flex-col overflow-hidden p-0">
+            <div className="flex min-w-0 items-start justify-between gap-3 p-4"><div className="min-w-0"><h2>Appliances</h2><p className="text-sm text-muted-foreground">Only imported GNS3 definitions and custom appliances appear here.</p></div><Badge variant="outline">{appliances.length}</Badge></div>
+            <div className="relative mx-3 mb-2"><Search aria-hidden="true" className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input className="pl-9" value={applianceFilter} onChange={(event) => setApplianceFilter(event.target.value)} aria-label="Filter installed appliances" placeholder="Filter appliances" /></div>
+            <ScrollArea className="min-h-0 w-full flex-1"><div className="space-y-2 p-2">
               {filteredLibraryGroups.map(({ runtime, entries }) => <Collapsible key={runtime} open={openRuntimeGroups[runtime] ?? true} onOpenChange={(open) => setOpenRuntimeGroups((current) => ({ ...current, [runtime]: open }))}>
-                <CollapsibleTrigger className="appliance-runtime-group-trigger"><span>{applianceRuntimeLabel(runtime)}</span><Badge variant="secondary">{entries.length}</Badge><ChevronDown className="ml-auto size-4" /></CollapsibleTrigger>
+                <CollapsibleTrigger className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:bg-muted hover:text-foreground"><span>{applianceRuntimeLabel(runtime)}</span><Badge variant="secondary">{entries.length}</Badge><ChevronDown className="ml-auto size-4" /></CollapsibleTrigger>
                 <CollapsibleContent className="space-y-1 pt-1">
-                  {entries.map((entry) => <Button key={entry.id} type="button" variant="ghost" className={`appliance-library-item ${selectedFile === entry.appliance.file_name ? "selected" : ""}`} aria-current={selectedFile === entry.appliance.file_name ? "true" : undefined} onClick={() => { setSelectedFile(entry.appliance.file_name); setSelectedVersion(entry.appliance.versions?.[0]?.name ?? ""); setNotice(""); }}>
+                  {entries.map((entry) => <Button key={entry.id} type="button" variant="ghost" className={`flex h-auto min-h-14 w-full justify-start gap-2 whitespace-normal rounded-md border p-2 text-left hover:bg-muted ${selectedFile === entry.appliance.file_name ? "border-border bg-accent" : "border-transparent"}`} aria-current={selectedFile === entry.appliance.file_name ? "true" : undefined} onClick={() => { setSelectedFile(entry.appliance.file_name); setSelectedVersion(entry.appliance.versions?.[0]?.name ?? ""); setNotice(""); }}>
                     <span className="grid size-9 shrink-0 place-items-center rounded-md border text-primary"><Server size={17} /></span>
                     <span className="grid min-w-0 flex-1 gap-1 text-left"><b className="truncate text-sm font-medium">{entry.appliance.name}</b><small className="truncate text-muted-foreground">{entry.appliance.file_name}</small></span>
                     <Badge variant={entry.appliance.origin === "custom" ? "secondary" : "outline"}>{entry.appliance.origin === "custom" ? "Custom" : "GNS3"}</Badge>
@@ -351,18 +351,18 @@ export function ApplianceManagerPage({ onBack, onOpenPreferences, onOpenImageCat
             </div>
           </Card>
 
-          <Card className="appliance-config-panel">
+          <Card className="flex min-h-0 flex-col gap-0 overflow-hidden p-0">
             {selectedAppliance && activeVersion ? <>
-              <div className="appliance-panel-heading"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{selectedAppliance.template_type ?? "Runtime not detected"}</Badge><Badge variant={selectedAppliance.origin === "custom" ? "secondary" : "outline"}>{selectedAppliance.origin === "custom" ? "Custom appliance" : "GNS3 import"}</Badge><Badge variant={activeVersion.runtime_supported ? "secondary" : "destructive"}>{activeVersion.runtime_supported ? "Runtime supported" : "Runtime unsupported"}</Badge></div><h2>{selectedAppliance.name}</h2><p>{selectedAppliance.description || "No appliance description is provided."}</p></div></div>
-              <div className="appliance-config-meta"><span>Definition</span><b>{selectedAppliance.file_name}</b><span>Configuration</span><Select value={activeVersion.name} onValueChange={setSelectedVersion}><SelectTrigger aria-label="Appliance configuration" className="w-full"><SelectValue /></SelectTrigger><SelectContent position="popper" align="start" className="appliance-select-content">{versions.map((version) => <SelectItem key={version.name} value={version.name}>{version.name}{version.settings ? ` · ${version.settings}` : ""}</SelectItem>)}</SelectContent></Select><span>Runtime settings</span><b>{activeVersion.template_type ?? "Not detected"}{activeVersion.settings ? ` · ${activeVersion.settings}` : ""}</b></div>
-              {activeVersion.template_type === "docker" && activeVersion.docker_image && <Card className="appliance-docker-image" role="group" aria-label="Docker image for this appliance configuration">
+              <div className="p-4"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{selectedAppliance.template_type ?? "Runtime not detected"}</Badge><Badge variant={selectedAppliance.origin === "custom" ? "secondary" : "outline"}>{selectedAppliance.origin === "custom" ? "Custom appliance" : "GNS3 import"}</Badge><Badge variant={activeVersion.runtime_supported ? "secondary" : "destructive"}>{activeVersion.runtime_supported ? "Runtime supported" : "Runtime unsupported"}</Badge></div><h2>{selectedAppliance.name}</h2><p>{selectedAppliance.description || "No appliance description is provided."}</p></div></div>
+              <div className="mx-4 mb-3 grid grid-cols-[115px_minmax(0,1fr)] items-center gap-x-3 gap-y-2 rounded-md border p-3 text-sm max-sm:grid-cols-[86px_minmax(0,1fr)]"><span>Definition</span><b>{selectedAppliance.file_name}</b><span>Configuration</span><Select value={activeVersion.name} onValueChange={setSelectedVersion}><SelectTrigger aria-label="Appliance configuration" className="w-full"><SelectValue /></SelectTrigger><SelectContent position="popper" align="start" className="max-h-[min(22rem,var(--radix-select-content-available-height))] overflow-y-auto">{versions.map((version) => <SelectItem key={version.name} value={version.name}>{version.name}{version.settings ? ` · ${version.settings}` : ""}</SelectItem>)}</SelectContent></Select><span>Runtime settings</span><b>{activeVersion.template_type ?? "Not detected"}{activeVersion.settings ? ` · ${activeVersion.settings}` : ""}</b></div>
+              {activeVersion.template_type === "docker" && activeVersion.docker_image && <Card className="mx-4 mb-3 flex items-center justify-between gap-4 p-3 max-sm:flex-col max-sm:items-start" role="group" aria-label="Docker image for this appliance configuration">
                 <div className="min-w-0"><div className="mb-1 flex flex-wrap items-center gap-2"><Badge variant={activeVersion.docker_image_available ? "secondary" : "outline"}>{activeVersion.docker_image_available ? "Image available" : "Image not installed"}</Badge>{activeVersion.docker_image_id && <code className="text-xs text-muted-foreground">{activeVersion.docker_image_id.slice(0, 19)}</code>}</div><b className="break-all font-mono text-sm">{activeVersion.docker_image}</b><p className="mt-1 text-xs text-muted-foreground">GNS3 Docker appliances use an image reference from the selected template settings. Pulling it creates a runnable template in the device palette.</p></div>
                 <Button variant={activeVersion.docker_image_available ? "outline" : "default"} disabled={busy} onClick={() => void pullDockerImage(activeVersion.docker_image!)}><Download />{activeVersion.docker_image_available ? "Pull latest" : "Pull image"}</Button>
               </Card>}
-              {!activeVersion.runtime_supported && <Card className="appliance-runtime-warning" role="note">This configuration describes {activeVersion.template_type ?? "an unsupported runtime"}. The current controller cannot create a runnable template for this platform yet. Image assignments are still saved here, but this config will not appear in the device palette until its runtime is implemented.</Card>}
-              {activeRuntimeTemplate ? <Card className="appliance-template-ready" role="status"><Badge variant="secondary">Ready in device picker</Badge><div><b>{activeRuntimeTemplate.name}</b><span>{activeRuntimeTemplate.type.toUpperCase()} template · Uses the global image assigned to this configuration.</span><small>Open a project and choose this appliance from Add device.</small></div></Card> : activeVersion.runtime_supported && activeVersion.images.length > 0 && <p className="appliance-template-pending" role="note">This configuration appears in the project device picker after its required image slots are mapped and verified below.</p>}
-              <div className="appliance-images-heading"><div><h3>Images required by this configuration</h3><p>GNS3 stores these image slots inside each version. Verify the registry MD5 and size before using a local file.</p></div><Badge variant="outline">{activeVersion.images.length} image{activeVersion.images.length === 1 ? "" : "s"}</Badge></div>
-              <ScrollArea className="appliance-image-list"><div className="space-y-3 p-4">
+              {!activeVersion.runtime_supported && <Card className="mx-4 mb-3 border-destructive/40 p-3 text-sm leading-relaxed text-muted-foreground" role="note">This configuration describes {activeVersion.template_type ?? "an unsupported runtime"}. The current controller cannot create a runnable template for this platform yet. Image assignments are still saved here, but this config will not appear in the device palette until its runtime is implemented.</Card>}
+              {activeRuntimeTemplate ? <Card className="mx-4 mb-3 grid grid-cols-[max-content_minmax(0,1fr)] items-start gap-3 p-3" role="status"><Badge variant="secondary">Ready in device picker</Badge><div><b>{activeRuntimeTemplate.name}</b><span>{activeRuntimeTemplate.type.toUpperCase()} template · Uses the global image assigned to this configuration.</span><small>Open a project and choose this appliance from Add device.</small></div></Card> : activeVersion.runtime_supported && activeVersion.images.length > 0 && <p className="mx-4 mb-3 border-l-2 pl-3 text-sm text-muted-foreground" role="note">This configuration appears in the project device picker after its required image slots are mapped and verified below.</p>}
+              <div className="flex items-center justify-between gap-3 px-4 pb-3"><div><h3>Images required by this configuration</h3><p>GNS3 stores these image slots inside each version. Verify the registry MD5 and size before using a local file.</p></div><Badge variant="outline">{activeVersion.images.length} image{activeVersion.images.length === 1 ? "" : "s"}</Badge></div>
+              <ScrollArea className="min-h-[130px] w-full flex-1"><div className="space-y-3 p-4">
                 {activeVersion.images.map((requirement) => <ImageAssignmentCard key={`${activeVersion.name}:${requirement.key}`} version={activeVersion} requirement={requirement} localImages={localImages.filter((image) => image.template_type === activeVersion.template_type)} busy={busy || uploading} onSave={saveBinding} onClear={clearBinding} />)}
                 {activeVersion.images.length === 0 && <EmptyState icon={<HardDrive />} title="No separate disk image listed" text="This appliance config does not define a local image slot. Docker images are managed by their configured image tag." />}
               </div></ScrollArea>
@@ -371,16 +371,16 @@ export function ApplianceManagerPage({ onBack, onOpenPreferences, onOpenImageCat
         </div>
       </TabsContent>
 
-      <TabsContent value="registry" className="appliance-manager-panel">
-        <div className="appliance-registry-grid">
-          <Card className="appliance-library-list">
+      <TabsContent value="registry" className="mt-3 flex min-h-0 flex-1 flex-col">
+        <div className="grid min-h-0 flex-1 grid-cols-[minmax(250px,0.35fr)_minmax(0,1fr)] gap-4 max-md:grid-cols-1">
+          <Card className="flex min-h-0 flex-col overflow-hidden p-0">
             <form className="flex gap-2 border-b p-3" onSubmit={(event) => void searchRegistry(event)}><div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input value={registryQuery} onChange={(event) => setRegistryQuery(event.target.value)} aria-label="Search GNS3 registry" placeholder="Search devices, e.g. Cisco 7200" className="pl-9" /></div><Button type="submit" disabled={busy}><Search />Search</Button></form>
-            <ScrollArea className="appliance-library-scroll"><div className="space-y-1 p-2">{registryResults.map((item) => <button key={item.file_name} type="button" className={`appliance-library-item ${selectedRegistry?.file_name === item.file_name ? "selected" : ""}`} onClick={() => void inspectRegistry(item)}><span className="grid size-9 shrink-0 place-items-center rounded-md border text-primary"><Server size={17} /></span><span className="grid min-w-0 flex-1 gap-1 text-left"><b className="truncate text-sm font-medium">{item.name}</b><small className="truncate text-muted-foreground">{item.file_name}</small></span><Badge variant={item.imported ? "secondary" : "outline"}>{item.imported ? "Imported" : "GNS3"}</Badge></button>)}{!busy && registryResults.length === 0 && <EmptyState icon={<Search />} title={registryLoaded ? "No registry entries found" : "Loading the GNS3 registry"} text={registryLoaded ? "Try a different name or runtime keyword." : "The appliance catalog is being loaded."} />}</div></ScrollArea>
+            <ScrollArea className="min-h-0 w-full flex-1"><div className="space-y-1 p-2">{registryResults.map((item) => <button key={item.file_name} type="button" className={`flex h-auto min-h-14 w-full justify-start gap-2 whitespace-normal rounded-md border border-transparent p-2 text-left hover:bg-muted ${selectedRegistry?.file_name === item.file_name ? "border-border bg-accent" : "border-transparent"}`} onClick={() => void inspectRegistry(item)}><span className="grid size-9 shrink-0 place-items-center rounded-md border text-primary"><Server size={17} /></span><span className="grid min-w-0 flex-1 gap-1 text-left"><b className="truncate text-sm font-medium">{item.name}</b><small className="truncate text-muted-foreground">{item.file_name}</small></span><Badge variant={item.imported ? "secondary" : "outline"}>{item.imported ? "Imported" : "GNS3"}</Badge></button>)}{!busy && registryResults.length === 0 && <EmptyState icon={<Search />} title={registryLoaded ? "No registry entries found" : "Loading the GNS3 registry"} text={registryLoaded ? "Try a different name or runtime keyword." : "The appliance catalog is being loaded."} />}</div></ScrollArea>
           </Card>
-          <Card className="appliance-config-panel">{selectedRegistry ? <RegistryDetails appliance={selectedRegistry} busy={busy} onImport={() => void importRegistryDefinition()} onInstall={() => void installRegistryAppliance()} /> : <EmptyState icon={<FileUp />} title="GNS3 appliance definition" text="Registry results show the actual .gns3a definition, versions, required files, and hashes." />}</Card>
+          <Card className="flex min-h-0 flex-col gap-0 overflow-hidden p-0">{selectedRegistry ? <RegistryDetails appliance={selectedRegistry} busy={busy} onImport={() => void importRegistryDefinition()} onInstall={() => void installRegistryAppliance()} /> : <EmptyState icon={<FileUp />} title="GNS3 appliance definition" text="Registry results show the actual .gns3a definition, versions, required files, and hashes." />}</Card>
         </div>
       </TabsContent>
     </Tabs>
-  </main>;
+  </div>;
 }
 

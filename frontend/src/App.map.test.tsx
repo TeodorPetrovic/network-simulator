@@ -31,7 +31,7 @@ describe("map", () => {
       });
       renderWorkspace();
       await screen.findByRole("button", { name: "Node Edge router" });
-      const canvas = document.querySelector(".sim-canvas");
+      const canvas = document.querySelector("[data-workspace-canvas]");
       expect(canvas).not.toBeNull();
       expect(within(canvas as HTMLElement).queryByRole("button", { name: "Zoom in" })).not.toBeInTheDocument();
       expect(within(canvas as HTMLElement).queryByRole("button", { name: "Zoom to selection" })).not.toBeInTheDocument();

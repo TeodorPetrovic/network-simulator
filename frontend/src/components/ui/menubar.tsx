@@ -4,8 +4,8 @@ import * as React from "react"
 import { Menubar as MenubarPrimitive } from "radix-ui"
 import { cn } from "cn"
 
-function Menubar(props: React.ComponentProps<typeof MenubarPrimitive.Root>) {
-  return <MenubarPrimitive.Root data-slot="menubar" className={cn("flex h-8 items-center gap-0.5 rounded-none border-0 bg-transparent p-0", props.className)} {...props} />
+function Menubar({ className, ...props }: React.ComponentProps<typeof MenubarPrimitive.Root>) {
+  return <MenubarPrimitive.Root data-slot="menubar" className={cn("flex h-8 items-center gap-0.5 rounded-none border-0 bg-transparent p-0", className)} {...props} />
 }
 function MenubarMenu(props: React.ComponentProps<typeof MenubarPrimitive.Menu>) { return <MenubarPrimitive.Menu {...props} /> }
 function MenubarTrigger({ className, ...props }: React.ComponentProps<typeof MenubarPrimitive.Trigger>) {

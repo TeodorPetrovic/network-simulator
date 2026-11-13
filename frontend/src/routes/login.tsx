@@ -3,6 +3,9 @@ import { useState } from "react";
 import { api, getServerOrigin, isDesktop } from "../api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export const Route = createFileRoute("/login")({
   validateSearch: (search: Record<string, unknown>) => ({ returnTo: typeof search.returnTo === "string" ? search.returnTo : "/" }),
@@ -24,20 +27,24 @@ function LoginPage() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Login failed"); }
     finally { setBusy(false); }
   }
-  return <main className="login-page">
-    <section className="login-card">
-      <div className="login-mark">NS</div>
-      <div className="pages-eyebrow">NETWORK STUDIO</div>
-      <h1>Sign in</h1>
-      <p>{isDesktop() ? <>Signing in to <strong>{getServerOrigin()}</strong>. <a href="/connect">Change server</a></> : "Use your controller account to continue."}</p>
-      <form className="login-form" onSubmit={(event) => void submit(event)}>
-        <label htmlFor="login-username">Username</label>
+  return <main className="flex min-h-svh items-center justify-center bg-muted/40 p-6">
+    <Card className="w-full max-w-sm">
+      <CardHeader className="text-center">
+        <div className="mx-auto mb-2 flex size-10 items-center justify-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground">NS</div>
+        <p className="text-xs font-medium tracking-wide text-muted-foreground">NETWORK STUDIO</p>
+        <CardTitle className="text-2xl font-semibold tracking-tight">Sign in</CardTitle>
+        <CardDescription>{isDesktop() ? <>Signing in to <strong className="font-medium text-foreground">{getServerOrigin()}</strong>. <a className="underline underline-offset-4" href="/connect">Change server</a></> : "Use your controller account to continue."}</CardDescription>
+      </CardHeader>
+      <CardContent>
+      <form className="grid gap-4" onSubmit={(event) => void submit(event)}>
+        <Label htmlFor="login-username">Username</Label>
         <Input id="login-username" autoComplete="username" required value={username} onChange={(event) => setUsername(event.target.value)} />
-        <label htmlFor="login-password">Password</label>
+        <Label htmlFor="login-password">Password</Label>
         <Input id="login-password" type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} />
-        {error && <div role="alert" className="pages-alert">{error}</div>}
+        {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
         <Button type="submit" className="w-full" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</Button>
       </form>
-    </section>
+      </CardContent>
+    </Card>
   </main>;
 }

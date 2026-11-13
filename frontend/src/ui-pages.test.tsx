@@ -15,6 +15,9 @@ const it = (name: string, fn: any, timeout = 15_000) => registerTest(name, fn, t
 vi.mock("./PagesShell", async () => {
   const React = await import("react");
   return {
+    PageLayout: ({ children }: { children: import("react").ReactNode }) => React.createElement("div", null, children),
+    PageSection: ({ children }: { children: import("react").ReactNode }) => React.createElement("section", null, children),
+    SettingsLayout: ({ children, navigation }: { children: import("react").ReactNode; navigation?: import("react").ReactNode }) => React.createElement("div", null, navigation, children),
     PagesShell: ({ children }: { children: import("react").ReactNode }) => React.createElement("main", null, children),
     PageTitle: ({ title, description, actions }: { title: string; description?: string; actions?: import("react").ReactNode }) => React.createElement("header", null, React.createElement("h1", null, title), description && React.createElement("p", null, description), actions),
   };
@@ -142,7 +145,7 @@ describe("PAGES parity routes", () => {
   it("shows unsupported runtime states and labels non-consumed template fields", async () => {
     vi.mocked(api.templates).mockResolvedValue([qemuTemplate]);
     renderPage(PreferencesPage);
-    fireEvent.click(await screen.findByRole("button", { name: "QEMU" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^QEMU/ }));
     fireEvent.click(screen.getByRole("button", { name: "Configure" }));
     expect(await screen.findAllByText("Pending backend")).not.toHaveLength(0);
     expect(screen.getAllByText("Pending backend").length).toBeGreaterThan(0);
