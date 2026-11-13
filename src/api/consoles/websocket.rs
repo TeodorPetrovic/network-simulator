@@ -32,7 +32,8 @@ pub(crate) async fn qemu_vnc(
             )
         })?;
     let activity = state.project_activity.clone();
-    Ok(websocket.on_upgrade(move |socket| async move {
+    // noVNC offers the "binary" subprotocol; browsers drop the socket unless the server selects it.
+    Ok(websocket.protocols(["binary"]).on_upgrade(move |socket| async move {
         let _activity = activity.open_websocket(project_id);
         vnc_console_session(socket, stream).await;
     }))
@@ -79,7 +80,8 @@ pub(crate) async fn docker_vnc(
             )
         })?;
     let activity = state.project_activity.clone();
-    Ok(websocket.on_upgrade(move |socket| async move {
+    // noVNC offers the "binary" subprotocol; browsers drop the socket unless the server selects it.
+    Ok(websocket.protocols(["binary"]).on_upgrade(move |socket| async move {
         let _activity = activity.open_websocket(project_id);
         vnc_console_session(socket, stream).await;
     }))
@@ -132,7 +134,9 @@ mod vnc_proxy_tests {
         let stream = tokio::net::TcpStream::connect(address)
             .await
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-        Ok(websocket.on_upgrade(move |socket| vnc_console_session(socket, stream)))
+        Ok(websocket
+            .protocols(["binary"])
+            .on_upgrade(move |socket| vnc_console_session(socket, stream)))
     }
 
     #[tokio::test]
@@ -160,9 +164,17 @@ mod vnc_proxy_tests {
             axum::serve(proxy, app).await.unwrap();
         });
 
-        let (mut websocket, _) = tokio_tungstenite::connect_async(format!("ws://{proxy_address}/"))
-            .await
-            .unwrap();
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut request = format!("ws://{proxy_address}/").into_client_request().unwrap();
+        request
+            .headers_mut()
+            .insert("Sec-WebSocket-Protocol", "binary".parse().unwrap());
+        let (mut websocket, handshake) = tokio_tungstenite::connect_async(request).await.unwrap();
+        assert_eq!(
+            handshake.headers().get("Sec-WebSocket-Protocol").map(|v| v.to_str().unwrap()),
+            Some("binary"),
+            "the server must select the subprotocol noVNC requests"
+        );
         websocket
             .send(ClientMessage::Binary(vec![0, 1, 2, 255].into()))
             .await
