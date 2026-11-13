@@ -1,20 +1,25 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { cleanup, render, screen, fireEvent } from "@testing-library/react";
 import { ConsoleDock, dockerResizeControlFrame, sendDockerResizeControl } from "./ConsoleDock";
 
 vi.mock("@xterm/xterm", () => ({ Terminal: class { rows=24; cols=80; loadAddon(){} open(){} writeln(){} write(){} onResize(){return {dispose(){}}} onData(){return {dispose(){}}} dispose(){} } }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit(){} } }));
 
 beforeEach(() => localStorage.clear());
+afterEach(() => cleanup());
 
 describe("floating console dock", () => {
   const props = (minimized = false) => ({ targets: [{ id: "n1", projectId: "p", nodeId: "n1", nodeName: "Router1", nodeType: "vpcs" as const }], activeNodeId: "n1", minimized, onSelect: vi.fn(), onMinimize: vi.fn(), onRestore: vi.fn(), onHide: vi.fn(), onClose: vi.fn() });
-  it("restores a requested device console and invokes selection", () => {
-    const p = props(true);
+  it("selects a console tab and restores a collapsed dock", () => {
+    const p = props();
     render(<ConsoleDock {...p} />);
     fireEvent.click(screen.getByRole("tab", { name: "Router1" }));
     expect(p.onSelect).toHaveBeenCalledWith("n1");
-    expect(p.onRestore).toHaveBeenCalledOnce();
+    cleanup();
+    const collapsed = props(true);
+    render(<ConsoleDock {...collapsed} />);
+    fireEvent.click(screen.getByRole("button", { name: "Restore console dock" }));
+    expect(collapsed.onRestore).toHaveBeenCalledOnce();
   });
   it("minimizes and restores the floating panel", () => {
     const p = props();

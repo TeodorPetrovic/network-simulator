@@ -60,7 +60,7 @@ describe("projects", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Open console" }));
   
       expect(await screen.findByRole("region", { name: "Console for R1" }, { timeout: 10_000 })).toBeInTheDocument();
-      expect(screen.getByText("Dynamips IOS console")).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "R1" })).toBeInTheDocument();
     });
 
     it("opens the configured Docker auxiliary console through its WebSocket route", async () => {
@@ -74,7 +74,7 @@ describe("projects", () => {
       fireEvent.click(await screen.findByRole("menuitem", { name: "Open auxiliary console" }));
   
       expect(await screen.findByRole("region", { name: "Auxiliary console for Aux host" }, { timeout: 10_000 })).toBeInTheDocument();
-      expect(screen.getByText("Docker auxiliary console")).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: /Aux host/ })).toBeInTheDocument();
     });
 
     it("redirects project links saved with the previous hash URL format", async () => {

@@ -3,9 +3,8 @@ import { clampFloat, popOutWindow, useFloatingFront } from "./floating";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as Xterm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { ChevronDown, ChevronUp, Terminal, X, PanelTopClose, ExternalLink } from "lucide-react";
+import { ChevronDown, ChevronUp, Terminal, X, ExternalLink } from "lucide-react";
 import { dockerAuxConsoleUrl, dockerConsoleUrl, dynamipsConsoleUrl, qemuConsoleUrl, vpcsConsoleUrl } from "./api";
-import type { Node } from "./api";
 import { Button } from "@/components/ui/button";
 
 export type ConsoleTarget = {
@@ -36,7 +35,6 @@ export function ConsoleDock({
   onSelect,
   onMinimize,
   onRestore,
-  onHide,
   onClose,
 }: {
   targets: ConsoleTarget[];
@@ -66,21 +64,23 @@ export function ConsoleDock({
     const stop = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); window.removeEventListener("pointercancel", stop); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); window.addEventListener("pointercancel", stop);
   };
-  return <section onPointerDownCapture={front} style={{left:position.x,top:position.y,width:minimized?150:position.width,height:minimized?42:position.height,zIndex:z}} className={`fixed z-40 flex flex-col overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-xl ${minimized ? "" : ""}`} aria-label="Device consoles">
-    <header className="flex h-[38px] min-h-[38px] items-stretch justify-between border-b border-border bg-card select-none touch-none cursor-grab active:cursor-grabbing" onPointerDown={(event) => { if ((event.target as HTMLElement).closest("button")) return; beginDrag(event); }}>
-      <div className={`flex min-w-0 overflow-x-auto ${minimized ? "hidden" : ""}`} role="tablist" aria-label="Open consoles">
-        {targets.map((target) => <div className={`flex min-w-[125px] items-center gap-1 border-r border-border pl-2.5 ${activeNodeId === target.id ? "border-t-2 border-t-primary bg-card" : ""}`} key={target.id}>
-          <Button variant="ghost" className={`flex min-w-0 flex-1 justify-start gap-2 overflow-hidden px-0 text-[11px] ${activeNodeId === target.id ? "text-foreground" : "text-muted-foreground"}`} role="tab" aria-selected={activeNodeId === target.id} onClick={() => { onSelect(target.id); onRestore(); }}><span className="size-1.5 shrink-0 rounded-full bg-success" />{target.nodeName}{target.auxiliary ? " · Aux" : ""}</Button>
-          <Button variant="ghost" size="icon-xs" aria-label={`Close ${target.nodeName}${target.auxiliary ? " auxiliary" : ""} console`} onClick={() => onClose(target.id)}><X /></Button>
-        </div>)}
-      </div>
-      <div className="flex items-center gap-1.5 px-2">
-        <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground"><Terminal size={14} />Console{minimized && targets.length ? ` · ${targets.length}` : ""}</span>
+  const PILL = 148;
+  const left = minimized ? position.x + position.width - PILL : position.x;
+  return <section onPointerDownCapture={front} style={{ left, top: minimized ? position.y + position.height - 36 : position.y, width: minimized ? PILL : position.width, height: minimized ? 36 : position.height, zIndex: z }} className={`fixed z-40 flex flex-col overflow-hidden border border-border bg-card text-card-foreground shadow-xl ${minimized ? "rounded-full" : "rounded-lg"}`} aria-label="Device consoles">
+    <header className={`flex select-none touch-none cursor-grab items-stretch justify-between active:cursor-grabbing ${minimized ? "h-9 pl-3 pr-1" : "h-9 border-b border-border"}`} onPointerDown={(event) => { if ((event.target as HTMLElement).closest("button")) return; beginDrag(event); }}>
+      {minimized
+        ? <div className="flex items-center gap-2 whitespace-nowrap text-xs text-muted-foreground"><Terminal size={14} />Console{targets.length ? ` · ${targets.length}` : ""}</div>
+        : <div className="flex min-w-0 overflow-x-auto" role="tablist" aria-label="Open consoles">
+          {targets.map((target) => <div className={`flex min-w-28 items-center gap-1 border-r border-border pl-2.5 ${activeNodeId === target.id ? "border-t-2 border-t-primary bg-card" : "border-t-2 border-t-transparent bg-muted/40"}`} key={target.id}>
+            <Button variant="ghost" className={`flex h-full min-w-0 flex-1 justify-start gap-2 overflow-hidden px-0 text-xs font-medium hover:bg-transparent ${activeNodeId === target.id ? "text-foreground" : "text-muted-foreground"}`} role="tab" aria-selected={activeNodeId === target.id} onClick={() => { onSelect(target.id); onRestore(); }}><span className="size-1.5 shrink-0 rounded-full bg-success" /><span className="truncate">{target.nodeName}{target.auxiliary ? " · Aux" : ""}</span></Button>
+            <Button variant="ghost" size="icon-xs" aria-label={`Close ${target.nodeName}${target.auxiliary ? " auxiliary" : ""} console`} onClick={() => onClose(target.id)}><X /></Button>
+          </div>)}
+        </div>}
+      <div className="flex items-center gap-0.5 px-1">
         {!minimized && activeNodeId && <Button variant="ghost" size="icon-sm" aria-label="Pop out console" title="Open this console in a new window" onClick={() => { const t = targets.find((item) => item.id === activeNodeId); if (!t) return; const q = new URLSearchParams({ projectId: t.projectId, nodeId: t.nodeId, nodeName: t.nodeName, nodeType: t.nodeType, ...(t.auxiliary ? { auxiliary: "1" } : {}) }); popOutWindow(`/console?${q}`, 820, 520, t.nodeName); onClose(t.id); }}><ExternalLink /></Button>}
         {minimized
-          ? <Button variant="ghost" size="icon-sm" onClick={onRestore} aria-label="Restore console dock"><ChevronUp /></Button>
-          : <Button variant="ghost" size="icon-sm" onClick={() => { try { localStorage.setItem("ns.console.float", JSON.stringify({...position,minimized:true,open:true})); } catch {} onMinimize(); }} aria-label="Minimize console dock"><ChevronDown /></Button>}
-        {!minimized && <Button variant="ghost" size="icon-sm" onClick={() => { try { localStorage.setItem("ns.console.float", JSON.stringify({...position,minimized:false,open:false})); } catch {} onHide(); }} aria-label="Close console dock"><PanelTopClose /></Button>}
+          ? <Button variant="ghost" size="icon-sm" className="rounded-full" onClick={onRestore} aria-label="Restore console dock"><ChevronUp /></Button>
+          : <Button variant="ghost" size="icon-sm" onClick={() => { try { localStorage.setItem("ns.console.float", JSON.stringify({ ...position, minimized: true, open: true })); } catch {} onMinimize(); }} aria-label="Minimize console dock"><ChevronDown /></Button>}
       </div>
     </header>
     <div className={`relative flex min-h-0 flex-1 ${minimized ? "hidden" : ""}`}>
@@ -105,7 +105,7 @@ export function ConsoleSession({ target, active }: { target: ConsoleTarget; acti
       cursorBlink: true,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
       fontSize: 12,
-      theme: { background: "#10151d", foreground: "#d6dee9", cursor: "#9db3ff" },
+      theme: terminalTheme(),
     });
     const fit = new FitAddon();
     fitRef.current = fit;
@@ -127,7 +127,6 @@ export function ConsoleSession({ target, active }: { target: ConsoleTarget; acti
     };
     const resize = terminal.onResize(sendResize);
     requestAnimationFrame(fitVisibleTerminal);
-    terminal.writeln(`${docker ? auxiliary ? "Docker auxiliary" : "Docker" : vpcs ? "VPCS" : dynamips ? "Cisco IOS" : "QEMU serial"} console · ${target.nodeName}`);
     const socketUrl = docker
       ? auxiliary ? dockerAuxConsoleUrl(target.projectId, target.nodeId) : dockerConsoleUrl(target.projectId, target.nodeId)
       : vpcs ? vpcsConsoleUrl(target.projectId, target.nodeId) : dynamips ? dynamipsConsoleUrl(target.projectId, target.nodeId) : qemuConsoleUrl(target.projectId, target.nodeId);
@@ -172,11 +171,12 @@ export function ConsoleSession({ target, active }: { target: ConsoleTarget; acti
   }, [active]);
 
   return <div className={`${active ? "flex" : "hidden"} h-full flex-col`} role="region" aria-label={`${target.auxiliary ? "Auxiliary console" : "Console"} for ${target.nodeName}`} aria-hidden={!active}>
-    <div className="flex h-[27px] min-h-[27px] items-center gap-2 px-3 text-[10px]"><span className="size-1.5 rounded-full bg-success" />{target.nodeName}<span className="text-muted-foreground">{consoleKind(target.nodeType, target.auxiliary)}</span></div>
-    <div ref={terminalElement} className="min-h-0 flex-1 px-2.5 py-1.5 [&_.xterm]:h-full [&_.xterm-viewport]:!overflow-y-auto" />
+    <div ref={terminalElement} className="min-h-0 w-full flex-1 px-2.5 py-1.5 [&_.xterm]:h-full [&_.xterm-viewport]:!overflow-y-auto" />
   </div>;
 }
 
-function consoleKind(nodeType: Node["node_type"] | ConsoleTarget["nodeType"], auxiliary = false) {
-  return nodeType === "docker" ? auxiliary ? "Docker auxiliary console" : "Docker attached console" : nodeType === "vpcs" ? "VPCS console" : nodeType === "dynamips" ? "Dynamips IOS console" : "QEMU serial console";
+function terminalTheme() {
+  const css = getComputedStyle(document.documentElement);
+  const color = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
+  return { background: color("--card", "#10151d"), foreground: color("--foreground", "#d6dee9"), cursor: color("--primary", "#9db3ff"), selectionBackground: color("--accent", "#2a3550") };
 }
