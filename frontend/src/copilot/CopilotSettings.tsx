@@ -29,13 +29,13 @@ export function CopilotSettings({ configs, onChanged, onDone }: { configs: LlmCo
     finally { setSaving(false); }
   }
   return <div className="copilot-settings">
-    <h3>Models</h3>
+    <h3 className="text-sm font-semibold">Models</h3>
     {configs.map((config) => <div key={config.config_id} className="copilot-config-row">
       <span><strong>{config.name}</strong>{config.is_default && <em> default</em>}</span>
       {!config.is_default && <Button size="xs" variant="ghost" onClick={() => void api.updateLlmConfig(config.config_id, { is_default: true }).then(onChanged)}>Make default</Button>}
       <Button size="icon-xs" variant="ghost" aria-label={`Delete ${config.name}`} onClick={() => void api.deleteLlmConfig(config.config_id).then(onChanged)}><Trash2 /></Button>
     </div>)}
-    <h3>Add a model</h3>
+    <h3 className="text-sm font-semibold">Add a model</h3>
     <label>Provider<select value={provider} onChange={(event) => choose(event.target.value as LlmProvider)}><option value="anthropic">Anthropic</option><option value="openai">OpenAI-compatible</option><option value="ollama">Ollama (local)</option></select></label>
     <label>Model<Input value={model} onChange={(event) => setModel(event.target.value)} /></label>
     {provider !== "anthropic" && <label>Base URL<Input value={baseUrl} placeholder="https://api.openai.com/v1" onChange={(event) => setBaseUrl(event.target.value)} /></label>}

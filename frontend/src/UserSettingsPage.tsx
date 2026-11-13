@@ -46,10 +46,10 @@ export function UserSettingsPage() {
   return <PagesShell active="My account"><PageLayout>
     <PageTitle eyebrow="ACCOUNT" title="User settings" description="Update your profile and password, then manage your personal API keys." actions={<Button variant="outline" onClick={() => void api.logout()}>Sign out</Button>} />
     {error && <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">{error}</div>}{notice && <div role="status" className="rounded-md border border-border bg-muted px-4 py-3 text-sm">{notice}</div>}
-    {user?.must_change_password && <div role="alert" className="rounded-md border border-border bg-muted px-4 py-3 text-sm">Set a new password before using this account.</div>}
+    {user?.must_change_password && <div role="alert" className="mb-4 rounded-md border border-border bg-muted px-4 py-3 text-sm">Set a new password before using this account.</div>}
     {newKey && <Card className="p-4"><p className="font-medium">Copy this API key now. It is only shown once.</p><code className="block break-all pt-2">{newKey}</code><Button size="sm" variant="outline" className="mt-3" onClick={() => setNewKey("")}>Dismiss</Button></Card>}
     <div className="grid min-w-0 gap-6 lg:grid-cols-2">
-      <Card className="min-w-0 space-y-4 p-5"><h2 className="text-lg font-semibold">Profile</h2><p className="text-sm text-muted-foreground">{user?.username ?? "Loading account…"}{user?.is_superadmin ? " · Super administrator" : ""}</p>
+      <Card className="min-w-0 gap-3 p-5"><h2 className="text-lg font-semibold">Profile</h2><p className="text-sm text-muted-foreground">{user?.username ?? "Loading account…"}{user?.is_superadmin ? " · Super administrator" : ""}</p>
         <form className="grid gap-4" onSubmit={(event) => void saveProfile(event)}>
           <label>Full name<Input value={user?.full_name ?? ""} onChange={(event) => setUser((current) => current ? { ...current, full_name: event.target.value } : current)} /></label>
           <label>Email<Input type="email" value={user?.email ?? ""} onChange={(event) => setUser((current) => current ? { ...current, email: event.target.value } : current)} /></label>
