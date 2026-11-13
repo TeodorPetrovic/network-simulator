@@ -117,7 +117,7 @@ describe("map", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Open console" }));
   
       expect(await screen.findByRole("region", { name: "Console for Router VM" }, { timeout: 10_000 })).toBeInTheDocument();
-      expect(screen.getByText("QEMU serial console")).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Router VM" })).toBeInTheDocument();
     });
 
     it("creates a Dynamips c7200 node with its IOS startup settings", async () => {
@@ -168,7 +168,7 @@ describe("map", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Open console" }));
   
       expect(await screen.findByRole("region", { name: "Console for Alpine host" }, { timeout: 10_000 })).toBeInTheDocument();
-      expect(screen.getByText("Docker attached console")).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Alpine host" })).toBeInTheDocument();
     });
 
     it("creates a VPCS node with its real startup script template field", async () => {
