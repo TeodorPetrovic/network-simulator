@@ -24,9 +24,9 @@ export type WorkspaceDocksProps = {
 };
 
 export function WorkspaceDocks({ workspace, topology, topologyOpen, serversOpen, onCloseTopology, onCloseServers, selectedLink, onConfigureNode, onOpenLinkProperties, onToggleLinkSuspend, renderNodeContextMenu }: WorkspaceDocksProps) {
-  return <aside className="fixed right-3 top-16 z-20 flex max-h-[calc(100vh-5rem)] w-80 flex-col gap-2" aria-label="Workspace docks">
+  return <aside className="col-start-3 row-start-1 flex min-h-0 min-w-0 flex-col gap-2 overflow-y-auto border-l bg-muted/30 p-2" aria-label="Workspace docks">
     {topologyOpen && <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border bg-card text-card-foreground shadow-lg" aria-label="Topology Summary">
-      <header className="flex items-center justify-between gap-2 border-b px-3 py-2"><b className="text-sm">Topology Summary</b><span className="text-xs text-muted-foreground">{topology.nodes.length} devices · {topology.links.length} links</span><Button variant="ghost" size="icon-xs" aria-label="Close Topology Summary" onClick={onCloseTopology}><X /></Button></header>
+      <header className="flex items-center justify-between gap-2 border-b px-3 py-2"><b className="shrink-0 whitespace-nowrap text-sm">Topology Summary</b><span className="ml-auto min-w-0 truncate text-xs text-muted-foreground">{topology.nodes.length} devices · {topology.links.length} links</span><Button className="shrink-0" variant="ghost" size="icon-xs" aria-label="Close Topology Summary" onClick={onCloseTopology}><X /></Button></header>
       <ScrollArea className="min-h-0 flex-1">
         {topology.nodes.length ? topology.nodes.map((node) => <div key={node.node_id} className={workspace.selectedNode?.node_id === node.node_id ? "bg-accent/40" : ""}>
           <ContextMenu><ContextMenuTrigger asChild><Button variant="ghost" className="h-auto w-full justify-start gap-2 rounded-none px-3 py-2 text-left hover:bg-accent/50" onClick={() => workspace.onSelectNode(node.node_id)}>

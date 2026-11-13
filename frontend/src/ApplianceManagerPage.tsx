@@ -328,7 +328,7 @@ export function ApplianceManagerPage({ onBack, onOpenPreferences, onOpenImageCat
       <TabsContent value="installed" className="mt-3 flex min-h-0 flex-1 flex-col">
         <div className="grid min-h-0 flex-1 grid-cols-[minmax(250px,0.35fr)_minmax(0,1fr)] gap-4 max-md:grid-cols-1">
           <Card className="flex min-h-0 flex-col overflow-hidden p-0">
-            <div className="flex min-w-0 items-start justify-between gap-3 p-4"><div className="min-w-0"><h2 className="text-base font-semibold">Appliances</h2><p className="text-sm text-muted-foreground">Only imported GNS3 definitions and custom appliances appear here.</p></div><Badge variant="outline">{appliances.length}</Badge></div>
+            <div className="flex min-w-0 items-start justify-between gap-3 p-4"><div className="min-w-0"><h2 className="text-base font-semibold">Appliances</h2><p className="text-sm text-muted-foreground">Imported and custom definitions.</p></div><Badge variant="outline">{appliances.length}</Badge></div>
             <div className="relative mx-3 mb-2"><Search aria-hidden="true" className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input className="pl-9" value={applianceFilter} onChange={(event) => setApplianceFilter(event.target.value)} aria-label="Filter installed appliances" placeholder="Filter appliances" /></div>
             <ScrollArea className="min-h-0 w-full flex-1"><div className="space-y-2 p-2">
               {filteredLibraryGroups.map(({ runtime, entries }) => <Collapsible key={runtime} open={openRuntimeGroups[runtime] ?? true} onOpenChange={(open) => setOpenRuntimeGroups((current) => ({ ...current, [runtime]: open }))}>

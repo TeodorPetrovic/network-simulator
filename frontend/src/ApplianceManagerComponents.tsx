@@ -140,7 +140,7 @@ export function RegistryDetails({ appliance, busy, onImport, onInstall }: { appl
 }
 
 export function EmptyState({ icon, title, text }: { icon: ReactNode; title: string; text: string }) {
-  return <div className="flex flex-col items-center gap-2 py-10 text-center text-muted-foreground">{icon}<b>{title}</b><span>{text}</span></div>;
+  return <div className="flex flex-col items-center gap-2 py-6 text-center text-sm text-muted-foreground [&_svg]:size-6">{icon}<b className="text-foreground">{title}</b><span className="max-w-[22ch] text-xs">{text}</span></div>;
 }
 
 export function applianceRuntimeLabel(runtime: string): string {
