@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useConfirm } from "@/components/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
@@ -24,6 +25,7 @@ export function SnapshotsPage({ projectId }: { projectId: string }) {
   const [error, setError] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
+  const [confirm, confirmDialog] = useConfirm();
 
   async function refresh() {
     setLoading(true); setError("");
@@ -42,24 +44,24 @@ export function SnapshotsPage({ projectId }: { projectId: string }) {
     finally { setBusy(false); }
   }
   async function restore(snapshot: ProjectSnapshot) {
-    if (!window.confirm(`Restore “${snapshot.name}”? The current project topology will be replaced.`)) return;
+    if (!(await confirm({ title: "Restore snapshot?", description: `Restore “${snapshot.name}”? The current project topology will be replaced.`, confirmLabel: "Restore", destructive: true }))) return;
     setBusy(true); setError("");
     try { await api.restoreSnapshot(projectId, snapshot.snapshot_id); await navigate({ to: "/projects/$projectId", params: { projectId } }); }
     catch (reason) { setError(`Snapshot restore is unavailable: ${errorMessage(reason)}`); }
     finally { setBusy(false); }
   }
   async function remove(snapshot: ProjectSnapshot) {
-    if (!window.confirm(`Delete snapshot “${snapshot.name}”?`)) return;
+    if (!(await confirm({ title: "Delete snapshot?", description: `Delete snapshot “${snapshot.name}”?`, confirmLabel: "Delete", destructive: true }))) return;
     setBusy(true); setError("");
     try { await api.deleteSnapshot(projectId, snapshot.snapshot_id); setSnapshots((current) => current.filter((item) => item.snapshot_id !== snapshot.snapshot_id)); }
     catch (reason) { setError(`Snapshot deletion is unavailable: ${errorMessage(reason)}`); }
     finally { setBusy(false); }
   }
 
-  return <PagesShell active="Projects"><PageLayout><PageTitle eyebrow="PROJECT ARCHIVE" title="Snapshots" description={`Saved topology states for ${projectName}.`} actions={<><Button variant="outline" onClick={() => void navigate({ to: "/projects/$projectId", params: { projectId } })}><ArrowLeft size={15} />Back to project</Button><Button onClick={() => setCreateOpen(true)}><Plus size={15} />Create snapshot</Button></>} />
+  return <PagesShell active="Projects"><PageLayout>{confirmDialog}<PageTitle eyebrow="PROJECT ARCHIVE" title="Snapshots" description={`Saved topology states for ${projectName}.`} actions={<><Button variant="outline" onClick={() => void navigate({ to: "/projects/$projectId", params: { projectId } })}><ArrowLeft size={15} />Back to project</Button><Button onClick={() => setCreateOpen(true)}><Plus size={15} />Create snapshot</Button></>} />
     {error && <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">{error}</div>}
-    <div className="my-5 flex flex-wrap items-center gap-3"><label className="flex min-w-56 max-w-lg flex-1 items-center gap-2"><Search size={15} /><Input aria-label="Filter snapshots" placeholder="Filter snapshots…" value={filter} onChange={(event) => setFilter(event.target.value)} /></label></div>
-    <Card className="overflow-hidden"><Table><TableHeader><TableRow><TableHead><button className="font-medium hover:text-foreground" onClick={() => setSortAsc((current) => !current)}>Name</button></TableHead><TableHead>Date</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader><TableBody>{loading ? <TableRow><TableCell colSpan={3} className="py-10 text-center text-muted-foreground">Loading snapshots…</TableCell></TableRow> : rows.length ? rows.map((snapshot) => <TableRow key={snapshot.snapshot_id}><TableCell><div className="font-medium">{snapshot.name}</div><div className="text-xs text-muted-foreground">{snapshot.snapshot_id}</div></TableCell><TableCell>{typeof snapshot.created_at === "number" && Number.isFinite(snapshot.created_at) ? new Date(snapshot.created_at * 1000).toLocaleString() : "—"}</TableCell><TableCell><div className="flex justify-end gap-1"><Button size="sm" variant="outline" disabled={busy} onClick={() => void restore(snapshot)}><RotateCcw size={14} />Restore</Button><Button size="icon-sm" variant="ghost" aria-label={`Delete snapshot ${snapshot.name}`} disabled={busy} onClick={() => void remove(snapshot)}><Trash2 size={15} /></Button></div></TableCell></TableRow>) : <TableRow><TableCell colSpan={3} className="py-10 text-center text-muted-foreground">{filter ? "No snapshots match this filter." : "No snapshots have been saved for this project."}</TableCell></TableRow>}</TableBody></Table></Card>
-    <Dialog open={createOpen} onOpenChange={setCreateOpen}><DialogContent><DialogHeader><DialogTitle>Create snapshot</DialogTitle><DialogDescription>Save the current topology state for later restoration.</DialogDescription></DialogHeader><form className="grid gap-3" onSubmit={(event) => void create(event)}><label className="grid gap-1.5"><Label htmlFor="snapshot-name">Name</Label><Input id="snapshot-name" value={name} onChange={(event) => setName(event.target.value)} required /></label><DialogFooter><Button type="button" variant="ghost" onClick={() => setCreateOpen(false)}>Cancel</Button><Button type="submit" disabled={busy || !name.trim()}>{busy ? "Creating…" : "Create snapshot"}</Button></DialogFooter></form></DialogContent></Dialog>
+    <div className="my-5 flex flex-wrap items-center gap-3"><Label className="flex min-w-56 max-w-lg flex-1 items-center gap-2"><Search size={15} /><Input aria-label="Filter snapshots" placeholder="Filter snapshots…" value={filter} onChange={(event) => setFilter(event.target.value)} /></Label></div>
+    <Card className="overflow-hidden"><Table><TableHeader><TableRow><TableHead><Button variant="ghost" className="h-auto px-0 font-medium hover:text-foreground" onClick={() => setSortAsc((current) => !current)}>Name</Button></TableHead><TableHead>Date</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader><TableBody>{loading ? <TableRow><TableCell colSpan={3} className="py-10 text-center text-muted-foreground">Loading snapshots…</TableCell></TableRow> : rows.length ? rows.map((snapshot) => <TableRow key={snapshot.snapshot_id}><TableCell><div className="font-medium">{snapshot.name}</div><div className="text-xs text-muted-foreground">{snapshot.snapshot_id}</div></TableCell><TableCell>{typeof snapshot.created_at === "number" && Number.isFinite(snapshot.created_at) ? new Date(snapshot.created_at * 1000).toLocaleString() : "—"}</TableCell><TableCell><div className="flex justify-end gap-1"><Button size="sm" variant="outline" disabled={busy} onClick={() => void restore(snapshot)}><RotateCcw size={14} />Restore</Button><Button size="icon-sm" variant="ghost" aria-label={`Delete snapshot ${snapshot.name}`} disabled={busy} onClick={() => void remove(snapshot)}><Trash2 size={15} /></Button></div></TableCell></TableRow>) : <TableRow><TableCell colSpan={3} className="py-10 text-center text-muted-foreground">{filter ? "No snapshots match this filter." : "No snapshots have been saved for this project."}</TableCell></TableRow>}</TableBody></Table></Card>
+    <Dialog open={createOpen} onOpenChange={setCreateOpen}><DialogContent><DialogHeader><DialogTitle>Create snapshot</DialogTitle><DialogDescription>Save the current topology state for later restoration.</DialogDescription></DialogHeader><form className="grid gap-3" onSubmit={(event) => void create(event)}><Label className="grid gap-1.5"><Label htmlFor="snapshot-name">Name</Label><Input id="snapshot-name" value={name} onChange={(event) => setName(event.target.value)} required /></Label><DialogFooter><Button type="button" variant="ghost" onClick={() => setCreateOpen(false)}>Cancel</Button><Button type="submit" disabled={busy || !name.trim()}>{busy ? "Creating…" : "Create snapshot"}</Button></DialogFooter></form></DialogContent></Dialog>
   </PageLayout></PagesShell>;
 }

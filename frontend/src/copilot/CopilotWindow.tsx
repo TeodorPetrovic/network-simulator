@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bot, ChevronDown, ChevronUp, Plus, Send, Settings, Square, Trash2, Wrench, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api } from "../api";
 import type { ChatMessage, ChatSession, ContentBlock, LlmConfig } from "../api";
 import { clampFloat, useFloatingFront } from "../floating";
@@ -114,10 +118,7 @@ export function CopilotWindow({ projectId, onClose, onTopologyMayHaveChanged }: 
       {settingsOpen && <CopilotSettings configs={configs ?? []} onChanged={() => void loadConfigs()} onDone={() => setSettingsOpen(false)} />}
       {!settingsOpen && <>
         <div className="copilot-bar">
-          <select aria-label="Chat history" value={sessionId ?? ""} onChange={(event) => (event.target.value ? void openSession(event.target.value) : newChat())}>
-            <option value="">New chat</option>
-            {sessions.map((session) => <option key={session.session_id} value={session.session_id}>{session.pinned ? "★ " : ""}{session.title}</option>)}
-          </select>
+          <Select value={sessionId ?? "new"} onValueChange={(value) => (value !== "new" ? void openSession(value) : newChat())}><SelectTrigger aria-label="Chat history"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="new">New chat</SelectItem>{sessions.map((session) => <SelectItem key={session.session_id} value={session.session_id}>{session.pinned ? "★ " : ""}{session.title}</SelectItem>)}</SelectContent></Select>
           {sessionId && <Button size="icon-xs" variant="ghost" aria-label="Delete chat" title="Delete this chat" onClick={() => { const id = sessionId; newChat(); void api.deleteChatSession(projectId, id).then(loadSessions); }}><Trash2 /></Button>}
         </div>
         <div className="copilot-messages" role="log" aria-live="polite">
@@ -131,12 +132,12 @@ export function CopilotWindow({ projectId, onClose, onTopologyMayHaveChanged }: 
           <div ref={endRef} />
         </div>
         <form className="copilot-input" onSubmit={(event) => { event.preventDefault(); void send(); }}>
-          <textarea aria-label="Message the copilot" rows={2} value={input} placeholder="Message the copilot…" onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
+          <Textarea aria-label="Message the copilot" rows={2} value={input} placeholder="Message the copilot…" onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
           {busy ? <Button type="button" size="icon" variant="outline" aria-label="Stop" onClick={() => abort.current?.abort()}><Square /></Button> : <Button type="submit" size="icon" aria-label="Send" disabled={!input.trim()}><Send /></Button>}
         </form>
         <div className="copilot-foot">
-          <label><input type="checkbox" checked={readOnly} onChange={(event) => setReadOnly(event.target.checked)} /> Read-only</label>
-          {(configs?.length ?? 0) > 1 && <select aria-label="Model" value={configId} onChange={(event) => setConfigId(event.target.value)}>{configs!.map((c) => <option key={c.config_id} value={c.config_id}>{c.name}</option>)}</select>}
+          <Label className="flex items-center gap-2"><Checkbox checked={readOnly} onCheckedChange={(checked) => setReadOnly(checked === true)} /> Read-only</Label>
+          {(configs?.length ?? 0) > 1 && <Select value={configId} onValueChange={setConfigId}><SelectTrigger aria-label="Model"><SelectValue /></SelectTrigger><SelectContent>{configs!.map((c) => <SelectItem key={c.config_id} value={c.config_id}>{c.name}</SelectItem>)}</SelectContent></Select>}
           {(configs?.length ?? 0) === 1 && <span className="copilot-model">{configs![0].model}</span>}
         </div>
       </>}

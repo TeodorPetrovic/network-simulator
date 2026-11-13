@@ -5,6 +5,7 @@ import { PageLayout, PagesShell, PageTitle } from "./PagesShell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 export function UserSettingsPage() {
   const [user, setUser] = useState<AccessUser | null>(null);
@@ -51,9 +52,9 @@ export function UserSettingsPage() {
     <div className="grid min-w-0 gap-6 lg:grid-cols-2">
       <Card className="min-w-0 gap-3 p-5"><h2 className="text-lg font-semibold">Profile</h2><p className="text-sm text-muted-foreground">{user?.username ?? "Loading account…"}{user?.is_superadmin ? " · Super administrator" : ""}</p>
         <form className="grid gap-4" onSubmit={(event) => void saveProfile(event)}>
-          <label>Full name<Input value={user?.full_name ?? ""} onChange={(event) => setUser((current) => current ? { ...current, full_name: event.target.value } : current)} /></label>
-          <label>Email<Input type="email" value={user?.email ?? ""} onChange={(event) => setUser((current) => current ? { ...current, email: event.target.value } : current)} /></label>
-          <label>{user?.must_change_password ? "New password (required)" : "New password"}<Input type="password" autoComplete="new-password" minLength={8} required={Boolean(user?.must_change_password)} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={user?.must_change_password ? "Choose a new password" : "Leave blank to keep current password"} /></label>
+          <Label className="grid gap-2">Full name<Input value={user?.full_name ?? ""} onChange={(event) => setUser((current) => current ? { ...current, full_name: event.target.value } : current)} /></Label>
+          <Label className="grid gap-2">Email<Input type="email" value={user?.email ?? ""} onChange={(event) => setUser((current) => current ? { ...current, email: event.target.value } : current)} /></Label>
+          <Label className="grid gap-2">{user?.must_change_password ? "New password (required)" : "New password"}<Input type="password" autoComplete="new-password" minLength={8} required={Boolean(user?.must_change_password)} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={user?.must_change_password ? "Choose a new password" : "Leave blank to keep current password"} /></Label>
           <Button type="submit">{user?.must_change_password ? "Set new password" : "Save changes"}</Button>
         </form>
       </Card>

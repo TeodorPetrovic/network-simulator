@@ -3,6 +3,7 @@ import { dissect } from "./dissect";
 import { readPcap } from "./pcap";
 import { compileDisplayFilter, DisplayFilterError, type PacketRecord } from "./filter";
 import { CaptureFilterBar, CaptureStatusBar, CaptureToolbar, FollowStreamDialog, PacketDetails, PacketList, StatisticsPanel } from "./CaptureComponents";
+import { Button } from "@/components/ui/button";
 import { api, getAuthToken, serverBase } from "../api";
 
 export type CaptureViewerProps = {
@@ -210,8 +211,8 @@ export function CaptureViewer({ streamUrl, downloadUrl, title = "Capture Viewer"
       }} />
     <CaptureFilterBar value={filter} error={filtered.error} onChange={setFilter} inputRef={filterInput} />
     <div className="flex items-center gap-2 border-b border-border px-[9px] py-1.5">
-      <button className="px-2.5 py-1 aria-selected:border-b-2 aria-selected:border-primary" onClick={() => setTab("packets")} aria-selected={tab === "packets"}>Packets</button>
-      <button className="px-2.5 py-1 aria-selected:border-b-2 aria-selected:border-primary" onClick={() => setTab("statistics")} aria-selected={tab === "statistics"}>Statistics</button>
+      <Button variant="ghost" className="px-2.5 py-1 aria-selected:border-b-2 aria-selected:border-primary" onClick={() => setTab("packets")} aria-selected={tab === "packets"}>Packets</Button>
+      <Button variant="ghost" className="px-2.5 py-1 aria-selected:border-b-2 aria-selected:border-primary" onClick={() => setTab("statistics")} aria-selected={tab === "statistics"}>Statistics</Button>
     </div>
     {tab === "packets" ? <>
       <div className="flex min-h-[120px] flex-col" style={{ height: `${paneHeight}%` }}>

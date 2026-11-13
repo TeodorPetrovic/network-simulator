@@ -24,3 +24,8 @@ Object.defineProperty(Element.prototype, "scrollIntoView", {
   configurable: true,
   value: () => undefined,
 });
+
+// Radix controls (Checkbox, Switch, RadioGroup) measure themselves with ResizeObserver, which jsdom lacks.
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+}

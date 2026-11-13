@@ -1,3 +1,4 @@
+import { useConfirm } from "@/components/confirm-dialog";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Activity } from "lucide-react";
 import { api, dockerHttpConsoleUrl, serverHostname } from "./api";
@@ -34,6 +35,7 @@ type AppProps = {
 }
 
 function App({ projectId, navigateToProject, showApplianceManager = false, navigateToApplianceManager, onOpenPreferences, onBackFromApplianceManager }: AppProps) {
+  const [confirm, confirmDialog] = useConfirm();
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
   const [resources, setResources] = useState<ResourceMonitor | null>(null);
   const [resourceError, setResourceError] = useState("");
@@ -266,7 +268,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
     const selected = selection.kind === "node"
       ? topology?.nodes.find((node) => node.node_id === selection.id)?.name ?? "device"
       : "selected link";
-    if (!window.confirm(`Delete ${selected}?`)) return;
+    if (!(await confirm({ title: "Delete", description: `Delete ${selected}?`, confirmLabel: "Delete", destructive: true }))) return;
     try {
       if (selection.kind === "node") await api.deleteNode(projectId, selection.id);
       else await api.deleteLink(projectId, selection.id);
@@ -315,6 +317,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
 
   return (
     <TooltipProvider>
+      {confirmDialog}
       <div className="flex h-dvh min-h-0 w-full flex-col overflow-hidden bg-background">
         {!projectId && !showApplianceManager && <AppNavigationHeader connection={connection} onNavigateHome={() => navigateToProject(null)} />}
 

@@ -16,6 +16,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useConfirm } from "@/components/confirm-dialog";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 
 type RuntimeKey = "docker" | "qemu" | "vpcs" | "dynamips" | "cloud" | "nat" | "ethernet_hub" | "ethernet_switch" | "iou" | "virtualbox" | "vmware";
 export type TemplateRecord = RuntimeTemplate & { template_type: RuntimeKey; [key: string]: unknown };
@@ -91,11 +94,11 @@ const initialValues = (template?: Partial<TemplateRecord>, runtime?: RuntimeKey)
 function SettingField({ spec, value, onChange, showPending = true }: { spec: FieldSpec; value: string; onChange: (value: string) => void; showPending?: boolean }) {
   const disabled = showPending && !spec.active;
   const id = `pref-${spec.key}`;
-  return <label htmlFor={id} className="grid gap-1.5">
-    <span className="flex items-center justify-between gap-2 text-sm font-medium"><span>{spec.label}</span>{disabled && <Badge variant="outline">Pending backend</Badge>}</span>
-    {spec.kind === "boolean" ? <input id={id} type="checkbox" checked={value === "true"} disabled={disabled} onChange={(event) => onChange(String(event.target.checked))} /> : spec.kind === "textarea" ? <Textarea id={id} value={value} disabled={disabled} rows={3} onChange={(event) => onChange(event.target.value)} /> : spec.kind === "select" ? <Select value={value || spec.options?.[0] || ""} onValueChange={onChange} disabled={disabled}><SelectTrigger id={id} aria-label={spec.label}><SelectValue placeholder="Choose a value" /></SelectTrigger><SelectContent>{(spec.options ?? []).map((option) => <SelectItem key={option} value={option}>{option}</SelectItem>)}</SelectContent></Select> : <Input id={id} type={spec.kind === "number" ? "number" : "text"} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />}
+  return <div className="grid gap-1.5">
+    <Label htmlFor={id} className="flex items-center justify-between gap-2 text-sm font-medium"><span>{spec.label}</span>{disabled && <Badge variant="outline">Pending backend</Badge>}</Label>
+    {spec.kind === "boolean" ? <Checkbox id={id} checked={value === "true"} disabled={disabled} onCheckedChange={(checked) => onChange(String(checked === true))} /> : spec.kind === "textarea" ? <Textarea id={id} value={value} disabled={disabled} rows={3} onChange={(event) => onChange(event.target.value)} /> : spec.kind === "select" ? <Select value={value || spec.options?.[0] || ""} onValueChange={onChange} disabled={disabled}><SelectTrigger id={id} aria-label={spec.label}><SelectValue placeholder="Choose a value" /></SelectTrigger><SelectContent>{(spec.options ?? []).map((option) => <SelectItem key={option} value={option}>{option}</SelectItem>)}</SelectContent></Select> : <Input id={id} type={spec.kind === "number" ? "number" : "text"} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />}
     {spec.help && <span className="text-xs text-muted-foreground">{spec.help}</span>}
-  </label>;
+  </div>;
 }
 
 export function TemplateEditor({ template, runtime, open, onOpenChange, onSave, creating = false }: { template?: TemplateRecord; runtime: RuntimeKey; open: boolean; onOpenChange: (open: boolean) => void; onSave: (patch: Record<string, unknown>) => Promise<void>; creating?: boolean }) {
@@ -137,6 +140,7 @@ export function TemplateEditor({ template, runtime, open, onOpenChange, onSave, 
 }
 
 export function PreferencesPage({ fromProject }: { fromProject?: string } = {}) {
+  const [confirm, confirmDialog] = useConfirm();
   const navigate = useNavigate();
   const [runtime, setRuntime] = useState<RuntimeKey>("docker");
   const [templates, setTemplates] = useState<TemplateRecord[]>([]);
@@ -166,7 +170,7 @@ export function PreferencesPage({ fromProject }: { fromProject?: string } = {}) 
     catch (reason) { setError(`Template duplication unavailable: ${reason instanceof Error ? reason.message : "Request failed"}`); }
   }
   async function remove(template: TemplateRecord) {
-    if (!window.confirm(`Delete template “${template.name}”?`)) return;
+    if (!(await confirm({ title: `Delete template “${template.name}”?`, description: "This action cannot be undone.", confirmLabel: "Delete", destructive: true }))) return;
     setError("");
     try { await api.deleteTemplate(template.template_id); setTemplates((current) => current.filter((item) => item.template_id !== template.template_id)); }
     catch (reason) { setError(`Template deletion unavailable: ${reason instanceof Error ? reason.message : "Request failed"}`); }
@@ -182,6 +186,7 @@ export function PreferencesPage({ fromProject }: { fromProject?: string } = {}) 
         {runtime.startsWith("ethernet_") || runtime === "cloud" || runtime === "nat" ? <Card className="mt-4 p-4"><div className="flex items-start justify-between gap-4"><div><h3 className="font-medium">Node editor forms</h3><p className="mt-1 text-sm text-muted-foreground">Edit an existing project node with the matching GNS3 configurator fields.</p></div><Button variant="outline" size="sm" onClick={() => void navigate({ to: "/node-editors/$nodeType" as never, params: { nodeType: runtime } as never })}>Open node editor <ExternalLink size={14} /></Button></div><p className="mt-3 text-xs text-muted-foreground">Built-in runtime support is still being added. Node settings are sent to the controller and any unavailable route is reported.</p></Card> : null}
       </section>
     </SettingsLayout>
+    {confirmDialog}
     <TemplateEditor template={editor ?? undefined} runtime={runtime} open={Boolean(editor)} onOpenChange={(open) => !open && setEditor(null)} onSave={(patch) => editor ? saveTemplate(editor.template_id, patch) : Promise.resolve()} />
     <TemplateEditor runtime={runtime} open={createOpen} onOpenChange={setCreateOpen} onSave={createTemplate} creating />
   </PageLayout></PagesShell>;

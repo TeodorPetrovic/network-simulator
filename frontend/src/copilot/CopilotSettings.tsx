@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
 import { api } from "../api";
 import type { LlmConfig, LlmProvider } from "../api";
 
@@ -36,10 +38,10 @@ export function CopilotSettings({ configs, onChanged, onDone }: { configs: LlmCo
       <Button size="icon-xs" variant="ghost" aria-label={`Delete ${config.name}`} onClick={() => void api.deleteLlmConfig(config.config_id).then(onChanged)}><Trash2 /></Button>
     </div>)}
     <h3 className="text-sm font-semibold">Add a model</h3>
-    <label>Provider<select value={provider} onChange={(event) => choose(event.target.value as LlmProvider)}><option value="anthropic">Anthropic</option><option value="openai">OpenAI-compatible</option><option value="ollama">Ollama (local)</option></select></label>
-    <label>Model<Input value={model} onChange={(event) => setModel(event.target.value)} /></label>
-    {provider !== "anthropic" && <label>Base URL<Input value={baseUrl} placeholder="https://api.openai.com/v1" onChange={(event) => setBaseUrl(event.target.value)} /></label>}
-    <label>API key<Input type="password" autoComplete="off" value={apiKey} placeholder={PRESETS[provider].hint} onChange={(event) => setApiKey(event.target.value)} /></label>
+    <Label className="grid gap-2">Provider<NativeSelect value={provider} onChange={(event) => choose(event.target.value as LlmProvider)}><option value="anthropic">Anthropic</option><option value="openai">OpenAI-compatible</option><option value="ollama">Ollama (local)</option></NativeSelect></Label>
+    <Label className="grid gap-2">Model<Input value={model} onChange={(event) => setModel(event.target.value)} /></Label>
+    {provider !== "anthropic" && <Label className="grid gap-2">Base URL<Input value={baseUrl} placeholder="https://api.openai.com/v1" onChange={(event) => setBaseUrl(event.target.value)} /></Label>}
+    <Label className="grid gap-2">API key<Input type="password" autoComplete="off" value={apiKey} placeholder={PRESETS[provider].hint} onChange={(event) => setApiKey(event.target.value)} /></Label>
     <p className="copilot-hint">Keys are stored on the controller and are never sent back to the browser.</p>
     {error && <div className="copilot-error" role="alert">{error}</div>}
     <div className="copilot-settings-actions"><Button disabled={saving || !model.trim()} onClick={() => void add()}>Save model</Button>{configs.length > 0 && <Button variant="ghost" onClick={onDone}>Back</Button>}</div>

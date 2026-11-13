@@ -1,7 +1,9 @@
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
 import { getDesktopPrefs, installTool, listenToolProgress, listTools, saveDesktopPrefs } from "../api/desktop";
 import type { DesktopPrefs, ToolId, ToolStatus } from "../api/desktop";
 import { isDesktop } from "../api/server";
@@ -21,11 +23,11 @@ function describe(progress: Progress | undefined) {
 function Choice<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: Array<{ value: T; text: string; disabled?: boolean }>; onChange: (value: T) => void }) {
   return <fieldset className="mt-4">
     <legend className="text-sm font-medium">{label}</legend>
-    <div className="mt-2 flex flex-wrap gap-2">
-      {options.map((option) => <label key={option.value} className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm ${value === option.value ? "border-primary bg-accent" : ""} ${option.disabled ? "opacity-50" : ""}`}>
-        <input type="radio" name={label} checked={value === option.value} disabled={option.disabled} onChange={() => onChange(option.value)} />{option.text}
-      </label>)}
-    </div>
+    <RadioGroup className="mt-2 flex flex-wrap gap-2" value={value} onValueChange={(next) => onChange(next as T)} aria-label={label}>
+      {options.map((option) => <Label key={option.value} className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm ${value === option.value ? "border-primary bg-accent" : ""} ${option.disabled ? "opacity-50" : ""}`}>
+        <RadioGroupItem value={option.value} disabled={option.disabled} />{option.text}
+      </Label>)}
+    </RadioGroup>
   </fieldset>;
 }
 

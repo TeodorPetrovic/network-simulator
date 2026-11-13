@@ -77,13 +77,12 @@ describe("PAGES parity routes", () => {
   });
 
   it("removes a deleted project from the project list as soon as deletion succeeds", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     renderPage(ProjectsPage);
     expect(await screen.findByText("Core lab")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Delete Core lab" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
     await waitFor(() => expect(api.deleteProject).toHaveBeenCalledWith("project-1"));
     expect(screen.queryByText("Core lab")).not.toBeInTheDocument();
-    confirm.mockRestore();
   });
 
   it("keeps the last project list visible when a manual refresh fails", async () => {

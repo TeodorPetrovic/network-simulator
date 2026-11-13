@@ -1,3 +1,4 @@
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { api, projectNotificationsUrl } from "../api";
@@ -12,6 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Unavailable, errorMessage } from "./dialogShared";
 import { Textarea } from "@/components/ui/textarea";
+import { useConfirm } from "@/components/confirm-dialog";
 
 export function InterfacePickerDialog({ node, links, open, onOpenChange, onPick }: {
   node: Node | null;
@@ -50,6 +52,7 @@ export function SnapshotsDialog({ projectId, open, onOpenChange, onRestored }: {
   const [busyId, setBusyId] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [confirm, confirmDialog] = useConfirm();
 
   async function load() {
     setLoading(true); setError("");
@@ -68,7 +71,7 @@ export function SnapshotsDialog({ projectId, open, onOpenChange, onRestored }: {
     finally { setBusyId(""); }
   }
   async function restore(snapshot: ProjectSnapshot) {
-    if (!window.confirm(`Restore “${snapshot.name}”? This replaces the current project topology.`)) return;
+    if (!(await confirm({ title: "Restore snapshot?", description: `Restore “${snapshot.name}”? This replaces the current project topology.`, confirmLabel: "Restore", destructive: true }))) return;
     setBusyId(snapshot.snapshot_id); setError(""); setNotice("");
     try { await api.restoreSnapshot(projectId, snapshot.snapshot_id); onRestored(await api.topology(projectId)); setNotice(`Restored “${snapshot.name}”.`); }
     catch (reason) { setError(errorMessage(reason)); }
@@ -86,7 +89,7 @@ export function SnapshotsDialog({ projectId, open, onOpenChange, onRestored }: {
     <form className="flex gap-2" onSubmit={(event) => void create(event)}><Input aria-label="Snapshot name" placeholder="Snapshot name" value={name} onChange={(event) => setName(event.target.value)} /><Button type="submit" disabled={!name.trim() || busyId !== ""}>{busyId === "new" ? "Saving…" : "Create snapshot"}</Button></form>
     {error && <Unavailable message={error} />}{notice && <p role="status" className="text-sm text-muted-foreground">{notice}</p>}
     <ScrollArea className="max-h-72">{loading ? <p className="py-6 text-center text-sm text-muted-foreground">Loading snapshots…</p> : snapshots.length ? <div className="space-y-2">{snapshots.map((snapshot) => <div key={snapshot.snapshot_id} className="flex items-center gap-2 rounded-md border p-3"><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{snapshot.name}</p><p className="text-xs text-muted-foreground">{snapshot.created_at ?? snapshot.snapshot_id}</p></div><Button size="sm" variant="outline" disabled={Boolean(busyId)} onClick={() => void restore(snapshot)}>Restore</Button><Button size="sm" variant="ghost" disabled={Boolean(busyId)} onClick={() => void remove(snapshot)}>Delete</Button></div>)}</div> : !error && <p className="py-6 text-center text-sm text-muted-foreground">No snapshots saved for this project.</p>}</ScrollArea>
-  </DialogContent></Dialog>;
+  </DialogContent>{confirmDialog}</Dialog>;
 }
 
 export function DrawingEditorDialog({ open, onOpenChange, onSave, tool, mode, initial }: {
@@ -117,11 +120,11 @@ export function DrawingEditorDialog({ open, onOpenChange, onSave, tool, mode, in
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent>
     <DialogHeader><DialogTitle>{mode === "edit" ? "Edit" : "Add"} {title[tool]} drawing</DialogTitle><DialogDescription>{mode === "edit" ? "Update the selected drawing." : "Set the drawing appearance, then click the map to place it."}</DialogDescription></DialogHeader>
     <div className="grid grid-cols-2 gap-3">
-      <label className="grid gap-1.5"><Label>Width</Label><Input type="number" min="1" value={width} onChange={(event) => setWidth(event.target.value)} /></label>
-      <label className="grid gap-1.5"><Label>Height</Label><Input type="number" min="1" value={height} onChange={(event) => setHeight(event.target.value)} /></label>
-      {tool !== "image" && <><label className="grid gap-1.5"><Label>Stroke</Label><Input type="color" value={stroke} onChange={(event) => setStroke(event.target.value)} /></label><label className="grid gap-1.5"><Label>Fill</Label><Input type="color" value={fill === "none" ? "#ffffff" : fill} onChange={(event) => setFill(event.target.value)} /></label><label className="grid gap-1.5"><Label>Stroke width</Label><Input type="number" min="1" max="16" value={strokeWidth} onChange={(event) => setStrokeWidth(event.target.value)} /></label></>}
-      {tool === "text" && <label className="col-span-2 grid gap-1.5"><Label>Text</Label><Textarea value={text} onChange={(event) => setText(event.target.value)} rows={3} /></label>}
-      {tool === "image" && <label className="col-span-2 grid gap-1.5"><Label>Image file</Label><Input type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => setImageDataUrl(typeof reader.result === "string" ? reader.result : ""); reader.onerror = () => setError("Could not read the selected image."); reader.readAsDataURL(file); }} /></label>}
+      <div className="grid gap-1.5"><Label htmlFor="map-width">Width</Label><Input id="map-width" type="number" min="1" value={width} onChange={(event) => setWidth(event.target.value)} /></div>
+      <div className="grid gap-1.5"><Label htmlFor="map-height">Height</Label><Input id="map-height" type="number" min="1" value={height} onChange={(event) => setHeight(event.target.value)} /></div>
+      {tool !== "image" && <><div className="grid gap-1.5"><Label htmlFor="map-stroke">Stroke</Label><Input id="map-stroke" type="color" value={stroke} onChange={(event) => setStroke(event.target.value)} /></div><div className="grid gap-1.5"><Label htmlFor="map-fill">Fill</Label><Input id="map-fill" type="color" value={fill === "none" ? "#ffffff" : fill} onChange={(event) => setFill(event.target.value)} /></div><div className="grid gap-1.5"><Label htmlFor="map-stroke-width">Stroke width</Label><Input id="map-stroke-width" type="number" min="1" max="16" value={strokeWidth} onChange={(event) => setStrokeWidth(event.target.value)} /></div></>}
+      {tool === "text" && <div className="col-span-2 grid gap-1.5"><Label htmlFor="map-text">Text</Label><Textarea id="map-text" value={text} onChange={(event) => setText(event.target.value)} rows={3} /></div>}
+      {tool === "image" && <div className="col-span-2 grid gap-1.5"><Label htmlFor="map-image-file">Image file</Label><Input id="map-image-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => setImageDataUrl(typeof reader.result === "string" ? reader.result : ""); reader.onerror = () => setError("Could not read the selected image."); reader.readAsDataURL(file); }} /></div>}
     </div>
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     <DialogFooter><Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button><Button disabled={tool === "image" && !imageDataUrl} onClick={() => { const values = { width: Number(width) || 1, height: Number(height) || 1, stroke, fill, strokeWidth: Number(strokeWidth) || 1, text, ...(imageDataUrl ? { imageDataUrl } : {}) }; onSave(tool, values); onOpenChange(false); }}>{mode === "edit" ? "Save drawing" : "Choose appearance"}</Button></DialogFooter>
@@ -172,7 +175,7 @@ export function SymbolPickerDialog({ projectId, node, open, onOpenChange, onSave
     <DialogHeader><DialogTitle>Change symbol for {node.name}</DialogTitle><DialogDescription>Choose a symbol from the controller library.</DialogDescription></DialogHeader>
     {loading && <p className="text-sm text-muted-foreground">Loading symbols…</p>}
     {symbols.length > 0 && <Select value={selected} onValueChange={setSelected}><SelectTrigger aria-label="Node symbol"><SelectValue placeholder="Choose a symbol" /></SelectTrigger><SelectContent>{symbols.map((symbol) => { const value = symbol.symbol_id ?? symbol.path ?? symbol.filename ?? symbol.name ?? "unknown"; return <SelectItem key={value} value={value}>{symbol.name ?? symbol.filename ?? value}</SelectItem>; })}</SelectContent></Select>}
-    <label className="grid gap-1.5 text-sm"><Label>Upload custom symbol</Label><Input type="file" accept="image/svg+xml,image/png,image/jpeg" aria-label="Upload custom symbol" disabled={uploading} onChange={(event) => { void upload(event.target.files?.[0]); event.currentTarget.value = ""; }} />{uploading && <span className="text-muted-foreground">Uploading symbol…</span>}</label>
+    <div className="grid gap-1.5 text-sm"><Label htmlFor="map-upload-custom-symbol">Upload custom symbol</Label><Input id="map-upload-custom-symbol" type="file" accept="image/svg+xml,image/png,image/jpeg" aria-label="Upload custom symbol" disabled={uploading} onChange={(event) => { void upload(event.target.files?.[0]); event.currentTarget.value = ""; }} />{uploading && <span className="text-muted-foreground">Uploading symbol…</span>}</div>
     {error && <Unavailable message={error} />}
     {!loading && !error && symbols.length === 0 && <p className="text-sm text-muted-foreground">The controller returned no symbols.</p>}
     <DialogFooter><Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button><Button disabled={!selected || loading || uploading} onClick={() => void save()}>Apply symbol</Button></DialogFooter>
@@ -251,11 +254,11 @@ export function ScreenshotDialog({ open, onOpenChange, onExport, pngAvailable }:
   useEffect(() => { if (open) { setName(`screenshot-${Date.now()}`); setFormat("svg"); } }, [open]);
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent>
     <DialogHeader><DialogTitle>Take a screenshot</DialogTitle><DialogDescription>Export the current map as a vector SVG or a PNG image.</DialogDescription></DialogHeader>
-    <label className="grid gap-1.5"><Label htmlFor="map-screenshot-name">Screenshot name</Label><Input id="map-screenshot-name" value={name} onChange={(event) => setName(event.target.value)} /></label>
-    <fieldset className="flex gap-4 text-sm"><legend className="mb-2 font-medium">File type</legend>
-      <label className="flex items-center gap-2"><input type="radio" name="map-screenshot-format" value="svg" checked={format === "svg"} onChange={() => setFormat("svg")} />SVG</label>
-      <label className="flex items-center gap-2"><input type="radio" name="map-screenshot-format" value="png" checked={format === "png"} disabled={!pngAvailable} onChange={() => setFormat("png")} />PNG{!pngAvailable && <span className="text-muted-foreground">(unavailable)</span>}</label>
-    </fieldset>
+    <div className="grid gap-1.5"><Label htmlFor="map-screenshot-name">Screenshot name</Label><Input id="map-screenshot-name" value={name} onChange={(event) => setName(event.target.value)} /></div>
+    <RadioGroup className="flex gap-4 text-sm" value={format} onValueChange={(value) => setFormat(value as typeof format)} aria-label="File type">
+      <div className="flex items-center gap-2"><RadioGroupItem id="map-screenshot-svg" value="svg" /><Label htmlFor="map-screenshot-svg">SVG</Label></div>
+      <div className="flex items-center gap-2"><RadioGroupItem id="map-screenshot-png" value="png" disabled={!pngAvailable} /><Label htmlFor="map-screenshot-png">PNG</Label>{!pngAvailable && <span className="text-muted-foreground">(unavailable)</span>}</div>
+    </RadioGroup>
     <DialogFooter><Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button><Button disabled={!name.trim() || (format === "png" && !pngAvailable)} onClick={() => { onExport({ name: name.trim(), format }); onOpenChange(false); }}>Take a screenshot</Button></DialogFooter>
   </DialogContent></Dialog>;
 }

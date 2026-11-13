@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { Download, FileUp, Pause, Play, RefreshCw, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { Field, Layer } from "./dissect";
 import type { PacketRecord } from "./filter";
 
@@ -142,7 +146,7 @@ export function PacketDetails({
   return <div className="grid min-h-0 flex-1 grid-cols-2 border-t border-border">
     <div className="min-h-0 overflow-auto p-1" role="tree" aria-label="Packet details">
       {layers.map((layer, index) => <div key={`${layer.name}-${index}`}>
-        <button className="flex w-full items-center gap-1 p-1 text-left text-inherit" aria-expanded={expanded.has(index)} onClick={() => {
+        <Button variant="ghost" className="h-auto w-full justify-start gap-1 p-1 text-left text-inherit" aria-expanded={expanded.has(index)} onClick={() => {
           setExpanded((current) => {
             const next = new Set(current);
             if (next.has(index)) next.delete(index);
@@ -151,7 +155,7 @@ export function PacketDetails({
           });
         }}>
           {expanded.has(index) ? <ChevronDown /> : <ChevronRight />}{layer.name} · {layer.summary}
-        </button>
+        </Button>
         {expanded.has(index) && layer.fields.map((field) => <button
           key={`${field.label}-${field.byteOffset}`}
           className="flex w-full items-center gap-1 border-0 bg-transparent py-1 pl-[22px] text-left text-muted-foreground hover:bg-muted"
@@ -205,7 +209,7 @@ export function HexPane({
         <code>{Array.from(chunk, (value, index) => {
           const selected = highlight && start + index >= highlight.byteOffset && start + index < highlight.byteOffset + highlight.length;
           const byteField = fields.find((field) => start + index >= field.byteOffset && start + index < field.byteOffset + field.length) ?? null;
-          return <button key={index} className={selected ? "bg-chart-4 text-foreground" : ""} aria-label={`Byte ${start + index}: ${value.toString(16).padStart(2, "0")}`} onMouseEnter={() => onHighlight(byteField)} onFocus={() => onHighlight(byteField)}>{value.toString(16).padStart(2, "0")} </button>;
+          return <Button key={index} variant="ghost" className={`h-auto p-0 font-mono ${selected ? "bg-chart-4 text-foreground" : ""}`} aria-label={`Byte ${start + index}: ${value.toString(16).padStart(2, "0")}`} onMouseEnter={() => onHighlight(byteField)} onFocus={() => onHighlight(byteField)}>{value.toString(16).padStart(2, "0")} </Button>;
         })}</code>
         <code>{ascii}</code>
       </div>;
@@ -225,8 +229,8 @@ export function CaptureFilterBar({
   inputRef?: RefObject<HTMLInputElement | null>;
 }) {
   return <div className="flex items-center gap-2 border-b border-border px-2 py-1.5">
-    <label htmlFor="capture-display-filter">Display filter</label>
-    <input className={`min-w-[100px] flex-1 rounded border border-input bg-background p-1 ${error ? "border-destructive" : ""}`} ref={inputRef} id="capture-display-filter" aria-label="Display filter" value={value} onChange={(event) => onChange(event.target.value)} placeholder="tcp.port == 80 && ip" />
+    <Label htmlFor="capture-display-filter">Display filter</Label>
+    <Input className={`min-w-[100px] flex-1 ${error ? "border-destructive" : ""}`} ref={inputRef} id="capture-display-filter" aria-label="Display filter" value={value} onChange={(event) => onChange(event.target.value)} placeholder="tcp.port == 80 && ip" />
     <span className={error ? "text-destructive" : "text-muted-foreground"} role={error ? "alert" : undefined}>{error || "Filter"}</span>
   </div>;
 }
@@ -294,20 +298,24 @@ export function FollowStreamDialog({
   const clientText = renderStream(client, format);
   const serverText = renderStream(server, format);
   const byteCount = client.length + server.length;
-  return <div className="fixed inset-0 z-[60] grid place-items-center bg-background/80" role="presentation" onClick={onClose}>
-    <section role="dialog" aria-modal="true" aria-label="Follow stream" className="flex h-[min(650px,80vh)] w-[min(900px,90vw)] flex-col rounded-lg border border-border bg-card shadow-xl" onClick={(event) => event.stopPropagation()}>
-      <header className="flex items-center gap-2.5 border-b border-border p-2.5"><strong>Follow stream</strong><span className="flex-1" />
-        <label>Format <select value={format} onChange={(event) => setFormat(event.target.value as typeof format)}><option value="ascii">ASCII</option><option value="hex">Hex dump</option><option value="raw">Raw</option></select></label>
-        <label>Direction <select value={direction} onChange={(event) => setDirection(event.target.value as typeof direction)}><option value="both">Both</option><option value="client">Client → server</option><option value="server">Server → client</option></select></label>
-        <button onClick={() => onClose()}>Close</button>
-      </header>
+  return <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+    <DialogContent aria-label="Follow stream" showCloseButton={false} className="flex h-[min(650px,80vh)] w-[min(900px,90vw)] max-w-none flex-col">
+      <DialogHeader className="flex-row items-center gap-2.5 space-y-0 border-b border-border pb-2.5"><DialogTitle>Follow stream</DialogTitle><span className="flex-1" />
+        <Label className="flex items-center gap-2">Format
+          <Select value={format} onValueChange={(value) => setFormat(value as typeof format)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="ascii">ASCII</SelectItem><SelectItem value="hex">Hex dump</SelectItem><SelectItem value="raw">Raw</SelectItem></SelectContent></Select>
+        </Label>
+        <Label className="flex items-center gap-2">Direction
+          <Select value={direction} onValueChange={(value) => setDirection(value as typeof direction)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="both">Both</SelectItem><SelectItem value="client">Client → server</SelectItem><SelectItem value="server">Server → client</SelectItem></SelectContent></Select>
+        </Label>
+        <Button onClick={() => onClose()}>Close</Button>
+      </DialogHeader>
       <div className="grid min-h-0 flex-1 grid-cols-2">
         {direction !== "server" && <section className="min-w-0 overflow-auto bg-success/10 p-2 text-success"><h4 className="font-bold">Client → server</h4><pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-3 [overflow-wrap:anywhere]">{clientText}</pre></section>}
         {direction !== "client" && <section className="min-w-0 overflow-auto bg-chart-1/10 p-2 text-chart-1"><h4 className="font-bold">Server → client</h4><pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-3 [overflow-wrap:anywhere]">{serverText}</pre></section>}
       </div>
       <footer className="flex items-center gap-2.5 border-t border-border p-2.5">{packets.length} packets · {byteCount} bytes</footer>
-    </section>
-  </div>;
+    </DialogContent>
+  </Dialog>;
 }
 
 type StreamChunk = { sequence: number; bytes: Uint8Array };

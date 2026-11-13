@@ -1,3 +1,5 @@
+import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/confirm-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Link, LinkEndpoint, Node, Project, ResourceMonitor, RuntimeInfo, RuntimeTemplate, TopologySnapshot } from "./api";
 import { api, getAuthToken, serverBase } from "./api";
@@ -86,6 +88,7 @@ export type SimulatorWorkspaceProps = {
 
 
 export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
+  const [confirm, confirmDialog] = useConfirm();
   const [captureViewer, setCaptureViewer] = useState<{ url?: string; downloadUrl?: string; title: string; link?: Link } | null>(null);
   const [wiresharkWindows, setWiresharkWindows] = useState<Array<{ linkId: string; wsPath: string; title: string; key: number }>>([]);
   const openedEvents = useMemo(() => new Set<string>(), [props.project.project_id]);
@@ -329,10 +332,10 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
     if (targets.length) setFeatureMessage(`${action[0]?.toUpperCase()}${action.slice(1)} requested for ${targets.length} device${targets.length === 1 ? "" : "s"}.`);
   }
 
-  function deleteSelectedNodes() {
+  async function deleteSelectedNodes() {
     const targets = topology.nodes.filter((node) => selectedNodeIds.includes(node.node_id));
     if (targets.length === 1 && props.selection?.kind === "node") { props.onDeleteSelection(); return; }
-    if (targets.length && !window.confirm(`Delete ${targets.length} selected device${targets.length === 1 ? "" : "s"}?`)) return;
+    if (targets.length && !(await confirm({ title: "Delete devices", description: `Delete ${targets.length} selected device${targets.length === 1 ? "" : "s"}?`, confirmLabel: "Delete", destructive: true }))) return;
     void Promise.allSettled(targets.map((node) => api.deleteNode(props.project.project_id, node.node_id))).then((results) => {
       const deletedIds = new Set(results.flatMap((result, index) => result.status === "fulfilled" ? [targets[index]!.node_id] : []));
       const failed = results.length - deletedIds.size;
@@ -429,6 +432,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background" aria-label={`Project ${props.project.name}`}>
+      {confirmDialog}
       <WorkspaceToolbar workspace={props} topology={topology} selectedNodeIds={selectedNodeIds} selectedLifecycleNodes={selectedLifecycleNodes} projectLocked={projectLocked} gridVisible={gridVisible} setGridVisible={setGridVisible} snapToGrid={snapToGrid} setSnapToGrid={setSnapToGrid} selectedDrawing={selectedDrawing} selectedLink={selectedLink} runBulkLifecycle={runBulkLifecycle} runAllLifecycle={runAllLifecycle} deleteSelectedNodes={deleteSelectedNodes} toggleProjectLock={toggleProjectLock} startDrawingTool={startDrawingTool} setDrawingEditTool={setDrawingEditTool} setDrawingEditValues={setDrawingEditValues} valuesFromDrawing={valuesFromDrawing} setDrawingEditOpen={setDrawingEditOpen} changeDrawingOrder={changeDrawingOrder} removeDrawing={removeDrawing} setSnapshotsOpen={setSnapshotsOpen} setLogOpen={setLogOpen} setScreenshotOpen={setScreenshotOpen} setLinkPropertiesOpen={setLinkPropertiesOpen} setHelpOpen={setHelpOpen} setInfoOpen={setInfoOpen} onToggleConsoleDock={props.onToggleConsoleDock ?? (() => props.onOpenConsoleDock?.())} consoleDockOpen={props.consoleOpen ?? false} copilotOpen={copilotOpen} onToggleCopilot={() => setCopilotOpen((open) => !open)} onSelectAll={() => { setSelectedNodeIds(topology.nodes.map((node) => node.node_id)); props.onSelectCanvas(); }} onSelectNone={() => { setSelectedNodeIds([]); setSelectedDrawingId(null); props.onSelectCanvas(); }} arrangeSelection={arrangeSelection} toggleSelectedNodeLocks={toggleSelectedNodeLocks} copySelectedNodes={copySelectedNodes} pasteCopiedNodes={() => void pasteCopiedNodes()} topologyDockOpen={topologyDockOpen} serversDockOpen={serversDockOpen} onToggleTopologyDock={() => setTopologyDockOpen(!topologyDockOpen)} onToggleServersDock={() => setServersDockOpen(!serversDockOpen)} zoom={view.zoom} onZoom={(delta) => setView((current) => ({ ...current, zoom: Math.max(0.1, Math.min(maxZoom, Number((current.zoom + delta).toFixed(1)))) }))} onFitTopology={fitTopology} onZoomToSelection={zoomToSelection} onResetZoom={() => setView({ zoom: 1, centerX: 0, centerY: 0 })} showInterfaceLabels={showInterfaceLabels} onToggleInterfaceLabels={() => setShowInterfaceLabels((current) => !current)} />
       <WorkspaceIconToolbar workspace={props} selectedLink={selectedLink} setLinkPropertiesOpen={setLinkPropertiesOpen} startDrawingTool={startDrawingTool} runAllLifecycle={runAllLifecycle} showInterfaceLabels={showInterfaceLabels} onToggleInterfaceLabels={() => setShowInterfaceLabels((current) => !current)} zoomIn={() => setView((current) => ({ ...current, zoom: Math.min(maxZoom, Number((current.zoom + 0.1).toFixed(1))) }))} zoomOut={() => setView((current) => ({ ...current, zoom: Math.max(0.1, Number((current.zoom - 0.1).toFixed(1))) }))} fitTopology={fitTopology} />
 
@@ -440,8 +444,8 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
             <ContextMenuTrigger asChild>
               <div data-workspace-canvas className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
                 {featureMessage && <div className="absolute bottom-2.5 left-2.5 z-4 max-w-[min(520px,calc(100%-20px))] rounded-md border bg-background/95 px-2.5 py-1.5 text-xs text-foreground shadow-sm" role="status">{featureMessage}</div>}
-                  {props.connecting && <div className="absolute bottom-12 left-2.5 z-4 max-w-[min(560px,calc(100%-20px))] rounded-md border bg-background/95 px-2.5 py-1.5 text-xs text-foreground shadow-sm" role="status">Link mode is on: left-click a device to pick a port. Press Esc or <button type="button" className="underline" onClick={props.onToggleConnect}>exit link mode</button> to get the normal device menu back.</div>}
-                <div className="absolute bottom-2.5 left-2.5 z-8 rounded-md border bg-background/90 px-2 py-1 text-[10px] text-muted-foreground opacity-60 transition-opacity hover:opacity-100 focus-within:opacity-100 [&_button]:text-foreground [&_button]:underline [&_button]:underline-offset-2">Ctrl + scroll to zoom · drag with middle mouse to pan · <button type="button" onClick={() => setView({ zoom: 1, centerX: 0, centerY: 0 })}>{Math.round(view.zoom * 100)}%</button></div>
+                  {props.connecting && <div className="absolute bottom-12 left-2.5 z-4 max-w-[min(560px,calc(100%-20px))] rounded-md border bg-background/95 px-2.5 py-1.5 text-xs text-foreground shadow-sm" role="status">Link mode is on: left-click a device to pick a port. Press Esc or <Button type="button" variant="link" size="xs" className="h-auto p-0 text-xs" onClick={props.onToggleConnect}>exit link mode</Button> to get the normal device menu back.</div>}
+                <div className="absolute bottom-2.5 left-2.5 z-8 rounded-md border bg-background/90 px-2 py-1 text-[10px] text-muted-foreground opacity-60 transition-opacity hover:opacity-100 focus-within:opacity-100 [&_button]:text-foreground [&_button]:underline [&_button]:underline-offset-2">Ctrl + scroll to zoom · drag with middle mouse to pan · <Button type="button" variant="link" size="xs" className="h-auto p-0 text-[10px]" onClick={() => setView({ zoom: 1, centerX: 0, centerY: 0 })}>{Math.round(view.zoom * 100)}%</Button></div>
 
                 <TopologyCanvas
                   nodes={canvasNodes}

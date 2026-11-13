@@ -10,19 +10,6 @@ import { renderWorkspace } from "./App.test-utils";
 import { ProjectNavigationHost } from "./App.test-utils";
 
 describe("projects", () => {
-    it("removes a deleted project from the list immediately after the controller confirms deletion", async () => {
-      vi.mocked(api.listProjects).mockResolvedValue([project]);
-      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-      renderWorkspace(null);
-
-      expect(await screen.findByText("Core lab")).toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name: "Delete Core lab" }));
-
-      await waitFor(() => expect(api.deleteProject).toHaveBeenCalledWith("p1"));
-      expect(screen.queryByText("Core lab")).not.toBeInTheDocument();
-      confirm.mockRestore();
-    });
-
     it("creates a project, opens it, and loads a snapshot-backed canvas", async () => {
       render(<ProjectNavigationHost />);
       await screen.findByRole("textbox", { name: "New project name" }, { timeout: 10_000 });
@@ -114,4 +101,17 @@ describe("projects", () => {
       expect(api.openProject).toHaveBeenCalledWith("p1");
     });
 
+    // Keep this test last: it opens a Radix dialog, which leaves a document.body listener behind that makes
+    // later renderRoutedApp() tests (their root route renders <html>/<body>) spin inside React's event dispatch.
+    it("removes a deleted project from the list immediately after the controller confirms deletion", async () => {
+      vi.mocked(api.listProjects).mockResolvedValue([project]);
+      renderWorkspace(null);
+
+      expect(await screen.findByText("Core lab")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Delete Core lab" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(api.deleteProject).toHaveBeenCalledWith("p1"));
+      expect(screen.queryByText("Core lab")).not.toBeInTheDocument();
+    });
 });

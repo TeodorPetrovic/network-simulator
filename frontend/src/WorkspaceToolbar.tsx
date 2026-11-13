@@ -34,7 +34,7 @@ export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, 
   const draw = (tool: DrawingTool, label: string) => supported(label, () => startDrawingTool(tool));
   const selected = selectedLifecycleNodes.length > 0;
   return <header className="z-5 flex min-h-9 min-w-0 items-center gap-3 border-b bg-background px-2 py-0.5 [&>[data-slot=menubar]]:min-w-0 [&>[data-slot=menubar]]:flex-1 [&>[data-slot=menubar]]:overflow-x-auto [&>[data-slot=menubar]]:[scrollbar-width:none]" aria-label="Project workspace menu">
-    <div className="flex min-w-30 items-center gap-2 overflow-hidden text-xs"><button type="button" className="grid size-6 shrink-0 place-items-center rounded-md border bg-muted text-primary hover:bg-accent" title="Back to projects" aria-label="Back to projects" onClick={props.onBack}><Network size={16} /></button><strong className="truncate">{props.project.name}</strong></div>
+    <div className="flex min-w-30 items-center gap-2 overflow-hidden text-xs"><Button type="button" variant="outline" size="icon-sm" className="shrink-0 bg-muted text-primary hover:bg-accent" title="Back to projects" aria-label="Back to projects" onClick={props.onBack}><Network size={16} /></Button><strong className="truncate">{props.project.name}</strong></div>
     <Menubar>
       <MenubarMenu><MenuTrigger label="File" icon={<FolderOpen />} /><MenubarContent>
         {supported("New blank project", () => {}, true)}{supported("Open project…", () => {}, true)}

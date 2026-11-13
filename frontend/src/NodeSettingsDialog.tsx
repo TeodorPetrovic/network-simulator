@@ -80,23 +80,23 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
     setError("");
   }, [kind, node, open]);
 
-  const field = (name: string, label: string, type = "text", helper?: string, step?: string, disabled = false) => <label className="grid gap-1.5" key={name}>
+  const field = (name: string, label: string, type = "text", helper?: string, step?: string, disabled = false) => <div className="grid gap-1.5" key={name}>
     <Label htmlFor={`node-${node?.node_id}-${name}`}>{label}</Label>
     <Input id={`node-${node?.node_id}-${name}`} type={type} step={step} min={type === "number" ? "0" : undefined} disabled={disabled} value={draft[name] ?? ""} onChange={(event) => setDraft((current) => ({ ...current, [name]: event.target.value }))} />
     {helper && <span className="text-xs text-muted-foreground">{helper}</span>}
-  </label>;
-  const selectField = (name: string, label: string, values: string[]) => <label className="grid gap-1.5" key={name}>
+  </div>;
+  const selectField = (name: string, label: string, values: string[]) => <div className="grid gap-1.5" key={name}>
     <Label>{label}</Label>
     <Select value={draft[name] ?? values[0]} onValueChange={(value) => setDraft((current) => ({ ...current, [name]: value }))}>
       <SelectTrigger aria-label={label}><SelectValue /></SelectTrigger>
       <SelectContent>{values.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent>
     </Select>
-  </label>;
-  const textArea = (name: string, label: string, helper: string, rows = 4) => <label className="grid gap-1.5" key={name}>
+  </div>;
+  const textArea = (name: string, label: string, helper: string, rows = 4) => <div className="grid gap-1.5" key={name}>
     <Label htmlFor={`node-${node?.node_id}-${name}`}>{label}</Label>
     <Textarea id={`node-${node?.node_id}-${name}`} value={draft[name] ?? ""} onChange={(event) => setDraft((current) => ({ ...current, [name]: event.target.value }))} rows={rows} />
     <span className="text-xs text-muted-foreground">{helper}</span>
-  </label>;
+  </div>;
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

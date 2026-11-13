@@ -64,23 +64,23 @@ export function TemplateSettingsDialog({ template, open, onOpenChange, onSave }:
     setError("");
   }, [open, template]);
 
-  const field = (name: string, label: string, type = "text", helper?: string) => <label className="grid gap-1.5" key={name}>
+  const field = (name: string, label: string, type = "text", helper?: string) => <div className="grid gap-1.5" key={name}>
     <Label htmlFor={`template-${template.template_id}-${name}`}>{label}</Label>
     <Input id={`template-${template.template_id}-${name}`} type={type} value={draft[name] ?? ""} min={type === "number" ? "0" : undefined} onChange={(event) => setDraft((current) => ({ ...current, [name]: event.target.value }))} />
     {helper && <span className="text-xs text-muted-foreground">{helper}</span>}
-  </label>;
-  const selectField = (name: string, label: string, values: string[]) => <label className="grid gap-1.5" key={name}>
+  </div>;
+  const selectField = (name: string, label: string, values: string[]) => <div className="grid gap-1.5" key={name}>
     <Label>{label}</Label>
     <Select value={draft[name] ?? values[0]} onValueChange={(value) => setDraft((current) => ({ ...current, [name]: value }))}>
       <SelectTrigger aria-label={label}><SelectValue /></SelectTrigger>
       <SelectContent position="popper" align="start">{values.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent>
     </Select>
-  </label>;
-  const textArea = (name: string, label: string, helper: string) => <label className="grid gap-1.5" key={name}>
+  </div>;
+  const textArea = (name: string, label: string, helper: string) => <div className="grid gap-1.5" key={name}>
     <Label htmlFor={`template-${template.template_id}-${name}`}>{label}</Label>
     <Textarea id={`template-${template.template_id}-${name}`} value={draft[name] ?? ""} onChange={(event) => setDraft((current) => ({ ...current, [name]: event.target.value }))} rows={name === "start_command" ? 2 : 4} />
     <span className="text-xs text-muted-foreground">{helper}</span>
-  </label>;
+  </div>;
 
   const changeDynamipsPlatform = (platform: string) => {
     const chassis = chassisDefault[platform] ?? "";
@@ -144,7 +144,7 @@ export function TemplateSettingsDialog({ template, open, onOpenChange, onSave }:
           {textArea("extra_volumes", "Persistent container paths", "One absolute path inside the container per line. Data is stored under the project runtime directory.")}
         </div>}
         {template.template_type === "dynamips" && <>
-          <label className="grid gap-1.5" key="platform"><Label>Dynamips platform</Label><Select value={draft.platform ?? template.platform} onValueChange={changeDynamipsPlatform}><SelectTrigger aria-label="Dynamips platform"><SelectValue /></SelectTrigger><SelectContent position="popper" align="start">{DYNAMIPS_PLATFORMS.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></label>
+          <div className="grid gap-1.5" key="platform"><Label>Dynamips platform</Label><Select value={draft.platform ?? template.platform} onValueChange={changeDynamipsPlatform}><SelectTrigger aria-label="Dynamips platform"><SelectValue /></SelectTrigger><SelectContent position="popper" align="start">{DYNAMIPS_PLATFORMS.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></div>
           {CHASSIS[draft.platform ?? template.platform] && selectField("chassis", "Chassis", CHASSIS[draft.platform ?? template.platform])}
           {field("slot0", "Slot 0 adapter")}
           {field("nvram", "NVRAM (KB)", "number")}
