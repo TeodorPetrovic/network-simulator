@@ -13,8 +13,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SettingsDialog, SettingsSection } from "@/components/settings-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useConfirm } from "@/components/confirm-dialog";
 import { Label } from "@/components/ui/label";
@@ -46,7 +45,7 @@ const field = (key: string, label: string, section: string, active = false, kind
 const fieldsByRuntime: Record<RuntimeKey, FieldSpec[]> = {
   docker: [
     field("name", "Template name", "General", true), field("default_name_format", "Default name format", "General"), field("category", "Category", "General"), field("symbol", "Symbol", "General"), field("image", "Image name", "General", false, "text", { createOnly: true }),
-    field("start_command", "Start command", "General", true, "textarea"), field("environment", "Environment", "General", true, "textarea", { help: "One KEY=VALUE entry per line." }), field("extra_hosts", "Extra hosts", "General", true, "textarea", { help: "One host:address entry per line." }), field("extra_volumes", "Persistent paths", "General", true, "textarea", { help: "One absolute container path per line." }),
+    field("start_command", "Start command", "Startup", true, "textarea"), field("environment", "Environment", "Startup", true, "textarea", { help: "One KEY=VALUE entry per line." }), field("extra_hosts", "Extra hosts", "Network", true, "textarea", { help: "One host:address entry per line." }), field("extra_volumes", "Persistent paths", "Storage", true, "textarea", { help: "One absolute container path per line." }),
     field("adapters", "Adapters", "Network", true, "number"), field("base_mac", "Base MAC", "Network"), field("console_type", "Console type", "Network", false, "select", { options: ["telnet", "vnc", "http", "none"] }), field("console_resolution", "VNC console resolution", "Network"), field("console_http_port", "HTTP port in the container", "Network", false, "number"), field("console_http_path", "HTTP path", "Network"), field("console_vnc_port", "VNC port in the container (optional)", "Network", false, "number"), field("console_auto_start", "Auto start console", "Network", false, "boolean"),
     field("memory", "Memory limit (MB)", "Advanced", true, "number", { help: "0 means no Docker memory limit." }), field("cpus", "CPU limit", "Advanced", true, "number", { help: "0 means no Docker CPU limit." }),
   ],
@@ -94,9 +93,9 @@ const initialValues = (template?: Partial<TemplateRecord>, runtime?: RuntimeKey)
 function SettingField({ spec, value, onChange, showPending = true }: { spec: FieldSpec; value: string; onChange: (value: string) => void; showPending?: boolean }) {
   const disabled = showPending && !spec.active;
   const id = `pref-${spec.key}`;
-  return <div className="grid gap-1.5">
-    <Label htmlFor={id} className="flex items-center justify-between gap-2 text-sm font-medium"><span>{spec.label}</span>{disabled && <Badge variant="outline">Pending backend</Badge>}</Label>
-    {spec.kind === "boolean" ? <Checkbox id={id} checked={value === "true"} disabled={disabled} onCheckedChange={(checked) => onChange(String(checked === true))} /> : spec.kind === "textarea" ? <Textarea id={id} value={value} disabled={disabled} rows={3} onChange={(event) => onChange(event.target.value)} /> : spec.kind === "select" ? <Select value={value || spec.options?.[0] || ""} onValueChange={onChange} disabled={disabled}><SelectTrigger id={id} aria-label={spec.label}><SelectValue placeholder="Choose a value" /></SelectTrigger><SelectContent>{(spec.options ?? []).map((option) => <SelectItem key={option} value={option}>{option}</SelectItem>)}</SelectContent></Select> : <Input id={id} type={spec.kind === "number" ? "number" : "text"} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />}
+  return <div className="grid min-w-0 content-start gap-2">
+    <Label htmlFor={id} className="flex flex-wrap items-center justify-between gap-2 text-sm font-medium"><span>{spec.label}</span>{disabled && <Badge variant="outline">Pending backend</Badge>}</Label>
+    {spec.kind === "boolean" ? <Checkbox id={id} checked={value === "true"} disabled={disabled} onCheckedChange={(checked) => onChange(String(checked === true))} /> : spec.kind === "textarea" ? <Textarea id={id} value={value} disabled={disabled} className="min-h-24 font-mono text-xs leading-relaxed" rows={4} onChange={(event) => onChange(event.target.value)} /> : spec.kind === "select" ? <Select value={value || spec.options?.[0] || ""} onValueChange={onChange} disabled={disabled}><SelectTrigger id={id} aria-label={spec.label}><SelectValue placeholder="Choose a value" /></SelectTrigger><SelectContent position="popper" align="start">{(spec.options ?? []).map((option) => <SelectItem key={option} value={option}>{option}</SelectItem>)}</SelectContent></Select> : <Input id={id} type={spec.kind === "number" ? "number" : "text"} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />}
     {spec.help && <span className="text-xs text-muted-foreground">{spec.help}</span>}
   </div>;
 }
@@ -128,15 +127,25 @@ export function TemplateEditor({ template, runtime, open, onOpenChange, onSave, 
     catch (reason) { setError(reason instanceof Error ? reason.message : "Template could not be saved"); }
     finally { setSaving(false); }
   }
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="w-[min(56rem,calc(100%-2rem))] max-w-none"><DialogHeader><DialogTitle>{creating ? "Create template" : "Template settings"}</DialogTitle><DialogDescription>{runtimeLabels[runtime]}. Fields marked Pending backend are shown for parity but are not sent to the controller.</DialogDescription></DialogHeader><form onSubmit={(event) => void submit(event)}><Tabs defaultValue={sections[0] ?? "General"}><TabsList>{sections.map((section) => <TabsTrigger value={section} key={section}>{section}</TabsTrigger>)}</TabsList>{sections.map((section) => <TabsContent key={section} value={section} className="grid gap-4 pt-4 sm:grid-cols-2">{specs.filter((spec) => spec.section === section && !(runtime === "dynamips" && spec.key === "chassis" && !dynamipsChassis[values.platform ?? "c7200"])).map((spec) => {
+  const renderField = (spec: FieldSpec) => {
     const liveSpec = runtime === "dynamips" && spec.key === "chassis" ? { ...spec, kind: "select" as const, options: dynamipsChassis[values.platform] } : spec;
     const onChange = (value: string) => setValues((current) => {
       if (runtime === "dynamips" && spec.key === "platform") { const chassis = dynamipsChassisDefault[value] ?? ""; return { ...current, platform: value, chassis, slot0: dynamipsSlot0(value, chassis), memory: String(dynamipsRamDefault[value]), nvram: String(dynamipsNvramDefault[value]) }; }
       if (runtime === "dynamips" && spec.key === "chassis") return { ...current, chassis: value, slot0: dynamipsSlot0(current.platform ?? "c7200", value) };
       return { ...current, [spec.key]: value };
     });
-    return <div key={spec.key} className={spec.kind === "textarea" ? "sm:col-span-2" : ""}><SettingField spec={liveSpec} value={values[spec.key] ?? ""} onChange={onChange} showPending={!creating || !spec.createOnly} /></div>;
-  })}</TabsContent>)}</Tabs>{error && <p role="alert" className="mt-3 text-sm text-destructive">{error}</p>}<DialogFooter className="mt-4"><Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" disabled={saving}>{saving ? "Saving…" : creating ? "Create template" : "Save template"}</Button></DialogFooter></form></DialogContent></Dialog>;
+    return <div key={spec.key} className={spec.kind === "textarea" ? "min-w-0 sm:col-span-2" : "min-w-0"}><SettingField spec={liveSpec} value={values[spec.key] ?? ""} onChange={onChange} showPending={!creating || !spec.createOnly} /></div>;
+  };
+  const tabs = sections.map((section) => {
+    const fields = specs.filter((spec) => spec.section === section && !(runtime === "dynamips" && spec.key === "chassis" && !dynamipsChassis[values.platform ?? "c7200"]));
+    const editable = fields.filter((spec) => spec.active || (creating && spec.createOnly));
+    const pending = fields.filter((spec) => !editable.includes(spec));
+    return { id: section, label: section, content: <>
+      {editable.length > 0 && <SettingsSection title={`${section} settings`} columns>{editable.map(renderField)}</SettingsSection>}
+      {pending.length > 0 && <details className="rounded-lg border p-4" open={editable.length === 0 ? true : undefined}><summary className="cursor-pointer text-sm font-medium">Unavailable settings <span className="ml-1 text-xs font-normal text-muted-foreground">({pending.length})</span></summary><p className="my-3 text-xs text-muted-foreground">These options are not yet supported by the controller and cannot be changed.</p><div className="grid items-start gap-4 sm:grid-cols-2">{pending.map(renderField)}</div></details>}
+    </> };
+  });
+  return <SettingsDialog open={open} onOpenChange={onOpenChange} title={creating ? "Create template" : "Template settings"} context={runtimeLabels[runtime]} description="Configure defaults for new devices. Existing devices keep their own settings." tabs={tabs} onSubmit={(event) => void submit(event)} saving={saving} saveDisabled={!values.name?.trim()} saveLabel={creating ? "Create template" : "Save template"} error={error} />;
 }
 
 export function PreferencesPage({ fromProject }: { fromProject?: string } = {}) {

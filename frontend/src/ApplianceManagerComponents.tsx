@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { SettingsDialog, SettingsSection } from "@/components/settings-dialog";
 
 const dynamipsPlatforms = ["c1700", "c2600", "c2691", "c3600", "c3725", "c3745", "c7200"];
 const dynamipsChassis: Record<string, string[]> = { c1700: ["1720", "1721", "1750", "1751", "1760"], c2600: ["2610", "2611", "2620", "2610XM", "2620XM", "2650XM", "2621", "2611XM", "2621XM", "2651XM"], c3600: ["3620", "3640", "3660"] };
@@ -73,30 +73,24 @@ export function CreateCustomApplianceDialog({ open, onOpenChange, imageOptions, 
     }
   }
 
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="w-full max-w-2xl">
-    <DialogHeader>
-      <DialogTitle>Create custom appliance</DialogTitle>
-      <DialogDescription>Choose a runtime image to create a reusable appliance definition. The appliance is stored in this library and becomes available in every project.</DialogDescription>
-    </DialogHeader>
-    <form className="grid gap-4" onSubmit={(event) => void submit(event)}>
+  return <SettingsDialog open={open} onOpenChange={onOpenChange} title="Create custom appliance" description="Create a reusable appliance from an installed image. It will be available in every project." onSubmit={(event) => void submit(event)} saving={saving} saveDisabled={!name.trim() || !selected} saveLabel="Create appliance" error={error}>
+    <SettingsSection title="Appliance and runtime">
       <div className="grid gap-1.5"><Label htmlFor="custom-appliance-name">Appliance name</Label><Input id="custom-appliance-name" required maxLength={100} value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. MikroTik CHR lab" /></div>
       {availableRuntimes.length > 0 ? <>
         <div className="grid gap-1.5"><Label>Runtime</Label><Select value={runtime} onValueChange={(value) => {
           const nextRuntime = value as RuntimeTemplate["template_type"];
           setRuntime(nextRuntime);
           setSourceTemplateId(imageOptions.find((option) => option.template_type === nextRuntime)?.template_id ?? "");
-        }}><SelectTrigger aria-label="Custom appliance runtime"><SelectValue /></SelectTrigger><SelectContent>{availableRuntimes.map((type) => <SelectItem key={type} value={type}>{applianceRuntimeLabel(type)}</SelectItem>)}</SelectContent></Select></div>
+        }}><SelectTrigger aria-label="Custom appliance runtime"><SelectValue /></SelectTrigger><SelectContent position="popper" align="start">{availableRuntimes.map((type) => <SelectItem key={type} value={type}>{applianceRuntimeLabel(type)}</SelectItem>)}</SelectContent></Select></div>
         <div className="grid gap-1.5"><Label>Installed image or runtime</Label><Select value={selected?.template_id ?? ""} onValueChange={setSourceTemplateId}><SelectTrigger aria-label="Installed image"><SelectValue placeholder="Select an installed image" /></SelectTrigger><SelectContent className="max-h-72">{candidates.map((option) => <SelectItem key={option.template_id} value={option.template_id}>{runtimeOptionLabel(option)}</SelectItem>)}</SelectContent></Select><small className="text-xs text-muted-foreground">This selection is only used to create the appliance. Images do not appear as appliances until you create one.</small></div>
         {runtime === "dynamips" && <>
-          <div className="grid gap-1.5"><Label>Dynamips platform</Label><Select value={platform} onValueChange={(value) => { setPlatform(value); setChassis(dynamipsChassisDefault[value] ?? ""); }}><SelectTrigger aria-label="Dynamips platform"><SelectValue /></SelectTrigger><SelectContent>{dynamipsPlatforms.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></div>
-          {dynamipsChassis[platform] && <div className="grid gap-1.5"><Label>Chassis</Label><Select value={chassis} onValueChange={setChassis}><SelectTrigger aria-label="Chassis"><SelectValue /></SelectTrigger><SelectContent>{dynamipsChassis[platform].map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></div>}
+          <div className="grid gap-1.5"><Label>Dynamips platform</Label><Select value={platform} onValueChange={(value) => { setPlatform(value); setChassis(dynamipsChassisDefault[value] ?? ""); }}><SelectTrigger aria-label="Dynamips platform"><SelectValue /></SelectTrigger><SelectContent position="popper" align="start">{dynamipsPlatforms.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></div>
+          {dynamipsChassis[platform] && <div className="grid gap-1.5"><Label>Chassis</Label><Select value={chassis} onValueChange={setChassis}><SelectTrigger aria-label="Chassis"><SelectValue /></SelectTrigger><SelectContent position="popper" align="start">{dynamipsChassis[platform].map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></div>}
         </>}
       </> : <EmptyState icon={<HardDrive />} title="No runtime images available" text="Add a QEMU or Dynamips image, or install a Docker image, then create the appliance from it." />}
       {!error && availableRuntimes.length === 0 && <p className="text-sm text-muted-foreground">Import a GNS3 appliance or add an image/runtime first. Installed images are offered here as inputs; they are not added to the appliance library by themselves.</p>}
-      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      <DialogFooter><Button type="button" variant="outline" disabled={saving} onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" disabled={saving || !selected || !name.trim()}>{saving ? "Creating…" : "Create appliance"}</Button></DialogFooter>
-    </form>
-  </DialogContent></Dialog>;
+    </SettingsSection>
+  </SettingsDialog>;
 }
 
 export function runtimeOptionLabel(template: RuntimeTemplate): string {

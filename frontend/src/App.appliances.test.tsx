@@ -361,10 +361,12 @@ describe("appliances", () => {
       renderWorkspace();
       await openNodeDialog();
       const image = new File([new Uint8Array([1, 2, 3])], "custom-router.qcow2");
+      fireEvent.mouseDown(screen.getByRole("tab", { name: "Import images" }));
       fireEvent.change(screen.getByLabelText("Add a QEMU disk image"), { target: { files: [image] } });
   
-      expect(await screen.findByRole("textbox", { name: "Node name" })).toBeInTheDocument();
-      expect(screen.getByRole("textbox", { name: "Node name" })).toHaveValue("custom-router");
+      await waitFor(() => expect(api.uploadQemuImage).toHaveBeenCalledWith(image));
+      fireEvent.mouseDown(screen.getByRole("tab", { name: "Device" }));
+      await waitFor(() => expect(screen.getByRole("textbox", { name: "Node name" })).toHaveValue("custom-router"));
       expect(await screen.findByText(/global image library/)).toBeInTheDocument();
       expect(api.uploadQemuImage).toHaveBeenCalledWith(image);
     });

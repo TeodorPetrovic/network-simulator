@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Download, Upload } from "lucide-react";
 import type { Node } from "./api";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { SettingsDialog, SettingsNotice, SettingsSection } from "@/components/settings-dialog";
 import { Textarea } from "@/components/ui/textarea";
 
 /** The node property holding the editable startup configuration, as in GNS3's Edit config action. */
@@ -44,22 +44,17 @@ export function NodeConfigFileDialog({ node, open, onOpenChange, onSave }: {
     catch (reason) { setError(reason instanceof Error ? reason.message : "Could not save the configuration. Stop the device first."); }
     finally { setSaving(false); }
   };
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Edit config · {node.name}</DialogTitle>
-          <DialogDescription>{field === "startup_script" ? "VPCS startup script, run when the device starts." : "Startup configuration written before the device starts."} The device must be stopped to save.</DialogDescription>
-        </DialogHeader>
-        <Textarea aria-label="Configuration" className="min-h-72 font-mono text-xs" value={text} onChange={(event) => setText(event.target.value)} />
-        {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-        <input ref={fileInput} type="file" className="hidden" aria-label="Import configuration file" onChange={async (event) => { const file = event.target.files?.[0]; if (file) setText(await file.text()); event.target.value = ""; }} />
-        <DialogFooter className="gap-2">
-          <Button type="button" variant="outline" onClick={() => fileInput.current?.click()}><Upload />Import from file</Button>
-          <Button type="button" variant="outline" onClick={() => { const url = URL.createObjectURL(new Blob([text], { type: "text/plain" })); const link = document.createElement("a"); link.href = url; link.download = configFileName(node); link.click(); URL.revokeObjectURL(url); }}><Download />Export to file</Button>
-          <Button type="button" disabled={saving} onClick={() => void save()}>Save</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
+  return <SettingsDialog open={open} onOpenChange={onOpenChange} title={`Edit config · ${node.name}`} description={field === "startup_script" ? "VPCS startup script, run when the device starts." : "Startup configuration written before the device starts."} onSubmit={(event) => { event.preventDefault(); void save(); }} saving={saving} saveDisabled={node.status !== "stopped"} saveLabel="Save" error={error} notice={node.status !== "stopped" ? <SettingsNotice>Stop this device before saving its startup configuration.</SettingsNotice> : undefined}>
+    <SettingsSection title="Startup configuration">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/30 p-3">
+        <span className="min-w-0 break-all font-mono text-xs text-muted-foreground">{configFileName(node)}</span>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={() => fileInput.current?.click()}><Upload />Import from file</Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => { const url = URL.createObjectURL(new Blob([text], { type: "text/plain" })); const link = document.createElement("a"); link.href = url; link.download = configFileName(node); link.click(); URL.revokeObjectURL(url); }}><Download />Export to file</Button>
+        </div>
+      </div>
+      <Textarea aria-label="Configuration" className="min-h-64 resize-y font-mono text-xs leading-relaxed" rows={16} spellCheck={false} value={text} onChange={(event) => setText(event.target.value)} />
+      <input ref={fileInput} type="file" className="hidden" aria-label="Import configuration file" onChange={async (event) => { const input = event.currentTarget; const file = input.files?.[0]; try { if (file) setText(await file.text()); } catch { setError("Could not read the configuration file."); } finally { input.value = ""; } }} />
+    </SettingsSection>
+  </SettingsDialog>;
 }

@@ -5,7 +5,7 @@ import type { Link, LinkFilterDescription, Node } from "../api";
 import { captureDisplayName, defaultCaptureName, defaultEndpointLabelPosition, endpointName } from "./helpers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -139,13 +139,13 @@ export function LinkPropertiesDialog({ projectId, link, nodes, open, onOpenChang
       setError(`Capture stream is not available: ${errorMessage(reason)}`);
     }
   };
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-h-[90vh] w-[min(980px,95vw)] max-w-none overflow-y-auto sm:max-w-none">
-    <DialogHeader><DialogTitle>Link properties</DialogTitle><DialogDescription>Change link appearance, filters, and packet capture.</DialogDescription></DialogHeader>
-    <Tabs defaultValue="config" className="grid gap-4">
-    <TabsList><TabsTrigger value="config">Configuration</TabsTrigger><TabsTrigger value="labels">Endpoint labels</TabsTrigger><TabsTrigger value="capture">Capture</TabsTrigger></TabsList>
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-4xl flex-col gap-0 overflow-hidden p-0">
+    <DialogHeader className="shrink-0 border-b px-6 py-5 pr-12"><DialogTitle>Link properties</DialogTitle><DialogDescription>Change link appearance, filters, and packet capture.</DialogDescription></DialogHeader>
+    <Tabs defaultValue="config" className="min-h-0 flex-1 gap-0 overflow-hidden">
+    <div className="shrink-0 overflow-x-auto border-b px-6"><TabsList variant="line" aria-label="Link settings sections" className="h-11 min-w-full justify-start gap-3"><TabsTrigger value="config">Configuration</TabsTrigger><TabsTrigger value="labels">Endpoint labels</TabsTrigger><TabsTrigger value="capture">Capture</TabsTrigger></TabsList></div><div className="min-h-0 overflow-y-auto p-4 sm:p-6">
     <TabsContent value="config"><div className="grid gap-5 md:grid-cols-2">
-      <section className="space-y-3"><h3 className="text-sm font-semibold">Appearance</h3><div className="grid gap-1.5"><Label htmlFor="link-color">Color</Label><Input id="link-color" type="color" value={color} onChange={(event) => setColor(colorInput(event.target.value))} /></div><div className="grid gap-1.5"><Label htmlFor="link-width">Line width</Label><Input id="link-width" type="number" min="1" max="8" value={width} onChange={(event) => setWidth(event.target.value)} /></div><Button onClick={() => void save()} disabled={busy}>Save appearance</Button></section>
-      <section className="space-y-3"><h3 className="text-sm font-semibold">Filters</h3>{filterDescriptions.length ? <>
+      <section className="space-y-4 rounded-lg border p-4"><h3 className="text-sm font-semibold">Appearance</h3><div className="grid gap-1.5"><Label htmlFor="link-color">Color</Label><Input id="link-color" type="color" value={color} onChange={(event) => setColor(colorInput(event.target.value))} /></div><div className="grid gap-1.5"><Label htmlFor="link-width">Line width</Label><Input id="link-width" type="number" min="1" max="8" value={width} onChange={(event) => setWidth(event.target.value)} /></div><Button onClick={() => void save()} disabled={busy}>Save appearance</Button></section>
+      <section className="space-y-4 rounded-lg border p-4"><h3 className="text-sm font-semibold">Filters</h3>{filterDescriptions.length ? <>
         <div className="grid gap-1.5 text-xs"><Label title={filterDescription(filterDescriptions, "frequency_drop")}>Drop every Nth packet</Label><Input type="number" min="0" aria-label="Drop every Nth packet" value={filterValue(filters.frequency_drop, 0)} onChange={(event) => setFilterValue(setFilters, "frequency_drop", 0, event.target.value)} /></div>
         <div className="grid gap-1.5 text-xs"><Label title={filterDescription(filterDescriptions, "packet_loss")}>Packet loss (%)</Label><Input type="number" min="0" max="100" aria-label="Packet loss (%)" value={filterValue(filters.packet_loss, 0)} onChange={(event) => setFilterValue(setFilters, "packet_loss", 0, event.target.value)} /></div>
         <div className="grid gap-1.5 text-xs"><Label>Delay (ms)</Label><Input type="number" min="0" aria-label="Delay (ms)" value={filterValue(filters.delay, 0)} onChange={(event) => setFilterValue(setFilters, "delay", 0, event.target.value)} /></div>
@@ -166,8 +166,8 @@ export function LinkPropertiesDialog({ projectId, link, nodes, open, onOpenChang
       <Button variant="outline" className="w-fit" onClick={() => void saveEndpointLabels()} disabled={busy || endpointLabels.length !== 2}>Save endpoint labels</Button>
     </section></TabsContent>
     <TabsContent value="capture"><section className="grid gap-2"><div className="grid gap-1.5"><Label htmlFor="capture-file-name">Capture file</Label><Input id="capture-file-name" value={captureFileName} onChange={(event) => setCaptureFileName(event.target.value)} disabled={captureActive} /></div><div className="flex items-center gap-2 text-sm"><Checkbox id="web-wireshark" checked={webWireshark} disabled={!webWiresharkEnabled || !dockerAvailable || captureActive} onCheckedChange={(checked) => setWebWireshark(checked === true)} /><Label htmlFor="web-wireshark">Web Wireshark</Label></div>{!webWiresharkEnabled && <p className="text-xs text-muted-foreground">Web Wireshark is disabled in the server settings.</p>}{webWiresharkEnabled && !dockerAvailable && <p className="text-xs text-muted-foreground">Web Wireshark requires Docker to be available.</p>}<div className="flex flex-wrap gap-2"><Badge variant={captureActive ? "default" : "secondary"}>{captureActive ? "Capturing" : "Stopped"}</Badge><Button size="sm" onClick={() => void capture(captureActive ? "stop" : "start")} disabled={busy || (!captureActive && !endpointRunning)}>{captureActive ? "Stop capture" : "Start capture"}</Button><Button size="sm" variant="outline" disabled={!captureActive} onClick={() => void openCaptureStream()}>Open capture stream</Button><Button size="sm" variant="outline" disabled={!captureActive} onClick={() => { void streamUrl().then((url) => copyStreamUrl(url, setNotice, setError)).catch((reason) => setError(`Capture stream is not available: ${errorMessage(reason)}`)); }}>Copy one-use stream URL</Button></div>{!captureActive && !endpointRunning && <p className="text-xs text-muted-foreground">Start a node on this link to enable capture.</p>}{startingWireshark && <p role="status">Starting Web Wireshark… (3-6 s)</p>}</section></TabsContent>
-    </Tabs>
-    {error && <Unavailable message={error} />}{notice && <p role="status" className="text-sm text-muted-foreground">{notice}</p>}
+    </div></Tabs>
+    <div className="shrink-0 border-t px-6 pt-3">{error && <Unavailable message={error} />}{notice && <p role="status" className="text-sm text-muted-foreground">{notice}</p>}<DialogFooter className="m-0 border-0 bg-transparent px-0"><Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button></DialogFooter></div>
   </DialogContent></Dialog>;
 }
 

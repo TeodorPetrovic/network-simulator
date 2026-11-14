@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import type { RuntimeTemplate } from "./api";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { SettingsDialog, SettingsSection, type SettingsTab } from "@/components/settings-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -64,21 +63,21 @@ export function TemplateSettingsDialog({ template, open, onOpenChange, onSave }:
     setError("");
   }, [open, template]);
 
-  const field = (name: string, label: string, type = "text", helper?: string) => <div className="grid gap-1.5" key={name}>
+  const field = (name: string, label: string, type = "text", helper?: string) => <div className="grid min-w-0 content-start gap-2" key={name}>
     <Label htmlFor={`template-${template.template_id}-${name}`}>{label}</Label>
-    <Input id={`template-${template.template_id}-${name}`} type={type} value={draft[name] ?? ""} min={type === "number" ? "0" : undefined} onChange={(event) => setDraft((current) => ({ ...current, [name]: event.target.value }))} />
+    <Input id={`template-${template.template_id}-${name}`} type={type} required={name === "name" || type === "number"} step={name === "cpus" && template.template_type === "docker" ? "0.25" : undefined} value={draft[name] ?? ""} min={type === "number" ? "0" : undefined} onChange={(event) => setDraft((current) => ({ ...current, [name]: event.target.value }))} />
     {helper && <span className="text-xs text-muted-foreground">{helper}</span>}
   </div>;
-  const selectField = (name: string, label: string, values: string[]) => <div className="grid gap-1.5" key={name}>
+  const selectField = (name: string, label: string, values: string[]) => <div className="grid min-w-0 content-start gap-2" key={name}>
     <Label>{label}</Label>
     <Select value={draft[name] ?? values[0]} onValueChange={(value) => setDraft((current) => ({ ...current, [name]: value }))}>
       <SelectTrigger aria-label={label}><SelectValue /></SelectTrigger>
       <SelectContent position="popper" align="start">{values.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent>
     </Select>
   </div>;
-  const textArea = (name: string, label: string, helper: string) => <div className="grid gap-1.5" key={name}>
+  const textArea = (name: string, label: string, helper: string) => <div className="grid min-w-0 content-start gap-2" key={name}>
     <Label htmlFor={`template-${template.template_id}-${name}`}>{label}</Label>
-    <Textarea id={`template-${template.template_id}-${name}`} value={draft[name] ?? ""} onChange={(event) => setDraft((current) => ({ ...current, [name]: event.target.value }))} rows={name === "start_command" ? 2 : 4} />
+    <Textarea id={`template-${template.template_id}-${name}`} value={draft[name] ?? ""} onChange={(event) => setDraft((current) => ({ ...current, [name]: event.target.value }))} className="min-h-24 font-mono text-xs leading-relaxed" rows={name === "start_command" ? 3 : 6} />
     <span className="text-xs text-muted-foreground">{helper}</span>
   </div>;
 
@@ -124,36 +123,32 @@ export function TemplateSettingsDialog({ template, open, onOpenChange, onSave }:
     }
   }
 
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="w-full max-w-3xl">
-    <DialogHeader><DialogTitle>Configure template</DialogTitle><DialogDescription>These settings are saved globally and used for new devices based on this template.</DialogDescription></DialogHeader>
-    <form className="grid min-w-0 gap-4" onSubmit={(event) => void save(event)}>
-      <div className="grid min-w-0 gap-3 sm:grid-cols-2">
-        {field("name", "Template name")}
-        {(template.template_type === "qemu" || template.template_type === "docker") && field("adapters", "Network adapters", "number")}
-        {(template.template_type === "qemu" || template.template_type === "docker" || template.template_type === "dynamips") && field("memory", template.template_type === "qemu" ? "RAM (MB)" : template.template_type === "dynamips" ? "RAM (MB)" : "Memory limit (MB)", "number", template.template_type === "docker" ? "0 means no Docker memory limit." : undefined)}
-        {(template.template_type === "qemu" || template.template_type === "docker") && field("cpus", template.template_type === "qemu" ? "vCPUs" : "CPU limit", "number", "0 means no Docker CPU limit.")}
-        {template.template_type === "qemu" && <>
-          {selectField("adapter_type", "Network adapter model", ["e1000", "virtio-net-pci", "rtl8139", "vmxnet3"])}
-          {selectField("hda_disk_interface", "Primary disk interface", ["ide", "scsi", "virtio", "sd"])}
-          {selectField("boot_priority", "Boot priority", ["c", "d", "n", "dc", "cd"])}
-        </>}
-        {template.template_type === "docker" && <div className="sm:col-span-2">
-          {textArea("start_command", "Start command", "Shell-like command arguments passed to Docker; leave blank to use the image default.")}
-          {textArea("environment", "Environment variables", "One KEY=VALUE entry per line.")}
-          {textArea("extra_hosts", "Extra hosts", "One host:address entry per line.")}
-          {textArea("extra_volumes", "Persistent container paths", "One absolute path inside the container per line. Data is stored under the project runtime directory.")}
-        </div>}
-        {template.template_type === "dynamips" && <>
-          <div className="grid gap-1.5" key="platform"><Label>Dynamips platform</Label><Select value={draft.platform ?? template.platform} onValueChange={changeDynamipsPlatform}><SelectTrigger aria-label="Dynamips platform"><SelectValue /></SelectTrigger><SelectContent position="popper" align="start">{DYNAMIPS_PLATFORMS.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></div>
-          {CHASSIS[draft.platform ?? template.platform] && selectField("chassis", "Chassis", CHASSIS[draft.platform ?? template.platform])}
-          {field("slot0", "Slot 0 adapter")}
-          {field("nvram", "NVRAM (KB)", "number")}
-          {field("idlepc", "Idle-PC value", "text", "Leave blank to let the router use its normal idle behavior.")}
-        </>}
-        {template.template_type === "vpcs" && <div className="sm:col-span-2">{textArea("startup_script", "Startup script", "VPCS commands executed when a node starts.")}</div>}
-      </div>
-      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      <DialogFooter><Button type="button" variant="ghost" disabled={saving} onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" disabled={saving}>{saving ? "Saving…" : "Save template"}</Button></DialogFooter>
-    </form>
-  </DialogContent></Dialog>;
+  const kind = template.template_type;
+  const tabs: SettingsTab[] = [{ id: "general", label: "General", content: <>
+    <SettingsSection title="Template identity">{field("name", "Template name")}</SettingsSection>
+    {(["qemu", "docker", "dynamips"].includes(kind)) && <SettingsSection title="Compute resources" columns>
+      {field("memory", kind === "docker" ? "Memory limit (MB)" : "RAM (MB)", "number", kind === "docker" ? "0 means no Docker memory limit." : undefined)}
+      {(kind === "qemu" || kind === "docker") && field("cpus", kind === "qemu" ? "vCPUs" : "CPU limit", "number", kind === "docker" ? "0 means no Docker CPU limit." : undefined)}
+      {kind === "dynamips" && field("nvram", "NVRAM (KB)", "number")}
+    </SettingsSection>}
+    {kind === "dynamips" && <SettingsSection title="Router platform" columns>
+      <div className="grid min-w-0 gap-2"><Label>Dynamips platform</Label><Select value={draft.platform ?? template.platform} onValueChange={changeDynamipsPlatform}><SelectTrigger aria-label="Dynamips platform"><SelectValue /></SelectTrigger><SelectContent position="popper" align="start">{DYNAMIPS_PLATFORMS.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></div>
+      {CHASSIS[draft.platform ?? template.platform] && selectField("chassis", "Chassis", CHASSIS[draft.platform ?? template.platform])}
+    </SettingsSection>}
+  </> }];
+  if (kind === "qemu" || kind === "docker" || kind === "dynamips") tabs.push({ id: "network", label: "Network", content: <SettingsSection title="Network adapters" columns>
+    {kind === "dynamips" ? field("slot0", "Slot 0 adapter") : field("adapters", "Network adapters", "number")}
+    {kind === "qemu" && selectField("adapter_type", "Network adapter model", ["e1000", "virtio-net-pci", "rtl8139", "vmxnet3"])}
+    {kind === "docker" && <div className="sm:col-span-2">{textArea("extra_hosts", "Extra hosts", "One host:address entry per line.")}</div>}
+  </SettingsSection> });
+  if (kind === "qemu") tabs.push({ id: "storage", label: "Storage & boot", content: <SettingsSection title="Disk and boot defaults" columns>
+    {selectField("hda_disk_interface", "Primary disk interface", ["ide", "scsi", "virtio", "sd"])}
+    {selectField("boot_priority", "Boot priority", ["c", "d", "n", "dc", "cd"])}
+  </SettingsSection> });
+  if (kind === "docker" || kind === "vpcs") tabs.push({ id: "startup", label: "Startup", content: <SettingsSection title="Startup defaults" description="Used when creating a device from this template.">
+    {kind === "docker" ? <>{textArea("start_command", "Start command", "Shell-like command arguments passed to Docker; leave blank to use the image default.")}{textArea("environment", "Environment variables", "One KEY=VALUE entry per line.")}</> : textArea("startup_script", "Startup script", "VPCS commands executed when a node starts.")}
+  </SettingsSection> });
+  if (kind === "docker") tabs.push({ id: "storage", label: "Storage", content: <SettingsSection title="Persistent storage">{textArea("extra_volumes", "Persistent container paths", "One absolute path inside the container per line. Data is stored under the project runtime directory.")}</SettingsSection> });
+  if (kind === "dynamips") tabs.push({ id: "advanced", label: "Advanced", content: <SettingsSection title="Runtime tuning">{field("idlepc", "Idle-PC value", "text", "Leave blank to let the router use its normal idle behavior.")}</SettingsSection> });
+  return <SettingsDialog open={open} onOpenChange={onOpenChange} title="Configure template" context={template.name} description="Global defaults for new devices. Existing devices keep their current settings." tabs={tabs} onSubmit={(event) => void save(event)} saving={saving} saveDisabled={!draft.name?.trim()} saveLabel="Save template" error={error} />;
 }

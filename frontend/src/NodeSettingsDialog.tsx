@@ -4,7 +4,8 @@ import { ExternalLink } from "lucide-react";
 import type { Node } from "./api";
 import { dockerHttpConsoleUrl, serverHostname } from "./api";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { SettingsDialog, SettingsNotice, SettingsSection, type SettingsTab } from "@/components/settings-dialog";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -55,7 +56,7 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
           ? node.extra_volumes.filter((path): path is string => typeof path === "string").join("\n")
           : "",
       } : {}),
-      ...(kind === "vpcs" ? { startup_script: String(node.startup_script ?? "") } : {}),
+      ...(kind === "vpcs" ? { startup_script: String(node.startup_script ?? ""), console_type: String(node.console_type ?? "telnet") } : {}),
       ...(kind === "dynamips" ? {
         startup_config: String(node.startup_config ?? ""), memory: String(node.ram ?? node.memory ?? 512),
         nvram: String(node.nvram ?? 128), idlepc: String(node.idlepc ?? ""),
@@ -80,21 +81,21 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
     setError("");
   }, [kind, node, open]);
 
-  const field = (name: string, label: string, type = "text", helper?: string, step?: string, disabled = false) => <div className="grid gap-1.5" key={name}>
+  const field = (name: string, label: string, type = "text", helper?: string, step?: string, disabled = false) => <div className="grid min-w-0 content-start gap-2" key={name}>
     <Label htmlFor={`node-${node?.node_id}-${name}`}>{label}</Label>
-    <Input id={`node-${node?.node_id}-${name}`} type={type} step={step} min={type === "number" ? "0" : undefined} disabled={disabled} value={draft[name] ?? ""} onChange={(event) => setDraft((current) => ({ ...current, [name]: event.target.value }))} />
+    <Input id={`node-${node?.node_id}-${name}`} type={type} step={step} required={name === "name" || type === "number" && name !== "console_vnc_port"} min={type === "number" ? (["adapters", "maxcpus", "console_http_port", "console_vnc_port"].includes(name) || kind === "qemu" && ["cpus", "memory"].includes(name) ? "1" : "0") : undefined} max={name === "adapters" ? 64 : name === "console_http_port" || name === "console_vnc_port" ? 65535 : undefined} disabled={disabled} value={draft[name] ?? ""} onChange={(event) => setDraft((current) => ({ ...current, [name]: event.target.value }))} />
     {helper && <span className="text-xs text-muted-foreground">{helper}</span>}
   </div>;
-  const selectField = (name: string, label: string, values: string[]) => <div className="grid gap-1.5" key={name}>
+  const selectField = (name: string, label: string, values: string[]) => <div className="grid min-w-0 content-start gap-2" key={name}>
     <Label>{label}</Label>
     <Select value={draft[name] ?? values[0]} onValueChange={(value) => setDraft((current) => ({ ...current, [name]: value }))}>
       <SelectTrigger aria-label={label}><SelectValue /></SelectTrigger>
-      <SelectContent>{values.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent>
+      <SelectContent position="popper" align="start">{values.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent>
     </Select>
   </div>;
-  const textArea = (name: string, label: string, helper: string, rows = 4) => <div className="grid gap-1.5" key={name}>
+  const textArea = (name: string, label: string, helper: string, rows = 4) => <div className="grid min-w-0 content-start gap-2" key={name}>
     <Label htmlFor={`node-${node?.node_id}-${name}`}>{label}</Label>
-    <Textarea id={`node-${node?.node_id}-${name}`} value={draft[name] ?? ""} onChange={(event) => setDraft((current) => ({ ...current, [name]: event.target.value }))} rows={rows} />
+    <Textarea id={`node-${node?.node_id}-${name}`} value={draft[name] ?? ""} onChange={(event) => setDraft((current) => ({ ...current, [name]: event.target.value }))} rows={rows} className="min-h-24 font-mono text-xs leading-relaxed" />
     <span className="text-xs text-muted-foreground">{helper}</span>
   </div>;
 
@@ -154,7 +155,7 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
       const names = (draft.port_names ?? "").split("\n");
       const vlans = (draft.port_vlans ?? "").split("\n");
       const types = (draft.port_types ?? "").split("\n");
-      patch.ports_mapping = Array.from({ length: count }, (_, index) => ({ port_number: index, name: names[index]?.trim() || `Ethernet${index + 1}`, vlan: Number(vlans[index]) || 1, type: types[index]?.trim() || "access", ethertype: "0x8100" }));
+      patch.ports_mapping = Array.from({ length: count }, (_, index) => ({ ...((Array.isArray(node.ports_mapping) ? node.ports_mapping[index] : {}) as Record<string, unknown>), port_number: index, name: names[index]?.trim() || `Ethernet${index + 1}`, vlan: Number(vlans[index]) || 1, type: types[index]?.trim() || "access", ethertype: types[index]?.trim() === "qinq" ? String((Array.isArray(node.ports_mapping) ? node.ports_mapping[index]?.ethertype : null) ?? "0x8100") : "0x8100" }));
     } else if (kind === "cloud") {
       patch.ports_mapping = (draft.interfaces ?? "").split("\n").map((name, index) => name.trim() ? ({ port_number: index, name: name.trim(), type: "ethernet", interface: name.trim() }) : null).filter(Boolean);
     } else if (kind === "nat") {
@@ -182,74 +183,98 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
   }
 
   if (!node || !supported) return null;
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="w-full max-w-3xl">
-    <DialogHeader><DialogTitle>Configure {node.name}</DialogTitle><DialogDescription>
-      Settings apply to this device only. Stop it before saving.{kind === "docker" ? " Docker settings replace its stopped container; configured persistent paths keep their data." : ""}
-    </DialogDescription></DialogHeader>
-    <form className="grid min-w-0 gap-4" onSubmit={(event) => void save(event)}>
-      <div className="grid min-w-0 gap-3 sm:grid-cols-2">
-        {field("name", "Device name")}
-        {(kind === "qemu" || kind === "docker") && field("adapters", "Network adapters", "number", node.status !== "stopped" ? "Stop the device to change the number of adapters" : "The count cannot be reduced below ports already used by links.", undefined, node.status !== "stopped")}
-        {(["ethernet_switch", "ethernet_hub", "hub"].includes(kind ?? "")) && <>
-          {field("adapters", "Port count", "number")}
-          {textArea("port_names", "Port names", "One name per port. Empty lines use the default port name.")}
-          {textArea("port_vlans", "Port VLANs", "One VLAN ID per port.")}
-          {textArea("port_types", "Port VLAN types", "One type per port, such as access or dot1q.")}
-        </>}
-        {kind === "cloud" && <div className="sm:col-span-2">{textArea("interfaces", "Ethernet interfaces", "One host interface per line.")}</div>}
-        {kind === "nat" && <div className="sm:col-span-2">{textArea("allow_host_interfaces", "Allowed host interfaces", "Explicitly allow these host interfaces for the NAT node, one per line.")}</div>}
-        {(kind === "qemu" || kind === "docker") && field("memory", kind === "qemu" ? "RAM (MB)" : "Memory limit (MB)", "number", kind === "docker" ? "0 means no Docker memory limit." : undefined)}
-        {(kind === "qemu" || kind === "docker") && field("cpus", kind === "qemu" ? "vCPUs" : "CPU limit", "number", kind === "docker" ? "0 means no Docker CPU limit." : undefined, kind === "docker" ? "0.25" : "1")}
-        {kind === "qemu" && <>
-          {field("hda_disk_image", "HDA disk image")}{field("hdb_disk_image", "HDB disk image")}{field("hdc_disk_image", "HDC disk image")}{field("hdd_disk_image", "HDD disk image")}{field("cdrom_image", "CD-ROM image")}
-          {selectField("adapter_type", "Network adapter model", ["e1000", "virtio-net-pci", "rtl8139", "vmxnet3"])}
-          {selectField("hda_disk_interface", "Primary disk interface", ["ide", "scsi", "virtio", "sd"])}
-          {selectField("hdb_disk_interface", "HDB disk interface", ["ide", "scsi", "virtio", "sd"])}{selectField("hdc_disk_interface", "HDC disk interface", ["ide", "scsi", "virtio", "sd"])}{selectField("hdd_disk_interface", "HDD disk interface", ["ide", "scsi", "virtio", "sd"])}
-          {selectField("boot_priority", "Boot priority", ["c", "d", "n", "dc", "cd"])}
-          {field("maxcpus", "Maximum CPUs", "number")}{selectField("console_type", "Console type", ["telnet", "vnc"])}{selectField("process_priority", "Process priority", ["low", "normal", "high"])}
-          <div className="sm:col-span-2">{field("config_export_command", "Export config command", "text", "Console command whose output is the exported config, e.g. /export on MikroTik RouterOS (used by Export config in the device menu).")}</div>
-          {field("config_export_username", "Export login user", "text", "Console login used before the export command. MikroTik defaults to admin.")}{field("config_export_password", "Export login password", "password", "Empty for a fresh RouterOS CHR.")}
-          <div className="sm:col-span-2">{textArea("options", "Additional QEMU options", "Command line options passed to QEMU.")}</div>
-        </>}
-        {kind === "docker" && <div className="sm:col-span-2">
-          {field("image", "Docker image")}
-          {selectField("console_type", "Console type", ["telnet", "vnc", "http", "https", "none"])}
-          {draft.console_type === "http" || draft.console_type === "https" ? <div className="grid gap-2 rounded-md border p-3 sm:col-span-2">
-            <p className="text-sm">The controller stores this console port and path but does not publish or proxy Docker ports. Open in a new tab assumes the service is reachable from your browser.</p>
-            <div className="grid gap-3 sm:grid-cols-2">{field("console_http_port", "HTTP port in the container", "number", undefined, "1")}{field("console_http_path", "HTTP path", "text", "Must begin with a slash.")}</div>
-            <Button type="button" variant="outline" className="w-fit" onClick={openHttpConsole}><ExternalLink />Open in new tab</Button>
-          </div> : null}
-          {draft.console_type === "vnc" && <div className="grid gap-2 rounded-md border p-3 sm:col-span-2">
-            <p className="text-sm text-muted-foreground">Open the device console from its context menu to use the browser VNC window. If the container runs its own VNC server, enter its port to connect to it; leave it empty to have the controller start Xvfb and x11vnc for the container.</p>
-            {field("console_vnc_port", "VNC port in the container (optional)", "number", undefined, "1")}
-          </div>}
-          {draft.console_type === "none" && <p role="status" className="text-sm text-muted-foreground sm:col-span-2">The controller does not accept Docker console type “none” yet. Select another type to save.</p>}
-          {selectField("aux_type", "Auxiliary console type", ["none", "telnet", "ssh"])}
-          {draft.aux_type !== "none" && <p role="status" className="text-sm text-muted-foreground sm:col-span-2">When the device is running, open its context menu and choose “Open auxiliary console”.</p>}
-          {textArea("start_command", "Start command", "Arguments passed to the image. Leave blank to use its default command.", 2)}
-          {textArea("environment", "Environment variables", "One KEY=VALUE entry per line.")}
-          {textArea("extra_hosts", "Extra hosts", "One host:address entry per line.")}
-          {textArea("extra_volumes", "Persistent container paths", "One absolute path inside the container per line. Data lives in the project runtime directory.")}
-        </div>}
-        {kind === "vpcs" && <div className="sm:col-span-2">{selectField("console_type", "Console type", ["telnet", "ssh", "none"])}{textArea("startup_script", "Startup script", "VPCS commands run when this device starts.")}</div>}
-        {kind === "dynamips" && <>
-          {field("memory", "RAM (MB)", "number")}{field("nvram", "NVRAM (KB)", "number")}{field("idlepc", "Idle-PC")}
-          {Array.from({ length: 8 }, (_, i) => field(`slot${i}`, `Slot ${i}`))}{Array.from({ length: 4 }, (_, i) => field(`wic${i}`, `WIC ${i}`))}
-          <div className="sm:col-span-2">{textArea("startup_config", "Startup configuration", "IOS configuration written before the router starts.", 8)}</div>
-        </>}
-        {kind === "iou" && <div className="sm:col-span-2 grid gap-3 sm:grid-cols-2">
-          <p role="status" className="text-sm text-warning sm:col-span-2">IOU runtime is unavailable here. These settings are still saved with the project node.</p>
-          {field("path", "IOU image path")}{field("ram", "RAM (MB)", "number")}{field("nvram", "NVRAM (KB)", "number")}
-          {field("ethernet_adapters", "Ethernet adapters", "number")}{field("serial_adapters", "Serial adapters", "number")}
-          {selectField("console_type", "Console type", ["telnet", "none"])}
-          <div className="sm:col-span-2">{textArea("startup_config", "Startup configuration", "Configuration content loaded from the IOU NVRAM.", 7)}</div>
-          <div className="sm:col-span-2">{textArea("private_config", "Private configuration", "Private configuration content stored in the IOU NVRAM.", 5)}</div>
-        </div>}
-      </div>
-      {requiresStopped && node.status !== "stopped" && <p role="status" className="text-sm text-muted-foreground">Stop this device to edit its runtime settings.</p>}
-      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      <DialogFooter><Button type="button" variant="ghost" disabled={saving} onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" disabled={saving || (requiresStopped && node.status !== "stopped") || (kind === "docker" && draft.console_type === "none")}>{saving ? "Saving…" : "Save device settings"}</Button></DialogFooter>
-    </form>
-  </DialogContent></Dialog>;
-}
+  const isSwitch = kind === "ethernet_switch";
+  const isHub = kind === "ethernet_hub" || kind === "hub";
+  const stoppedRequired = requiresStopped && node.status !== "stopped";
+  const portCount = Math.max(1, Math.min(64, Number(draft.adapters) || 1));
+  const setPortValue = (key: string, index: number, value: string) => setDraft((current) => {
+    const lines = Array.from({ length: portCount }, (_, row) => (current[key] ?? "").split("\n")[row] ?? "");
+    lines[index] = value;
+    return { ...current, [key]: lines.join("\n") };
+  });
+  const tabs: SettingsTab[] = [{ id: "general", label: "General", content: <>
+    <SettingsSection title="Device identity" description="These settings belong to this device in the current project.">
+      {field("name", "Device name")}
+      {kind === "docker" && field("image", "Docker image")}
+      {kind === "iou" && field("path", "IOU image path")}
+    </SettingsSection>
+    {(["qemu", "docker", "dynamips", "iou"].includes(kind ?? "")) && <SettingsSection title="Compute resources" columns>
+      {field(kind === "iou" ? "ram" : "memory", kind === "docker" ? "Memory limit (MB)" : "RAM (MB)", "number", kind === "docker" ? "0 means no Docker memory limit." : undefined)}
+      {(kind === "qemu" || kind === "docker") && field("cpus", kind === "qemu" ? "vCPUs" : "CPU limit", "number", kind === "docker" ? "0 means no Docker CPU limit." : undefined, kind === "docker" ? "0.25" : "1")}
+      {(kind === "dynamips" || kind === "iou") && field("nvram", "NVRAM (KB)", "number")}
+    </SettingsSection>}
+  </> }];
 
+  if (["qemu", "docker", "iou", "ethernet_switch", "ethernet_hub", "hub", "cloud", "nat"].includes(kind ?? "")) tabs.push({ id: "network", label: "Network", content: <>
+    <SettingsSection title={isSwitch || isHub ? "Ethernet ports" : "Network interfaces"} description={isSwitch ? "Configure each port on one row. VLAN mode and ID stay alongside the port they belong to." : undefined} columns={!isSwitch && !isHub && kind !== "cloud" && kind !== "nat"}>
+      {(kind === "qemu" || kind === "docker") && field("adapters", "Network adapters", "number", node.status !== "stopped" ? "Stop the device to change the number of adapters" : "The count cannot be reduced below ports already used by links.", undefined, node.status !== "stopped")}
+      {kind === "qemu" && selectField("adapter_type", "Network adapter model", ["e1000", "virtio-net-pci", "rtl8139", "vmxnet3"])}
+      {kind === "iou" && <>{field("ethernet_adapters", "Ethernet adapters", "number")}{field("serial_adapters", "Serial adapters", "number")}</>}
+      {(isSwitch || isHub) && <>
+        {field("adapters", "Port count", "number", "Between 1 and 64 ports. Connected ports must be kept.")}
+        <div className="relative min-w-0 overflow-x-auto rounded-lg border"><table className="w-full text-left text-xs"><thead className="bg-muted/50"><tr><th className="p-3">Port</th><th className="p-3">Name</th>{isSwitch && <><th className="p-3">VLAN</th><th className="p-3">Mode</th></>}</tr></thead><tbody>
+          {Array.from({ length: portCount }, (_, index) => <tr key={index} className="border-t">
+            <td className="px-3 text-muted-foreground">{index + 1}</td>
+            <td className="p-2"><Input aria-label={`Port ${index + 1} name`} className="min-w-32" placeholder={`Ethernet${index + 1}`} value={(draft.port_names ?? "").split("\n")[index] ?? ""} onChange={(event) => setPortValue("port_names", index, event.target.value)} /></td>
+            {isSwitch && <><td className="p-2"><Input aria-label={`Port ${index + 1} VLAN`} className="min-w-20" type="number" min={1} max={4094} value={(draft.port_vlans ?? "").split("\n")[index] || "1"} onChange={(event) => setPortValue("port_vlans", index, event.target.value)} /></td>
+              <td className="p-2"><Select value={(draft.port_types ?? "").split("\n")[index] || "access"} onValueChange={(value) => setPortValue("port_types", index, value)}><SelectTrigger aria-label={`Port ${index + 1} mode`} className="min-w-28"><SelectValue /></SelectTrigger><SelectContent position="popper" align="start">{["access", "dot1q", "qinq"].map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></td></>}
+          </tr>)}
+        </tbody></table></div>
+      </>}
+      {kind === "cloud" && textArea("interfaces", "Ethernet interfaces", "One host interface per line.")}
+      {kind === "nat" && textArea("allow_host_interfaces", "Allowed host interfaces", "Explicitly allow these host interfaces for the NAT node, one per line.")}
+    </SettingsSection>
+    {kind === "docker" && <SettingsSection title="Host entries">{textArea("extra_hosts", "Extra hosts", "One host:address entry per line.")}</SettingsSection>}
+  </> });
+
+  if (kind === "qemu") tabs.push({ id: "storage", label: "Storage", content: <>
+    <SettingsSection title="Virtual disks" description="Each image is paired with its disk interface. Leave optional disk images blank.">
+      {["hda", "hdb", "hdc", "hdd"].map((disk, index) => <div key={disk} className="grid items-start gap-4 rounded-lg border p-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        {field(`${disk}_disk_image`, `${disk.toUpperCase()} disk image`)}
+        {selectField(`${disk}_disk_interface`, index === 0 ? "Primary disk interface" : `${disk.toUpperCase()} disk interface`, ["ide", "scsi", "virtio", "sd"])}
+      </div>)}
+    </SettingsSection>
+    <SettingsSection title="Boot media" columns>{field("cdrom_image", "CD-ROM image")}{selectField("boot_priority", "Boot priority", ["c", "d", "n", "dc", "cd"])}</SettingsSection>
+  </> });
+
+  if (["qemu", "docker", "vpcs", "iou"].includes(kind ?? "")) tabs.push({ id: "console", label: "Console", content: <>
+    <SettingsSection title="Console connection" description="Choose how you connect to this device.">
+      {selectField("console_type", "Console type", kind === "docker" ? ["telnet", "vnc", "http", "https", "none"] : kind === "qemu" ? ["telnet", "vnc"] : kind === "vpcs" ? ["telnet", "ssh", "none"] : ["telnet", "none"])}
+      {kind === "docker" && (draft.console_type === "http" || draft.console_type === "https") && <>
+        <div className="grid items-start gap-4 sm:grid-cols-2">{field("console_http_port", "HTTP port in the container", "number", undefined, "1")}{field("console_http_path", "HTTP path", "text", "Must begin with a slash.")}</div>
+        <SettingsNotice>The service must be reachable from your browser. The controller does not publish or proxy Docker HTTP ports.</SettingsNotice>
+        <Button type="button" variant="outline" className="w-fit" onClick={openHttpConsole}><ExternalLink />Open in new tab</Button>
+      </>}
+      {kind === "docker" && draft.console_type === "vnc" && <>{field("console_vnc_port", "VNC port in the container (optional)", "number", "Enter the port of an existing VNC server, or leave blank to start Xvfb and x11vnc automatically.", "1")}<SettingsNotice>Open the device console from its context menu to use the browser VNC window.</SettingsNotice></>}
+      {kind === "docker" && draft.console_type === "none" && <SettingsNotice>The controller does not accept Docker console type “none” yet. Select another type to save.</SettingsNotice>}
+    </SettingsSection>
+    {kind === "docker" && <SettingsSection title="Auxiliary console">
+      {selectField("aux_type", "Auxiliary console type", ["none", "telnet", "ssh"])}
+      {draft.aux_type !== "none" && <SettingsNotice>When the device is running, open its auxiliary console from the device menu.</SettingsNotice>}
+    </SettingsSection>}
+    {kind === "qemu" && <SettingsSection title="Configuration export" description="Used by Export config in the device menu.">
+      {field("config_export_command", "Export config command", "text", "For example, /export on MikroTik RouterOS.")}
+      <div className="grid items-start gap-4 sm:grid-cols-2">{field("config_export_username", "Export login user", "text", "MikroTik defaults to admin.")}{field("config_export_password", "Export login password", "password", "Empty for a fresh RouterOS CHR.")}</div>
+    </SettingsSection>}
+  </> });
+
+  if (["docker", "vpcs", "dynamips", "iou"].includes(kind ?? "")) tabs.push({ id: "startup", label: "Startup", content: <SettingsSection title="Startup configuration" description="Applied when this device starts.">
+    {kind === "docker" && <>{textArea("start_command", "Start command", "Leave blank to use the image default.", 3)}{textArea("environment", "Environment variables", "One KEY=VALUE entry per line.", 6)}</>}
+    {kind === "vpcs" && textArea("startup_script", "Startup script", "VPCS commands run when this device starts.", 10)}
+    {(kind === "dynamips" || kind === "iou") && textArea("startup_config", "Startup configuration", "Configuration written before the router starts.", 10)}
+    {kind === "iou" && textArea("private_config", "Private configuration", "Private configuration content stored in the IOU NVRAM.", 6)}
+  </SettingsSection> });
+  if (kind === "docker") tabs.push({ id: "storage", label: "Storage", content: <SettingsSection title="Persistent storage" description="Preserve selected container data when runtime settings replace the stopped container.">{textArea("extra_volumes", "Persistent container paths", "One absolute path inside the container per line. Data lives in the project runtime directory.", 8)}</SettingsSection> });
+  if (kind === "dynamips") tabs.push({ id: "adapters", label: "Adapters", content: <>
+    <SettingsSection title="Module slots" columns>{Array.from({ length: 8 }, (_, i) => field(`slot${i}`, `Slot ${i}`))}</SettingsSection>
+    <SettingsSection title="WAN interface cards" columns>{Array.from({ length: 4 }, (_, i) => field(`wic${i}`, `WIC ${i}`))}</SettingsSection>
+  </> });
+  if (kind === "qemu" || kind === "dynamips") tabs.push({ id: "advanced", label: "Advanced", content: <SettingsSection title="Runtime tuning">
+    {kind === "qemu" ? <><div className="grid items-start gap-4 sm:grid-cols-2">{field("maxcpus", "Maximum CPUs", "number")}{selectField("process_priority", "Process priority", ["low", "normal", "high"])}</div>{textArea("options", "Additional QEMU options", "Command line options passed to QEMU.", 6)}</> : field("idlepc", "Idle-PC", "text", "Use an Idle-PC value appropriate for the installed IOS image.")}
+  </SettingsSection> });
+
+  return <SettingsDialog open={open} onOpenChange={onOpenChange} title={`Configure ${node.name}`} description="Manage hardware, connections, and startup settings for this device."
+    context={<><Badge variant="outline" className="uppercase">{kind?.replaceAll("_", " ")}</Badge><span className="capitalize">{node.status ?? "Unknown status"}</span></>}
+    tabs={tabs} onSubmit={(event) => void save(event)} saving={saving} saveDisabled={stoppedRequired || (kind === "docker" && draft.console_type === "none") || !draft.name?.trim()} saveLabel="Save device settings" error={error}
+    notice={stoppedRequired ? <SettingsNotice>Stop this device to edit its runtime settings.</SettingsNotice> : kind === "docker" && draft.console_type === "none" ? <SettingsNotice>Choose a supported console type in the Console tab before saving.</SettingsNotice> : kind === "iou" && node.runtime_supported === false ? <SettingsNotice>IOU runtime is unavailable here. These settings are still saved with the project node.</SettingsNotice> : undefined} />;
+}

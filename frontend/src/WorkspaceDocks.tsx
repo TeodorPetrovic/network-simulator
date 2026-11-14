@@ -9,6 +9,10 @@ import { Card } from "@/components/ui/card";
 import { NodeInspector } from "./WorkspaceDeviceComponents";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 
+import { deviceState } from "./projectHealth";
+
+const stateColors = { running: "bg-success", stopped: "bg-muted-foreground/50", suspended: "bg-warning", unavailable: "bg-destructive", unknown: "bg-warning" };
+
 export type WorkspaceDocksProps = {
   workspace: SimulatorWorkspaceProps;
   topology: TopologySnapshot;
@@ -30,8 +34,8 @@ export function WorkspaceDocks({ workspace, topology, topologyOpen, serversOpen,
       <ScrollArea className="min-h-0 flex-1">
         {topology.nodes.length ? topology.nodes.map((node) => <div key={node.node_id} className={workspace.selectedNode?.node_id === node.node_id ? "bg-accent/40" : ""}>
           <ContextMenu><ContextMenuTrigger asChild><Button variant="ghost" className="h-auto w-full justify-start gap-2 rounded-none px-3 py-2 text-left hover:bg-accent/50" onClick={() => workspace.onSelectNode(node.node_id)}>
-            <span className={`size-2 shrink-0 rounded-full ${node.status === "started" ? "bg-success" : node.status === "suspended" ? "bg-warning" : "bg-muted-foreground/50"}`} />
-            <span className="flex min-w-0 flex-col"><b className="truncate text-xs">{node.name}</b><small className="text-[11px] text-muted-foreground">{node.node_type ?? "device"}</small></span>
+            <span className={`size-2 shrink-0 rounded-full ${stateColors[deviceState(node)]}`} />
+            <span className="flex min-w-0 flex-col"><b className="truncate text-xs">{node.name}</b><small className="text-[11px] text-muted-foreground">{node.node_type ?? "device"} · {deviceState(node)}</small></span>
           </Button></ContextMenuTrigger>{renderNodeContextMenu(node.node_id)}</ContextMenu>
           {workspace.selectedNode?.node_id === node.node_id && <NodeInspector key={node.node_id} node={node} links={topology.links} nodes={topology.nodes} onLifecycle={workspace.onNodeLifecycle} onOpenConsole={workspace.onOpenConsole} onRename={workspace.onNodeRename} onConfigure={onConfigureNode} onDelete={workspace.onDeleteSelection} />}
         </div>) : <p className="p-4 text-center text-xs text-muted-foreground">No devices on this topology.</p>}

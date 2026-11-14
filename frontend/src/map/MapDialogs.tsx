@@ -6,6 +6,7 @@ import type { Link, LinkEndpoint, NetworkSymbol, Node, ProjectSnapshot } from ".
 import type { DrawingTool } from "./helpers";
 import { endpointName, interfacesForNode } from "./helpers";
 import { Button } from "@/components/ui/button";
+import { SettingsDialog, SettingsSection } from "@/components/settings-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -143,9 +144,10 @@ export function SymbolPickerDialog({ projectId, node, open, onOpenChange, onSave
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
   useEffect(() => {
     if (!open) return;
-    setLoading(true); setError("");
+    setLoading(true); setError(""); setSelected(String(node?.symbol ?? ""));
     void Promise.allSettled([api.listSymbols(), api.defaultSymbols()]).then(([customResult, defaultsResult]) => {
       const custom = customResult.status === "fulfilled" ? customResult.value.map((item) => typeof item === "string" ? { name: item, symbol_id: item } : { ...item, name: item.name ?? item.filename ?? item.symbol_id ?? "Unknown symbol" }) : [];
       const defaults = defaultsResult.status === "fulfilled" ? Object.entries(defaultsResult.value.symbols).map(([name, filename]) => ({ name, filename, symbol_id: filename.startsWith(":/") ? filename : `:/symbols/${filename}` })) : [];
@@ -153,12 +155,14 @@ export function SymbolPickerDialog({ projectId, node, open, onOpenChange, onSave
       setSymbols([...custom, ...defaults.filter((item) => !seen.has(item.symbol_id))]);
       if (!custom.length && !defaults.length) setError(`Symbols are not available: ${errorMessage(customResult.status === "rejected" ? customResult.reason : defaultsResult.status === "rejected" ? defaultsResult.reason : null)}`);
     }).finally(() => setLoading(false));
-  }, [open]);
+  }, [open, node?.node_id]);
   if (!node) return null;
   async function save() {
     if (!node || !selected) return;
+    setSaving(true);
     try { const updated = await api.updateNode(projectId, node.node_id, { symbol: selected }); onSaved(updated); onOpenChange(false); }
     catch (reason) { setError(`Could not change symbol: ${errorMessage(reason)}`); }
+    finally { setSaving(false); }
   }
   async function upload(file?: File) {
     if (!file) return;
@@ -167,19 +171,18 @@ export function SymbolPickerDialog({ projectId, node, open, onOpenChange, onSave
       await api.uploadProjectSymbol(projectId, file);
       const id = file.name;
       setSelected(id);
-      setSymbols((current) => [...current.filter((item) => (item.symbol_id ?? item.filename) !== id), { symbol_id: id, filename: id, name: id, builtin: false }, ...current]);
+      setSymbols((current) => [...current.filter((item) => (item.symbol_id ?? item.filename) !== id), { symbol_id: id, filename: id, name: id, builtin: false }]);
     } catch (reason) { setError(`Could not upload symbol: ${errorMessage(reason)}`); }
     finally { setUploading(false); }
   }
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent>
-    <DialogHeader><DialogTitle>Change symbol for {node.name}</DialogTitle><DialogDescription>Choose a symbol from the controller library.</DialogDescription></DialogHeader>
+  return <SettingsDialog open={open} onOpenChange={onOpenChange} title={`Change symbol for ${node.name}`} description="Choose a library symbol or upload your own image for this device." onSubmit={(event) => { event.preventDefault(); void save(); }} saving={saving} saveDisabled={!selected || loading || uploading} saveLabel="Apply symbol" error={error}>
+    <SettingsSection title="Device appearance">
     {loading && <p className="text-sm text-muted-foreground">Loading symbols…</p>}
-    {symbols.length > 0 && <Select value={selected} onValueChange={setSelected}><SelectTrigger aria-label="Node symbol"><SelectValue placeholder="Choose a symbol" /></SelectTrigger><SelectContent>{symbols.map((symbol) => { const value = symbol.symbol_id ?? symbol.path ?? symbol.filename ?? symbol.name ?? "unknown"; return <SelectItem key={value} value={value}>{symbol.name ?? symbol.filename ?? value}</SelectItem>; })}</SelectContent></Select>}
+    {symbols.length > 0 && <Select value={selected} onValueChange={setSelected}><SelectTrigger aria-label="Node symbol"><SelectValue placeholder="Choose a symbol" /></SelectTrigger><SelectContent position="popper" align="start">{symbols.map((symbol) => { const value = symbol.symbol_id ?? symbol.path ?? symbol.filename ?? symbol.name ?? "unknown"; return <SelectItem key={value} value={value}>{symbol.name ?? symbol.filename ?? value}</SelectItem>; })}</SelectContent></Select>}
     <div className="grid gap-1.5 text-sm"><Label htmlFor="map-upload-custom-symbol">Upload custom symbol</Label><Input id="map-upload-custom-symbol" type="file" accept="image/svg+xml,image/png,image/jpeg" aria-label="Upload custom symbol" disabled={uploading} onChange={(event) => { void upload(event.target.files?.[0]); event.currentTarget.value = ""; }} />{uploading && <span className="text-muted-foreground">Uploading symbol…</span>}</div>
-    {error && <Unavailable message={error} />}
     {!loading && !error && symbols.length === 0 && <p className="text-sm text-muted-foreground">The controller returned no symbols.</p>}
-    <DialogFooter><Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button><Button disabled={!selected || loading || uploading} onClick={() => void save()}>Apply symbol</Button></DialogFooter>
-  </DialogContent></Dialog>;
+    </SettingsSection>
+  </SettingsDialog>;
 }
 
 export function LogConsoleDialog({ projectId, cursor, open, onOpenChange, onCountsChange }: { projectId: string; cursor: number; open: boolean; onOpenChange: (open: boolean) => void; onCountsChange?: (level: "error" | "warning") => void }) {

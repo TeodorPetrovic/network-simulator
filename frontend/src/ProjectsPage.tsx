@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowDown, ArrowUp, BarChart3, Copy, Download, FileUp, FolderOpen, Pencil, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, BarChart3, ChevronDown, Copy, Download, FileUp, FolderOpen, Pencil, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import type { Project, ProjectStatistics } from "./api";
 import { api } from "./api";
 import { PagesShell, PageLayout, PageTitle } from "./PagesShell";
@@ -11,7 +11,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useConfirm } from "@/components/confirm-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -19,6 +19,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 const MarketplaceDialog = lazy(() => import("./MarketplaceDialog").then((module) => ({ default: module.MarketplaceDialog })));
+
+import { ProjectHealthIndicator } from "./ProjectHealthIndicator";
+import { useProjectHealth } from "./useProjectHealth";
 
 type SortColumn = "name" | "status" | "created_at";
 type ProjectDraft = {
@@ -78,6 +81,7 @@ function RoutedProjectsPage({ onOpenAppliances }: { onOpenAppliances?: () => voi
 
 function ProjectsPageContent({ navigateProject, onOpenAppliances, embedded = false }: { navigateProject: (id: string) => void; onOpenAppliances?: () => void; embedded?: boolean }) {
   const [projects, setProjects] = useState<Project[]>([]);
+  const healthSnapshots = useProjectHealth(projects);
   const [busy, setBusy] = useState(true);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
@@ -155,10 +159,10 @@ function ProjectsPageContent({ navigateProject, onOpenAppliances, embedded = fal
     try { window.localStorage.setItem(EXPORT_OPTIONS_KEY, JSON.stringify(next)); } catch { /* storage unavailable */ }
   }
 
-  async function exportProject(project: Project) {
+  async function exportProject(project: Project, options: ExportOptions = exportOptions) {
     setError(""); setWorking(true);
     try {
-      const blob = await api.exportProject(project.project_id, exportOptions);
+      const blob = await api.exportProject(project.project_id, options);
       const href = URL.createObjectURL(blob); const anchor = document.createElement("a");
       anchor.href = href; anchor.download = `${project.name}.gns3project`; anchor.click(); URL.revokeObjectURL(href);
     } catch (reason) { setError(`Export unavailable: ${message(reason)}`); }
@@ -225,23 +229,33 @@ function ProjectsPageContent({ navigateProject, onOpenAppliances, embedded = fal
     {error && <div role="alert" className="flex items-center justify-between rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">{error}<Button size="sm" variant="ghost" onClick={() => setError("")}>Dismiss</Button></div>}
     {notice && <div role="status" className="rounded-md border bg-muted px-4 py-3 text-sm">{notice}</div>}
 
-    <div className="my-5 flex flex-wrap items-center gap-3"><form className="flex min-w-64 flex-1 gap-2" onSubmit={(event) => void createProject(event)}><Input aria-label="New project name" placeholder="Project name" value={newName} onChange={(event) => setNewName(event.target.value)} /><Button type="submit" disabled={working || !newName.trim()}><Plus size={16} />Create project</Button></form><Button variant="outline" onClick={() => { setImportOpen(true); setError(""); }}><FileUp size={16} />Import .gns3project</Button><div className="flex items-center gap-1.5 text-sm" title="GNS3 edition the exported archive is written for"><Label htmlFor="export-gns3-version">Export for GNS3</Label><NativeSelect id="export-gns3-version" aria-label="Export for GNS3 edition" value={exportOptions.gns3Version} onChange={(event) => updateExportOptions({ ...exportOptions, gns3Version: event.target.value })}><NativeSelectOption value="2.2">2.2.x (also opens in 3.x)</NativeSelectOption><NativeSelectOption value="3.1">3.1 (3.x only)</NativeSelectOption></NativeSelect></div><div className="flex items-center gap-1.5 text-sm" title="Embed the disk images the project uses (IOS, QEMU) so it runs on a machine that does not have them"><Checkbox id="export-include-images" aria-label="Include images in export" checked={exportOptions.includeImages} onCheckedChange={(checked) => updateExportOptions({ ...exportOptions, includeImages: checked === true })} /><Label htmlFor="export-include-images">Include images</Label></div><div className="relative min-w-56 flex-1"><Search size={15} aria-hidden="true" className="pointer-events-none absolute left-2.5 top-2.5 text-muted-foreground" /><Input className="pl-8" aria-label="Search projects by name" placeholder="Search by name…" value={query} onChange={(event) => setQuery(event.target.value)} /></div></div>
+    <div className="my-5 flex flex-wrap items-center gap-3"><form className="flex min-w-64 flex-1 gap-2" onSubmit={(event) => void createProject(event)}><Input aria-label="New project name" placeholder="Project name" value={newName} onChange={(event) => setNewName(event.target.value)} /><Button type="submit" disabled={working || !newName.trim()}><Plus size={16} />Create project</Button></form><Button variant="outline" onClick={() => { setImportOpen(true); setError(""); }}><FileUp size={16} />Import .gns3project</Button><div className="relative min-w-56 flex-1"><Search size={15} aria-hidden="true" className="pointer-events-none absolute left-2.5 top-2.5 text-muted-foreground" /><Input className="pl-8" aria-label="Search projects by name" placeholder="Search by name…" value={query} onChange={(event) => setQuery(event.target.value)} /></div></div>
 
     <Card className="overflow-hidden"><Table><TableHeader><TableRow>
       {([ ["name", "Project"], ["status", "Status"], ["created_at", "Created"] ] as Array<[SortColumn, string]>).map(([key, label]) => <TableHead key={key}><Button variant="ghost" size="sm" className="-ml-2.5 font-medium" onClick={() => setSortColumn(key)}>{label}{sort.column === key && (sort.direction === "asc" ? <ArrowUp size={13} /> : <ArrowDown size={13} />)}</Button></TableHead>)}
-      <TableHead>Actions</TableHead>
+      <TableHead>Health</TableHead><TableHead>Actions</TableHead>
     </TableRow></TableHeader><TableBody>
-      {busy ? <TableRow><TableCell colSpan={4} className="py-10 text-center text-muted-foreground">Loading projects…</TableCell></TableRow> : visibleProjects.length === 0 ? <TableRow><TableCell colSpan={4} className="py-10 text-center text-muted-foreground">{query ? "No projects match this search." : "No projects yet. Create one or import a .gns3project archive."}</TableCell></TableRow> : visibleProjects.map((project) => <TableRow key={project.project_id}>
+      {busy ? <TableRow><TableCell colSpan={5} className="py-10 text-center text-muted-foreground">Loading projects…</TableCell></TableRow> : visibleProjects.length === 0 ? <TableRow><TableCell colSpan={5} className="py-10 text-center text-muted-foreground">{query ? "No projects match this search." : "No projects yet. Create one or import a .gns3project archive."}</TableCell></TableRow> : visibleProjects.map((project) => <TableRow key={project.project_id}>
         <TableCell><div className="flex items-center gap-2"><FolderOpen size={16} className="text-primary" /><div><div className="font-medium">{project.name}</div><div className="text-xs text-muted-foreground">{project.project_id}</div></div></div></TableCell>
         <TableCell><Badge variant={project.status === "opened" ? "default" : "secondary"}>{project.status ?? "closed"}</Badge></TableCell>
         <TableCell>{typeof project.created_at === "string" ? new Date(project.created_at).toLocaleString() : "—"}</TableCell>
+        <TableCell>{healthSnapshots[project.project_id]?.health ? <ProjectHealthIndicator health={healthSnapshots[project.project_id].health!} checkedAt={healthSnapshots[project.project_id].checkedAt} /> : <span className="text-xs text-muted-foreground" title={healthSnapshots[project.project_id]?.error}>{healthSnapshots[project.project_id]?.error ? "Unavailable" : "Checking…"}</span>}</TableCell>
         <TableCell><div className="flex flex-wrap justify-end gap-1">
           <Button size="sm" onClick={() => navigateProject(project.project_id)}><FolderOpen size={14} />Open project</Button>
           {project.status === "opened" && <Button size="sm" variant="outline" disabled={working} onClick={() => void closeProject(project)}>Close project</Button>}
           <Button size="icon-sm" variant="ghost" title="Project settings" aria-label={`Settings for ${project.name}`} onClick={() => openSettings(project)}><Pencil size={15} /></Button>
           <Button size="icon-sm" variant="ghost" title="Project readme" aria-label={`Readme for ${project.name}`} onClick={() => void openReadme(project)}><span className="text-xs font-semibold">R</span></Button>
           <Button size="icon-sm" variant="ghost" title="Project statistics" aria-label={`Statistics for ${project.name}`} onClick={() => void openStatistics(project)}><BarChart3 size={15} /></Button>
-          <Button size="icon-sm" variant="ghost" title="Export project" aria-label={`Export ${project.name}`} disabled={working} onClick={() => void exportProject(project)}><Download size={15} /></Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild><Button size="sm" variant="outline" disabled={working} aria-label={`Export ${project.name}`} title="Export project as a .gns3project archive"><Download size={15} />Export<ChevronDown size={14} /></Button></DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64">
+              <DropdownMenuLabel>Export for GNS3</DropdownMenuLabel>
+              <DropdownMenuItem onSelect={() => { const next = { ...exportOptions, gns3Version: "2.2" }; updateExportOptions(next); void exportProject(project, next); }}>GNS3 2.2.x<span className="ml-auto text-xs text-muted-foreground">also opens in 3.x</span></DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => { const next = { ...exportOptions, gns3Version: "3.1" }; updateExportOptions(next); void exportProject(project, next); }}>GNS3 3.1<span className="ml-auto text-xs text-muted-foreground">3.x only</span></DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem checked={exportOptions.includeImages} onSelect={(event) => event.preventDefault()} onCheckedChange={(checked) => updateExportOptions({ ...exportOptions, includeImages: checked === true })}>Include disk images</DropdownMenuCheckboxItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button size="icon-sm" variant="ghost" title="Duplicate project" aria-label={`Duplicate ${project.name}`} onClick={() => { setDuplicateTarget(project); setDuplicateName(`${project.name} copy`); }}><Copy size={15} /></Button>
           <Button size="icon-sm" variant="ghost" title="Delete project" aria-label={`Delete ${project.name}`} onClick={() => void deleteProject(project)}><Trash2 size={15} /></Button>
         </div></TableCell>
