@@ -1,7 +1,8 @@
+import { Brand } from "@/components/brand";
 import type { ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
-import { Activity, Boxes, Cpu, FolderOpen, HardDrive, Network, Settings2, ShieldCheck, UserRound, Waypoints } from "lucide-react";
+import { Activity, Boxes, Cpu, FolderOpen, HardDrive, Network, Settings2, ShieldCheck, UserRound } from "lucide-react";
 
 const sections = [
   { to: "/", label: "Projects", icon: FolderOpen },
@@ -17,8 +18,8 @@ const sections = [
 
 export function PagesShell({ children, active, fromProject }: { children: ReactNode; active: string; fromProject?: string }) {
   return <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
-    <header className="flex min-h-14 shrink-0 items-center gap-5 border-b bg-background px-4 sm:px-6">
-      <Link to="/" className="inline-flex shrink-0 items-center gap-2 font-semibold tracking-tight text-foreground no-underline"><span className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground"><Waypoints size={17} /></span><span>Network Studio</span></Link>
+    <header className="flex h-14 min-h-14 shrink-0 items-center gap-5 border-b bg-background px-4 sm:px-6">
+      <Link to="/" className="inline-flex shrink-0 items-center text-foreground no-underline"><Brand /></Link>
       <nav className="flex min-w-0 items-center gap-1 overflow-x-auto" aria-label="Application pages">
         {sections.map(({ to, label, icon: Icon }) => {
           const cls = cn("inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-xs font-medium text-muted-foreground no-underline transition-colors hover:bg-accent hover:text-accent-foreground", active === label && "bg-accent text-accent-foreground");

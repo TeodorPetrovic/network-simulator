@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowDown, ArrowUp, BarChart3, ChevronDown, Copy, Download, FileUp, FolderOpen, Pencil, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
+import { BookOpen, ArrowDown, ArrowUp, BarChart3, Copy, Download, FileUp, FolderOpen, Pencil, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import type { Project, ProjectStatistics } from "./api";
 import { api } from "./api";
 import { PagesShell, PageLayout, PageTitle } from "./PagesShell";
@@ -244,10 +244,10 @@ function ProjectsPageContent({ navigateProject, onOpenAppliances, embedded = fal
           <Button size="sm" onClick={() => navigateProject(project.project_id)}><FolderOpen size={14} />Open project</Button>
           {project.status === "opened" && <Button size="sm" variant="outline" disabled={working} onClick={() => void closeProject(project)}>Close project</Button>}
           <Button size="icon-sm" variant="ghost" title="Project settings" aria-label={`Settings for ${project.name}`} onClick={() => openSettings(project)}><Pencil size={15} /></Button>
-          <Button size="icon-sm" variant="ghost" title="Project readme" aria-label={`Readme for ${project.name}`} onClick={() => void openReadme(project)}><span className="text-xs font-semibold">R</span></Button>
+          <Button size="icon-sm" variant="ghost" title="Project readme" aria-label={`Readme for ${project.name}`} onClick={() => void openReadme(project)}><BookOpen size={15} /></Button>
           <Button size="icon-sm" variant="ghost" title="Project statistics" aria-label={`Statistics for ${project.name}`} onClick={() => void openStatistics(project)}><BarChart3 size={15} /></Button>
           <DropdownMenu>
-            <DropdownMenuTrigger asChild><Button size="sm" variant="outline" disabled={working} aria-label={`Export ${project.name}`} title="Export project as a .gns3project archive"><Download size={15} />Export<ChevronDown size={14} /></Button></DropdownMenuTrigger>
+            <DropdownMenuTrigger asChild><Button size="icon-sm" variant="ghost" disabled={working} aria-label={`Export ${project.name}`} title="Export project"><Download size={15} /></Button></DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-64">
               <DropdownMenuLabel>Export for GNS3</DropdownMenuLabel>
               <DropdownMenuItem onSelect={() => { const next = { ...exportOptions, gns3Version: "2.2" }; updateExportOptions(next); void exportProject(project, next); }}>GNS3 2.2.x<span className="ml-auto text-xs text-muted-foreground">also opens in 3.x</span></DropdownMenuItem>
