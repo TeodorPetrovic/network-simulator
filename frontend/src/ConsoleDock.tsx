@@ -176,7 +176,7 @@ export function ConsoleSession({ target, active }: { target: ConsoleTarget; acti
     return () => cancelAnimationFrame(frame);
   }, [active]);
 
-  return <div className={`${active ? "flex" : "hidden"} h-full flex-col`} role="region" aria-label={`${target.auxiliary ? "Auxiliary console" : "Console"} for ${target.nodeName}`} aria-hidden={!active}>
+  return <div className={`${active ? "flex" : "hidden"} h-full min-w-0 flex-1 flex-col`} role="region" aria-label={`${target.auxiliary ? "Auxiliary console" : "Console"} for ${target.nodeName}`} aria-hidden={!active}>
     <div ref={terminalElement} className="min-h-0 w-full flex-1 px-2.5 py-1.5 [&_.xterm]:h-full [&_.xterm-viewport]:!overflow-y-auto" />
   </div>;
 }
