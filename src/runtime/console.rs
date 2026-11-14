@@ -402,8 +402,12 @@ impl DockerRuntime {
         let docker_binary = shlex::try_quote(&docker_binary).map_err(|_| {
             RuntimeError::Failed("Docker CLI path cannot be quoted safely".to_owned())
         })?;
+        // `script` allocates a PTY of size 0x0, and `docker attach` copies that size onto the
+        // container's TTY. Readline then believes the screen has no columns and stops drawing the
+        // prompt and typed characters. Give the local PTY a sane size first; the browser sends the
+        // real size afterwards through the resize control frame.
         let attach_command = format!(
-            "{docker_binary} attach --sig-proxy=false --detach-keys=ctrl-p,ctrl-q {container_id}"
+            "stty rows 24 cols 80; {docker_binary} attach --sig-proxy=false --detach-keys=ctrl-p,ctrl-q {container_id}"
         );
         let mut command = Command::new("script");
         command
