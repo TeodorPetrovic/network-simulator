@@ -34,7 +34,7 @@ export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, 
   const supported = (label: string, action: () => void, disabled = false) => <MenubarItem disabled={disabled} onSelect={action}>{label}</MenubarItem>;
   const draw = (tool: DrawingTool, label: string) => supported(label, () => startDrawingTool(tool));
   const selected = selectedLifecycleNodes.length > 0;
-  return <header className="z-5 flex min-h-11 min-w-0 items-center gap-3 border-b bg-background px-3 py-0.5 [&>[data-slot=menubar]]:min-w-0 [&>[data-slot=menubar]]:flex-1 [&>[data-slot=menubar]]:overflow-x-auto [&>[data-slot=menubar]]:[scrollbar-width:none]" aria-label="Project workspace menu">
+  return <header className="z-5 flex h-14 min-h-14 min-w-0 items-center gap-5 border-b bg-background px-4 sm:px-6 [&>[data-slot=menubar]]:min-w-0 [&>[data-slot=menubar]]:flex-1 [&>[data-slot=menubar]]:overflow-x-auto [&>[data-slot=menubar]]:[scrollbar-width:none]" aria-label="Project workspace menu">
     <div className="flex min-w-30 items-center gap-2 overflow-hidden text-xs"><button type="button" className="inline-flex shrink-0 items-center rounded-md" title="Back to projects" aria-label="Back to projects" onClick={props.onBack}><Brand showName={false} /></button><strong className="truncate">{props.project.name}</strong></div>
     <Menubar>
       <MenubarMenu><MenuTrigger label="File" icon={<FolderOpen />} /><MenubarContent>
