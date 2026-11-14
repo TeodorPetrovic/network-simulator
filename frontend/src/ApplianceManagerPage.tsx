@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import { ArrowLeft, Check, ChevronDown, Download, FileUp, HardDrive, Plus, RefreshCw, Search, Server, Upload, X } from "lucide-react";
+import { Check, ChevronDown, Download, FileUp, HardDrive, Plus, RefreshCw, Search, Server, Upload, X } from "lucide-react";
+import { PageTitle } from "./PagesShell";
 import { api } from "./api";
 import type { ApplianceImageRequirement, ApplianceVersion, Gns3Appliance, Gns3ApplianceSearchResult, LocalApplianceImage, RuntimeTemplate } from "./api";
 import { Badge } from "@/components/ui/badge";
@@ -28,7 +29,7 @@ import { applianceRuntimeLabel, CreateCustomApplianceDialog, EmptyState, errorMe
 
 type LibraryEntry = { id: string; name: string; runtime: string; appliance: Gns3Appliance };
 
-export function ApplianceManagerPage({ onBack, onOpenPreferences, onOpenImageCatalog, onTemplatesChanged }: { onBack: () => void; onOpenPreferences?: () => void; onOpenImageCatalog?: () => void; onTemplatesChanged?: (templates: Awaited<ReturnType<typeof api.templates>>) => void }) {
+export function ApplianceManagerPage({ onOpenPreferences, onOpenImageCatalog, onTemplatesChanged }: { onBack?: () => void; onOpenPreferences?: () => void; onOpenImageCatalog?: () => void; onTemplatesChanged?: (templates: Awaited<ReturnType<typeof api.templates>>) => void }) {
   const [tab, setTab] = useState<ManagerTab>(() => loadPersisted().tab === "registry" ? "registry" : "installed");
   const [appliances, setAppliances] = useState<Gns3Appliance[]>([]);
   const [localImages, setLocalImages] = useState<LocalApplianceImage[]>([]);
@@ -281,14 +282,10 @@ export function ApplianceManagerPage({ onBack, onOpenPreferences, onOpenImageCat
     setNotice(`${appliance.name} was created in the appliance library and is available to projects when its runtime is ready.`);
   }
 
-  return <div className="mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col gap-4 p-6">
-    <header className="flex flex-wrap items-center justify-between gap-4 border-b pb-4">
-      <div className="flex min-w-0 items-center gap-3">
-        <Button variant="outline" size="icon" onClick={onBack} aria-label="Back"><ArrowLeft /></Button>
-        <div className="min-w-0"><h1 className="text-xl font-semibold tracking-tight">Appliance library</h1><p className="mt-1 text-sm text-muted-foreground">GNS3 imports and appliances you create are the only device definitions shared with projects.</p></div>
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-muted-foreground">{appliances.length} appliances · {readyCount} ready configurations</span>
+  return <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col gap-4 px-4 py-6 sm:px-6 lg:px-8">
+    <PageTitle eyebrow="LAB MANAGEMENT" title="Appliance library" description="GNS3 imports and appliances you create are the only device definitions shared with projects." actions={<>
+        
+        <span className="self-center text-xs text-muted-foreground">{appliances.length} appliances · {readyCount} ready configurations</span>
         {onOpenPreferences && <Button variant="outline" onClick={onOpenPreferences}>Preferences</Button>}
         <Button onClick={() => setCustomDialogOpen(true)}><Plus />Create custom appliance</Button>
         <CreateCustomApplianceDialog open={customDialogOpen} onOpenChange={setCustomDialogOpen} imageOptions={customImageOptions} onCreated={customApplianceCreated} />
@@ -313,8 +310,7 @@ export function ApplianceManagerPage({ onBack, onOpenPreferences, onOpenImageCat
         </Dialog>
         {onOpenImageCatalog && <Button variant="outline" onClick={onOpenImageCatalog}><HardDrive />Image catalog</Button>}
         <Button variant="outline" onClick={() => void refreshManager()} disabled={busy}><RefreshCw className={busy ? "animate-spin" : ""} />Refresh library</Button>
-      </div>
-    </header>
+      </>} />
 
     {(error || notice) && <div className="fixed bottom-4 right-4 z-50 w-[min(420px,calc(100vw-32px))]" aria-live="polite" aria-atomic="true">
       <div className={`flex min-h-12 items-center gap-2 rounded-lg border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-lg ${error ? "border-destructive text-destructive" : ""}`} role={error ? "alert" : "status"}>

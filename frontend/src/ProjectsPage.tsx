@@ -236,11 +236,11 @@ function ProjectsPageContent({ navigateProject, onOpenAppliances, embedded = fal
       <TableHead>Health</TableHead><TableHead>Actions</TableHead>
     </TableRow></TableHeader><TableBody>
       {busy ? <TableRow><TableCell colSpan={5} className="py-10 text-center text-muted-foreground">Loading projects…</TableCell></TableRow> : visibleProjects.length === 0 ? <TableRow><TableCell colSpan={5} className="py-10 text-center text-muted-foreground">{query ? "No projects match this search." : "No projects yet. Create one or import a .gns3project archive."}</TableCell></TableRow> : visibleProjects.map((project) => <TableRow key={project.project_id}>
-        <TableCell><div className="flex items-center gap-2"><FolderOpen size={16} className="text-primary" /><div><div className="font-medium">{project.name}</div><div className="text-xs text-muted-foreground">{project.project_id}</div></div></div></TableCell>
+        <TableCell className="w-full max-w-0"><div className="flex items-center gap-2"><FolderOpen size={16} className="shrink-0 text-primary" /><div className="min-w-0"><div className="truncate font-medium" title={project.name}>{project.name}</div><div className="truncate text-xs text-muted-foreground">{project.project_id}</div></div></div></TableCell>
         <TableCell><Badge variant={project.status === "opened" ? "default" : "secondary"}>{project.status ?? "closed"}</Badge></TableCell>
         <TableCell>{typeof project.created_at === "string" ? new Date(project.created_at).toLocaleString() : "—"}</TableCell>
         <TableCell>{healthSnapshots[project.project_id]?.health ? <ProjectHealthIndicator health={healthSnapshots[project.project_id].health!} checkedAt={healthSnapshots[project.project_id].checkedAt} /> : <span className="text-xs text-muted-foreground" title={healthSnapshots[project.project_id]?.error}>{healthSnapshots[project.project_id]?.error ? "Unavailable" : "Checking…"}</span>}</TableCell>
-        <TableCell><div className="flex flex-wrap justify-end gap-1">
+        <TableCell className="whitespace-nowrap"><div className="flex flex-nowrap items-center justify-end gap-1">
           <Button size="sm" onClick={() => navigateProject(project.project_id)}><FolderOpen size={14} />Open project</Button>
           {project.status === "opened" && <Button size="sm" variant="outline" disabled={working} onClick={() => void closeProject(project)}>Close project</Button>}
           <Button size="icon-sm" variant="ghost" title="Project settings" aria-label={`Settings for ${project.name}`} onClick={() => openSettings(project)}><Pencil size={15} /></Button>
