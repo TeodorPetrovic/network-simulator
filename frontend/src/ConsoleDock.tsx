@@ -93,6 +93,9 @@ export function ConsoleDock({
 export function ConsoleSession({ target, active }: { target: ConsoleTarget; active: boolean }) {
   const terminalElement = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const terminalRef = useRef<Xterm | null>(null);
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const docker = target.nodeType === "docker";
   const auxiliary = Boolean(target.auxiliary);
   const vpcs = target.nodeType === "vpcs";
@@ -111,6 +114,8 @@ export function ConsoleSession({ target, active }: { target: ConsoleTarget; acti
     fitRef.current = fit;
     terminal.loadAddon(fit);
     terminal.open(terminalElement.current);
+    terminalRef.current = terminal;
+    if (activeRef.current) terminal.focus();
     let socket: WebSocket | null = null;
     let cancelled = false;
     let lastResizeFrame: string | null = null;
@@ -161,12 +166,13 @@ export function ConsoleSession({ target, active }: { target: ConsoleTarget; acti
       }
       terminal.dispose();
       fitRef.current = null;
+      terminalRef.current = null;
     };
   }, [auxiliary, docker, dynamips, target.nodeId, target.nodeName, target.projectId, vpcs]);
 
   useEffect(() => {
     if (!active) return;
-    const frame = requestAnimationFrame(() => fitRef.current?.fit());
+    const frame = requestAnimationFrame(() => { fitRef.current?.fit(); terminalRef.current?.focus(); });
     return () => cancelAnimationFrame(frame);
   }, [active]);
 
