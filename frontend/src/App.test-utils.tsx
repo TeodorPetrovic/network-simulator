@@ -13,6 +13,7 @@ vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     loadAddon() {}
     open() {}
+    focus() {}
     writeln() {}
     write() {}
     onData() { return { dispose() {} }; }

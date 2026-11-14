@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, render, screen, fireEvent } from "@testing-library/react";
 import { ConsoleDock, dockerResizeControlFrame, sendDockerResizeControl } from "./ConsoleDock";
 
-vi.mock("@xterm/xterm", () => ({ Terminal: class { rows=24; cols=80; loadAddon(){} open(){} writeln(){} write(){} onResize(){return {dispose(){}}} onData(){return {dispose(){}}} dispose(){} } }));
+vi.mock("@xterm/xterm", () => ({ Terminal: class { rows=24; cols=80; loadAddon(){} open(){} focus(){} writeln(){} write(){} onResize(){return {dispose(){}}} onData(){return {dispose(){}}} dispose(){} } }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit(){} } }));
 
 beforeEach(() => localStorage.clear());
