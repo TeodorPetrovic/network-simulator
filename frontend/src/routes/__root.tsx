@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-router";
 import { TitleTooltips } from "../TitleTooltips";
 import { themeBootScript, watchSystemTheme } from "../theme";
+import { iconUrl } from "@/components/app-logo";
 import appCss from "../styles.css?url";
 
 export const Route = createRootRoute({
@@ -20,7 +21,7 @@ export const Route = createRootRoute({
       { name: "description", content: "A fast, local-first network lab workspace." },
       { title: "Network Studio" },
     ],
-    links: [{ rel: "stylesheet", href: appCss }],
+    links: [{ rel: "stylesheet", href: appCss }, { rel: "icon", type: "image/svg+xml", href: iconUrl }],
   }),
   component: RootComponent,
 });

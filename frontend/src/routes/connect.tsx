@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { getServerOrigin, isDesktop, normalizeServerUrl, recentServers, setServerOrigin } from "../api";
 import { saveAuthToken } from "../api/client";
+import { AppLogo } from "@/components/app-logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -44,7 +45,7 @@ function ConnectPage() {
   return <main className="flex min-h-svh items-center justify-center bg-muted/40 p-6">
     <Card className="w-full max-w-sm">
       <CardHeader className="text-center">
-      <div className="mx-auto mb-2 flex size-10 items-center justify-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground">NS</div>
+      <AppLogo className="mx-auto mb-2 size-14" />
       <p className="text-xs font-medium tracking-wide text-muted-foreground">NETWORK STUDIO</p>
       <CardTitle className="text-2xl font-semibold tracking-tight">Connect to a server</CardTitle>
       <CardDescription>{isDesktop()

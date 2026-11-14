@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="45%" r="75%"><stop offset="0" stop-color="#235c93"/><stop offset="1" stop-color="#13305a"/></radialGradient>
+    <linearGradient id="node" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7cc8ff"/><stop offset="1" stop-color="#3a9ef7"/></linearGradient>
+    <linearGradient id="hub" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#c3deff"/></linearGradient>
+  </defs>
+  <rect x="40" y="40" width="944" height="944" rx="230" fill="url(#bg)" stroke="#2f5b8f" stroke-width="4"/>
+  <g stroke="#9ad0f7" stroke-width="34" stroke-linecap="round"><path d="M300 300 512 512M724 300 512 512M300 724 512 512M724 724 512 512"/></g>
+  <g fill="url(#node)" stroke="#eaf6ff" stroke-width="22"><circle cx="270" cy="270" r="78"/><circle cx="754" cy="270" r="78"/><circle cx="270" cy="754" r="78"/><circle cx="754" cy="754" r="78"/></g>
+  <circle cx="512" cy="512" r="128" fill="#3b86d0" opacity=".55"/>
+  <circle cx="512" cy="512" r="104" fill="url(#hub)"/>
+  <g fill="none" stroke="#17407a" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"><path d="M450 476H570M538 446 570 476 538 506M574 546H454M486 516 454 546 486 576"/></g>
+</svg>

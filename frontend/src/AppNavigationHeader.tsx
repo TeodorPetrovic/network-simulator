@@ -1,4 +1,4 @@
-import { Network } from "lucide-react";
+import { AppLogo } from "@/components/app-logo";
 import type { SimulatorWorkspaceProps } from "./SimulatorWorkspace";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -9,8 +9,8 @@ export function AppNavigationHeader({ connection, onNavigateHome }: Props) {
   return (
         <header className="z-10 flex h-[52px] min-h-[52px] items-center gap-5 border-b bg-background px-3.5">
           <Button variant="ghost" className="inline-flex items-center gap-2 font-semibold" onClick={onNavigateHome}>
-            <span className="grid size-7 place-items-center rounded-md border bg-primary/10 text-primary"><Network size={18} /></span>
-            <span>Network Simulator</span>
+            <AppLogo className="size-7" />
+            <span>Network Studio</span>
           </Button>
           <div className="ml-auto flex items-center gap-2.5">
             <Badge variant={connection === "connected" ? "secondary" : connection === "disconnected" ? "destructive" : "outline"} className="gap-1.5">
