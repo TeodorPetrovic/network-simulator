@@ -17,17 +17,72 @@ export function saveAuthToken(token: string | null) {
   authToken = token;
   try {
     if (token) tokenStore().setItem(AUTH_TOKEN_KEY, token);
-    else tokenStore().removeItem(AUTH_TOKEN_KEY);
+    else { tokenStore().removeItem(AUTH_TOKEN_KEY); saveRefreshToken(null); }
   } catch { /* storage can be disabled by the browser */ }
 }
-export function fetchWithAuth(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const token = getAuthToken();
-  if (typeof input === "string") input = serverUrl(input);
+
+// The long-lived refresh token is kept across tabs and restarts so the short-lived access token can be
+// renewed silently; signing out, changing the password or a rejected refresh clears it.
+const REFRESH_TOKEN_KEY = "network-simulator.refresh-token";
+export function saveRefreshToken(token: string | null) {
+  try {
+    if (token) window.localStorage.setItem(REFRESH_TOKEN_KEY, token);
+    else window.localStorage.removeItem(REFRESH_TOKEN_KEY);
+  } catch { /* storage can be disabled by the browser */ }
+}
+function readRefreshToken(): string | null {
+  try { return window.localStorage.getItem(REFRESH_TOKEN_KEY); } catch { return null; }
+}
+
+let refreshing: Promise<boolean> | null = null;
+/** Exchange the stored refresh token for a new access token. Refresh tokens are single use, so concurrent
+ * callers share one request and other tabs wait on a lock instead of replaying the same token. */
+export function refreshSession(staleToken: string | null): Promise<boolean> {
+  refreshing ??= (async () => {
+    const run = async (): Promise<boolean> => {
+      // Another tab may have renewed the session while this one waited.
+      const current = getAuthToken();
+      if (current && current !== staleToken) return true;
+      const refreshToken = readRefreshToken();
+      if (!refreshToken) return false;
+      try {
+        const response = await fetch(serverUrl("/v3/access/users/refresh"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        });
+        if (!response.ok) { if (response.status === 401) saveAuthToken(null); return false; }
+        const body = await response.json() as { access_token?: string; refresh_token?: string };
+        if (!body.access_token) return false;
+        saveAuthToken(body.access_token);
+        if (body.refresh_token) saveRefreshToken(body.refresh_token);
+        return true;
+      } catch { return false; }
+    };
+    try {
+      const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+      return locks ? await locks.request("network-simulator.refresh", run) : await run();
+    } finally { refreshing = null; }
+  })();
+  return refreshing;
+}
+
+function sendWithToken(input: RequestInfo | URL, init: RequestInit | undefined, token: string | null): Promise<Response> {
   if (!token) return init ? fetch(input, init) : fetch(input);
   return fetch(input, {
     ...init,
     headers: { ...(init?.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` },
   });
+}
+export async function fetchWithAuth(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const token = getAuthToken();
+  if (typeof input === "string") input = serverUrl(input);
+  const response = await sendWithToken(input, init, token);
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  // Expired or missing access token: renew it once with the refresh token and replay the request.
+  if (response.status !== 401 || /\/access\/users\/(login|refresh|authenticate)/.test(url) || !readRefreshToken()) return response;
+  if (!(await refreshSession(token))) return response;
+  return sendWithToken(input, init, getAuthToken());
 }
 export function handleUnauthorized(response: Response, path: string) {
   if (response.status !== 401 || path.startsWith("/access/users/login") || path.startsWith("/access/users/authenticate")) return;

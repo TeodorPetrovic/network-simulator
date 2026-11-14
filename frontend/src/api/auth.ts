@@ -1,6 +1,6 @@
 import type { AccessUser, AccessGroup, AccessRole, AccessPrivilege, AccessControlEntry, ResourcePool, UserApiKey } from "../api-types";
 
-import { request, jsonBody, saveAuthToken } from "./client";
+import { request, jsonBody, saveAuthToken, saveRefreshToken } from "./client";
 import { serverUrl } from "./server";
 
 
@@ -16,9 +16,10 @@ export const authApi = {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ username, password }),
     });
-    const body = await response.json().catch(() => null) as { access_token?: string; must_change_password?: boolean; message?: string } | null;
+    const body = await response.json().catch(() => null) as { access_token?: string; refresh_token?: string; must_change_password?: boolean; message?: string } | null;
     if (!response.ok || !body?.access_token) throw new Error(body?.message ?? `Login failed (${response.status})`);
     saveAuthToken(body.access_token);
+    saveRefreshToken(body.refresh_token ?? null);
     return body;
   },
     logout: async () => {

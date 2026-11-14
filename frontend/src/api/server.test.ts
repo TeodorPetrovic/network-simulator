@@ -75,3 +75,21 @@ describe("probeServer", () => {
     await expect(probeServer("lab", (async () => new Response("no", { status: 404 })) as typeof fetch)).rejects.toThrow(/answered 404/);
   });
 });
+
+describe("session renewal", () => {
+  it("renews an expired access token with the stored refresh token and replays the request", async () => {
+    saveAuthToken("old");
+    window.localStorage.setItem("network-simulator.refresh-token", "r1");
+    const calls: Array<{ url: string; auth?: string }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, auth: (init?.headers as Record<string, string> | undefined)?.Authorization });
+      if (url.includes("/users/refresh")) return new Response(JSON.stringify({ access_token: "new", refresh_token: "r2" }), { status: 200 });
+      return new Response("{}", { status: calls.filter((c) => c.url === url).length === 1 ? 401 : 200 });
+    }));
+    const response = await fetchWithAuth("/v3/projects");
+    expect(response.status).toBe(200);
+    expect(calls.at(-1)?.auth).toBe("Bearer new");
+    expect(window.localStorage.getItem("network-simulator.refresh-token")).toBe("r2");
+    vi.unstubAllGlobals();
+  });
+});
