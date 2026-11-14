@@ -18,7 +18,7 @@ const sections = [
 
 export function PagesShell({ children, active, fromProject }: { children: ReactNode; active: string; fromProject?: string }) {
   return <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
-    <header className="flex h-14 min-h-14 shrink-0 items-center gap-5 border-b bg-background px-4 sm:px-6">
+    <header className="flex h-11 min-h-11 shrink-0 items-center gap-3 border-b bg-background px-3">
       <Link to="/" className="inline-flex shrink-0 items-center text-foreground no-underline"><Brand /></Link>
       <nav className="flex min-w-0 items-center gap-1 overflow-x-auto" aria-label="Application pages">
         {sections.map(({ to, label, icon: Icon }) => {
