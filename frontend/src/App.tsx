@@ -155,6 +155,10 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
 
   function openConsole(node: Node, auxiliary = false) {
     if (!projectId || !["docker", "qemu", "vpcs", "dynamips"].includes(node.node_type ?? "")) return;
+    if (node.status !== "started") {
+      setNotice(`Start ${node.name} before opening its console.`);
+      return;
+    }
     const consoleType = String(node.console_type ?? "telnet");
     const properties = node.properties && typeof node.properties === "object" ? node.properties as Record<string, unknown> : {};
     const auxType = String(node.aux_type ?? properties.aux_type ?? "none");
