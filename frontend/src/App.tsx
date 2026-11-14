@@ -66,15 +66,6 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
   const pendingNodeNames = useRef(new Set<string>());
 
   useEffect(() => {
-    if (!error && !notice) return;
-    const timer = window.setTimeout(() => {
-      setError("");
-      setNotice("");
-    }, 6000);
-    return () => window.clearTimeout(timer);
-  }, [error, notice]);
-
-  useEffect(() => {
     setConsoleTargets([]);
     setActiveConsoleId(null);
     setConsoleMinimized(true);
@@ -321,7 +312,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
       <div className="flex h-dvh min-h-0 w-full flex-col overflow-hidden bg-background">
         {!projectId && !showApplianceManager && <AppNavigationHeader connection={connection} onNavigateHome={() => navigateToProject(null)} />}
 
-        <GlobalToast error={error} notice={notice} onDismiss={() => { setError(""); setNotice(""); }} />
+        <GlobalToast error={error} notice={notice} onConsumed={() => { setError(""); setNotice(""); }} />
 
         <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {showApplianceManager ? <PagesShell active="Appliances"><ApplianceManagerPage onBack={onBackFromApplianceManager ?? (() => navigateToProject(projectId))} onOpenPreferences={onOpenPreferences} onOpenImageCatalog={() => setMarketplaceOpen(true)} onTemplatesChanged={setTemplates} /></PagesShell> : projectId ? (busy || !project || !topology ? <div className="flex min-h-0 flex-1 items-center justify-center gap-2 text-sm text-muted-foreground"><Activity className="animate-pulse" />Loading project topology…</div> : <SimulatorWorkspace

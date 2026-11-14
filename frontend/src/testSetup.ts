@@ -29,3 +29,11 @@ Object.defineProperty(Element.prototype, "scrollIntoView", {
 if (typeof globalThis.ResizeObserver === "undefined") {
   globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
 }
+
+// Sonner (toasts) and theme.ts read prefers-color-scheme through matchMedia, which jsdom lacks.
+if (typeof window.matchMedia === "undefined") {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: (query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false }),
+  });
+}

@@ -1,20 +1,21 @@
-import { X } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { useEffect } from "react";
+import { toast } from "sonner";
+import { Toaster } from "@/components/ui/sonner";
 
 type GlobalToastProps = {
   error: string;
   notice: string;
-  onDismiss: () => void;
+  onConsumed: () => void;
 };
 
-export function GlobalToast({ error, notice, onDismiss }: GlobalToastProps) {
-  if (!error && !notice) return null;
+/** Turns the app-level `error` / `notice` strings into shadcn (Sonner) toasts. */
+export function GlobalToast({ error, notice, onConsumed }: GlobalToastProps) {
+  useEffect(() => {
+    if (!error && !notice) return;
+    if (error) toast.error(error, { duration: 8000 });
+    if (notice) toast(notice, { duration: 5000 });
+    onConsumed();
+  }, [error, notice, onConsumed]);
 
-  return (
-    <Card className={`fixed bottom-[18px] right-[18px] z-[100] flex max-h-32 max-w-[min(560px,calc(100vw-36px))] items-center gap-2.5 px-3 py-2 text-xs shadow-lg ${error ? "border-destructive text-destructive" : ""}`} role={error ? "alert" : "status"} aria-live="polite">
-      <span className="max-h-24 overflow-auto">{error || notice}</span>
-      <Button variant="ghost" size="icon-xs" onClick={onDismiss} aria-label="Dismiss notification"><X /></Button>
-    </Card>
-  );
+  return <Toaster />;
 }
