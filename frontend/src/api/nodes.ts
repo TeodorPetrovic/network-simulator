@@ -4,6 +4,24 @@ import { request, jsonBody, fetchWithAuth, handleUnauthorized } from "./client";
 
 
 export const nodesApi = {
+    /** A file kept with the node (for Docker, `etc/network/interfaces`); null when it was never written. */
+    readNodeFile: async (projectId: string, nodeId: string, path: string): Promise<string | null> => {
+    const route = `/projects/${encodeURIComponent(projectId)}/nodes/${encodeURIComponent(nodeId)}/files/${path}`;
+    const response = await fetchWithAuth(`/v3${route}`);
+    handleUnauthorized(response, route);
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`The file could not be loaded (${response.status})`);
+    return response.text();
+  },
+    writeNodeFile: async (projectId: string, nodeId: string, path: string, content: string) => {
+    const route = `/projects/${encodeURIComponent(projectId)}/nodes/${encodeURIComponent(nodeId)}/files/${path}`;
+    const response = await fetchWithAuth(`/v3${route}`, { method: "POST", headers: { "Content-Type": "text/plain; charset=utf-8" }, body: content });
+    handleUnauthorized(response, route);
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { message?: string } | null;
+      throw new Error(body?.message ?? `The file could not be saved (${response.status})`);
+    }
+  },
     createNode: (projectId: string, node: Omit<Node, "node_id">) =>
     request<Node>(`/projects/${projectId}/nodes`, jsonBody(node)),
     createNodeFromTemplate: (projectId: string, templateId: string, usage: { name: string; x: number; y: number; start_command?: string; startup_script?: string; idlepc?: string; mmap?: boolean; sparsemem?: boolean; auto_delete_disks?: boolean; ghost_ios?: boolean; console_auto_start?: boolean; startup_config?: string }) =>

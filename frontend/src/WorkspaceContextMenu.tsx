@@ -5,7 +5,7 @@ import type { DrawingTool } from "./map/helpers";
 import { canApplyLifecycle } from "./lifecycle";
 import type { LifecycleAction } from "./lifecycle";
 import { availableInterfacesForNode, endpointName, interfacesForNode } from "./map/helpers";
-import { configFieldForNode } from "./NodeConfigFileDialog";
+import { canEditNodeConfig, isDockerNetworkConfig } from "./NodeConfigFileDialog";
 import { nodeHasAuxConsole } from "./map/TopologyCanvas";
 import { ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger } from "@/components/ui/context-menu";
 
@@ -73,7 +73,7 @@ export function WorkspaceContextMenu({ workspace: props, selectedNode, selectedL
                 </ContextMenuSub>
                 <ContextMenuItem onSelect={() => { document.querySelector<HTMLButtonElement>("[data-tab=topology]")?.click(); window.setTimeout(() => document.querySelector<HTMLInputElement>("[data-rename-node]")?.focus(), 0); }}><Pencil />Edit device name</ContextMenuItem>
                 {["qemu", "docker", "vpcs", "dynamips", "iou", "ethernet_switch", "ethernet_hub", "hub", "cloud", "nat"].includes(selectedNode.node_type ?? "") && <ContextMenuItem onSelect={() => setConfigureNode(selectedNode)}><Settings2 />Configure device</ContextMenuItem>}
-                {configFieldForNode(selectedNode) && <ContextMenuItem onSelect={() => setConfigNode(selectedNode)}><FileText />Edit config</ContextMenuItem>}
+                {canEditNodeConfig(selectedNode) && <ContextMenuItem onSelect={() => setConfigNode(selectedNode)}><FileText />{isDockerNetworkConfig(selectedNode) ? "Edit network configuration" : "Edit config"}</ContextMenuItem>}
                 {selectedNode.node_type === "qemu" && <ContextMenuItem disabled={selectedNode.status !== "started"} onSelect={() => onExportNodeConfig?.(selectedNode)}><FileText />Export config…</ContextMenuItem>}
                 <ContextMenuItem onSelect={() => setSymbolNode(selectedNode)}><Image />Change symbol</ContextMenuItem>
                 <ContextMenuItem onSelect={() => void toggleNodeIsolation(selectedNode)}>{selectedNode.isolated ? <Unlock /> : <Lock />}{selectedNode.isolated ? "Unisolate device" : "Isolate device"}</ContextMenuItem>
