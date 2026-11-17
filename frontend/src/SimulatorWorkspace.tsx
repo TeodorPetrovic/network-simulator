@@ -13,7 +13,8 @@ import {
   ContextMenu, ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { NodeSettingsDialog } from "./NodeSettingsDialog";
-import { DrawingEditorDialog, HelpDialog, InfoDialog, LinkPropertiesDialog, LogConsoleDialog, ScreenshotDialog, SnapshotsDialog, SymbolPickerDialog } from "./map/MapDialogs";
+import { ShortcutsDialog, useShortcutsHotkey } from "./ShortcutsDialog";
+import { DrawingEditorDialog, InfoDialog, LinkPropertiesDialog, LogConsoleDialog, ScreenshotDialog, SnapshotsDialog, SymbolPickerDialog } from "./map/MapDialogs";
 import type { ScreenshotRequest } from "./map/MapDialogs";
 import { popOutWindow } from "./floating";
 import { captureDisplayName, defaultCaptureName, serializeSvgScreenshot, svgScreenshotPng } from "./map/helpers";
@@ -201,6 +202,8 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const openShortcuts = useCallback(() => setHelpOpen(true), []);
+  useShortcutsHotkey(openShortcuts);
   const [copilotOpen, setCopilotOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [logCounts, setLogCounts] = useState({ errors: 0, warnings: 0 });
@@ -512,7 +515,7 @@ export function SimulatorWorkspace(props: SimulatorWorkspaceProps) {
       <LinkPropertiesDialog projectId={props.project.project_id} link={selectedLink ?? null} nodes={topology.nodes} open={linkPropertiesOpen} onOpenChange={setLinkPropertiesOpen} onUpdated={(updated) => setTopology((current) => ({ ...current, links: current.links.map((link) => link.link_id === updated.link_id ? updated : link) }))} />
       <SymbolPickerDialog projectId={props.project.project_id} node={symbolNode} open={symbolNode !== null} onOpenChange={(open) => { if (!open) setSymbolNode(null); }} onSaved={(updated) => { setTopology((current) => ({ ...current, nodes: current.nodes.map((node) => node.node_id === updated.node_id ? updated : node) })); if (typeof updated.symbol === "string") setCustomSymbolIds((current) => current.includes(updated.symbol as string) ? current : [...current, updated.symbol as string]); }} />
       <LogConsoleDialog projectId={props.project.project_id} cursor={topology.event_cursor} open={logOpen} onOpenChange={setLogOpen} onCountsChange={onLogCount} />
-      <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
+      <ShortcutsDialog open={helpOpen} onOpenChange={setHelpOpen} />
       <InfoDialog project={props.project} nodeCount={topology.nodes.length} linkCount={topology.links.length} drawingCount={topology.drawings.length} eventCursor={topology.event_cursor} open={infoOpen} onOpenChange={setInfoOpen} />
       <ScreenshotDialog open={screenshotOpen} onOpenChange={setScreenshotOpen} onExport={(request) => void exportScreenshot(request)} pngAvailable={pngScreenshotAvailable()} />
       {captureViewer&&<CaptureWindow url={captureViewer.url} downloadUrl={captureViewer.downloadUrl} title={captureViewer.title} onClose={()=>setCaptureViewer(null)} onPopOut={captureViewer.link ? ()=>{ void openCaptureViewer(captureViewer.link!, true, true); setCaptureViewer(null); } : undefined}/>}

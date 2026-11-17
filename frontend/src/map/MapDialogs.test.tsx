@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it as registerTest, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { api } from "../api";
 import type { Link, Node } from "../api";
-import { DrawingEditorDialog, HelpDialog, InfoDialog, InterfacePickerDialog, LinkPropertiesDialog, ScreenshotDialog, SnapshotsDialog, SymbolPickerDialog } from "./MapDialogs";
+import { DrawingEditorDialog, InfoDialog, InterfacePickerDialog, LinkPropertiesDialog, ScreenshotDialog, SnapshotsDialog, SymbolPickerDialog } from "./MapDialogs";
 import { defaultEndpointLabelPosition } from "./helpers";
 
 const it = (name: string, fn: any, timeout = 15_000) => registerTest(name, fn, timeout);
@@ -116,10 +116,6 @@ describe("project map dialogs", () => {
     fireEvent.change(screen.getByLabelText("Text"), { target: { value: "Core network" } });
     fireEvent.click(screen.getByRole("button", { name: "Choose appearance" }));
     expect(onSave).toHaveBeenCalledWith("text", expect.objectContaining({ text: "Core network" }));
-
-    render(<HelpDialog open onOpenChange={() => undefined} />);
-    expect(screen.getByText("Select devices in a region")).toBeInTheDocument();
-    expect(screen.getByText("Ctrl / ⌘ + A")).toBeInTheDocument();
 
     render(<InfoDialog project={{ project_id: "p1", name: "Campus lab" }} nodeCount={2} linkCount={1} drawingCount={0} eventCursor={8} open onOpenChange={() => undefined} />);
     expect(screen.getByText("Campus lab")).toBeInTheDocument();

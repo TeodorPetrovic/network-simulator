@@ -39,7 +39,6 @@ vi.mock("./map/MapDialogs", async () => {
     LinkPropertiesDialog: () => null,
     SymbolPickerDialog: () => null,
     LogConsoleDialog: () => null,
-    HelpDialog: () => null,
     InfoDialog: () => null,
     ScreenshotDialog: () => null,
   };

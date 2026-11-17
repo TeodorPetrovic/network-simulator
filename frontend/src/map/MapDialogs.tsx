@@ -220,14 +220,6 @@ export function LogConsoleDialog({ projectId, cursor, open, onOpenChange, onCoun
   </DialogContent></Dialog>;
 }
 
-export function HelpDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent>
-    <DialogHeader><DialogTitle>Map shortcuts</DialogTitle><DialogDescription>Keyboard and pointer controls for the project map.</DialogDescription></DialogHeader>
-    <div className="grid grid-cols-[1fr_auto] gap-x-5 gap-y-2 text-sm"><span>Select multiple devices</span><kbd>Ctrl / ⌘ + click</kbd><span>Select devices in a region</span><kbd>Drag empty canvas</kbd><span>Copy and paste selected devices</span><kbd>Ctrl / ⌘ + C / V</kbd><span>Nudge selected devices</span><kbd>Arrow keys</kbd><span>Move a device label</span><kbd>Drag its label</kbd><span>Pan the map</span><kbd>Space + drag</kbd><span>Delete selected devices or links</span><kbd>Delete / Backspace</kbd><span>Select all devices</span><kbd>Ctrl / ⌘ + A</kbd><span>Zoom</span><kbd>Ctrl / ⌘ + + / −</kbd><span>Undo last device move</span><kbd>Ctrl / ⌘ + Z</kbd><span>Clear selection</span><kbd>Escape</kbd></div>
-    <DialogFooter><Button onClick={() => onOpenChange(false)}>Close</Button></DialogFooter>
-  </DialogContent></Dialog>;
-}
-
 export function InfoDialog({ project, nodeCount, linkCount, drawingCount, eventCursor, open, onOpenChange }: {
   project: { project_id: string; name: string; status?: string };
   nodeCount: number;

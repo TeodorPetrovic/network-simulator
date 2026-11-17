@@ -1,5 +1,5 @@
 import { Brand } from "@/components/brand";
-import { Activity, Camera, Cable, Circle, CircleHelp, Cpu, Eye, FolderOpen, Image, Minus, Move, Network, Pause, Pencil, Play, Power, RectangleHorizontal, Scan, Shapes, Square, Terminal, Type, Wrench, ZoomIn, ZoomOut } from "lucide-react";
+import { Activity, Camera, Cable, Circle, CircleHelp, Cpu, Eye, FolderOpen, Image, Keyboard, Minus, Move, Network, Pause, Pencil, Play, Power, RectangleHorizontal, Scan, Shapes, Square, Terminal, Type, Wrench, ZoomIn, ZoomOut } from "lucide-react";
 import type { Link, Node, TopologySnapshot } from "./api";
 import type { SimulatorWorkspaceProps } from "./SimulatorWorkspace";
 import type { DrawingTool } from "./map/helpers";
@@ -74,7 +74,7 @@ export function WorkspaceToolbar({ workspace: props, topology, selectedNodeIds, 
         {selectedDrawing && <><MenubarSeparator />{supported("Edit selected drawing…", () => { setDrawingEditTool((selectedDrawing.drawing_kind as DrawingTool) ?? "rectangle"); setDrawingEditValues(valuesFromDrawing(selectedDrawing)); setDrawingEditOpen(true); })}{supported("Bring drawing forward", () => void changeDrawingOrder("front"))}{supported("Send drawing backward", () => void changeDrawingOrder("back"))}{supported("Delete drawing", () => void removeDrawing())}</>}
       </MenubarContent></MenubarMenu>
       <MenubarMenu><MenuTrigger label="Tools" icon={<Wrench />} /><MenubarContent>{supported(copilotOpen ? "Hide AI copilot" : "AI copilot…", onToggleCopilot)}<MenubarSeparator />{supported("Packet capture…", () => setLinkPropertiesOpen(true), !selectedLink)}{supported("Image catalog…", props.onOpenMarketplace)}{supported("Appliances…", props.onOpenApplianceManager)}{supported("Project screenshot…", () => setScreenshotOpen(true))}{supported("Project log…", () => setLogOpen(true))}</MenubarContent></MenubarMenu>
-      <MenubarMenu><MenuTrigger label="Help" icon={<CircleHelp />} /><MenubarContent>{supported("Keyboard shortcuts", () => setHelpOpen(true))}{supported("About…", () => setInfoOpen(true))}</MenubarContent></MenubarMenu>
+      <MenubarMenu><MenuTrigger label="Help" icon={<CircleHelp />} /><MenubarContent><MenubarItem onSelect={() => setHelpOpen(true)}><Keyboard />Keyboard shortcuts</MenubarItem>{supported("About…", () => setInfoOpen(true))}</MenubarContent></MenubarMenu>
     </Menubar>
   </header>;
 }
