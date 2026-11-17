@@ -1,4 +1,4 @@
-import { Activity, AlignCenterHorizontal, AlignCenterVertical, AlignHorizontalDistributeCenter, AlignHorizontalJustifyEnd, AlignHorizontalJustifyStart, AlignVerticalDistributeCenter, AlignVerticalJustifyEnd, AlignVerticalJustifyStart, FileText, Image, Layers, Lock, Move, Pause, Pencil, Play, Plus, Power, Settings2, Terminal, Trash2, Unlock } from "lucide-react";
+import { Activity, AlignCenterHorizontal, AlignCenterVertical, AlignHorizontalDistributeCenter, AlignHorizontalJustifyEnd, AlignHorizontalJustifyStart, AlignVerticalDistributeCenter, AlignVerticalJustifyEnd, AlignVerticalJustifyStart, FileText, Image, ExternalLink, Layers, Lock, Move, Pause, Pencil, Play, Plus, Power, Settings2, Terminal, Trash2, Unlock } from "lucide-react";
 import type { Link, Node, TopologySnapshot } from "./api";
 import type { SimulatorWorkspaceProps } from "./SimulatorWorkspace";
 import type { DrawingTool } from "./map/helpers";
@@ -7,6 +7,7 @@ import type { LifecycleAction } from "./lifecycle";
 import { availableInterfacesForNode, endpointName, interfacesForNode } from "./map/helpers";
 import { canEditNodeConfig, isDockerNetworkConfig } from "./NodeConfigFileDialog";
 import { nodeHasAuxConsole } from "./map/TopologyCanvas";
+import { flowdeckUrlFor, getFlowdeckBaseUrl, isOpenVSwitchNode } from "./flowdeck";
 import { ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger } from "@/components/ui/context-menu";
 
 type Props = {
@@ -74,6 +75,7 @@ export function WorkspaceContextMenu({ workspace: props, selectedNode, selectedL
                 <ContextMenuItem onSelect={() => { document.querySelector<HTMLButtonElement>("[data-tab=topology]")?.click(); window.setTimeout(() => document.querySelector<HTMLInputElement>("[data-rename-node]")?.focus(), 0); }}><Pencil />Edit device name</ContextMenuItem>
                 {["qemu", "docker", "vpcs", "dynamips", "iou", "ethernet_switch", "ethernet_hub", "hub", "cloud", "nat"].includes(selectedNode.node_type ?? "") && <ContextMenuItem onSelect={() => setConfigureNode(selectedNode)}><Settings2 />Configure device</ContextMenuItem>}
                 {canEditNodeConfig(selectedNode) && <ContextMenuItem onSelect={() => setConfigNode(selectedNode)}><FileText />{isDockerNetworkConfig(selectedNode) ? "Edit network configuration" : "Edit config"}</ContextMenuItem>}
+                {isOpenVSwitchNode(selectedNode) && <ContextMenuItem onSelect={() => window.open(flowdeckUrlFor(selectedNode, getFlowdeckBaseUrl()), "_blank", "noopener")}><ExternalLink />Open in Flowdeck</ContextMenuItem>}
                 {selectedNode.node_type === "qemu" && <ContextMenuItem disabled={selectedNode.status !== "started"} onSelect={() => onExportNodeConfig?.(selectedNode)}><FileText />Export config…</ContextMenuItem>}
                 <ContextMenuItem onSelect={() => setSymbolNode(selectedNode)}><Image />Change symbol</ContextMenuItem>
                 <ContextMenuItem onSelect={() => void toggleNodeIsolation(selectedNode)}>{selectedNode.isolated ? <Unlock /> : <Lock />}{selectedNode.isolated ? "Unisolate device" : "Isolate device"}</ContextMenuItem>

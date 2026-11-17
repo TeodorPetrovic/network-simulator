@@ -7,11 +7,14 @@ import { ContextMenu } from "@/components/ui/context-menu";
 
 afterEach(cleanup);
 
+function commonProps(node: Node) {
+  const workspace = { topology: { links: [] }, connecting: false } as unknown as SimulatorWorkspaceProps;
+  return { workspace, selectedNode: node, selectedLink: null, selectedDrawing: null, setConfigureNode: vi.fn(), setConfigNode: vi.fn(), setSymbolNode: vi.fn(), toggleNodeIsolation: vi.fn(), toggleNodeLock: vi.fn(), setLinkPropertiesOpen: vi.fn(), toggleLinkSuspend: vi.fn(), setDrawingEditTool: vi.fn(), setDrawingEditValues: vi.fn(), valuesFromDrawing: vi.fn(), setDrawingEditOpen: vi.fn(), changeDrawingOrder: vi.fn(), removeDrawing: vi.fn() };
+}
+
 function showFor(status: string, nodeType = "dynamips") {
   const node: Node = { node_id: "router", name: "R1", node_type: nodeType, status };
-  const workspace = { topology: { links: [] }, connecting: false } as unknown as SimulatorWorkspaceProps;
-  const common = { workspace, selectedNode: node, selectedLink: null, selectedDrawing: null, setConfigureNode: vi.fn(), setConfigNode: vi.fn(), setSymbolNode: vi.fn(), toggleNodeIsolation: vi.fn(), toggleNodeLock: vi.fn(), setLinkPropertiesOpen: vi.fn(), toggleLinkSuspend: vi.fn(), setDrawingEditTool: vi.fn(), setDrawingEditValues: vi.fn(), valuesFromDrawing: vi.fn(), setDrawingEditOpen: vi.fn(), changeDrawingOrder: vi.fn(), removeDrawing: vi.fn() };
-  return render(<ContextMenu open><WorkspaceContextMenu {...common} /></ContextMenu>);
+  return render(<ContextMenu open><WorkspaceContextMenu {...commonProps(node)} /></ContextMenu>);
 }
 
 describe("Dynamips context menu lifecycle", () => {
@@ -26,6 +29,16 @@ describe("Dynamips context menu lifecycle", () => {
     expect(screen.getByText("Stop device")).toBeInTheDocument();
     expect(screen.getByText("Suspend device")).toBeInTheDocument();
     expect(screen.getByText("Reload device")).toBeInTheDocument();
+  });
+});
+
+describe("Open in Flowdeck action", () => {
+  it("shows for Docker nodes running an openvswitch image and hides for VPCS nodes", () => {
+    const { unmount } = render(<ContextMenu open><WorkspaceContextMenu {...commonProps({ node_id: "sw", name: "SW1", node_type: "docker", status: "started", image: "openvswitch/ovs:latest" })} /></ContextMenu>);
+    expect(screen.getByText("Open in Flowdeck")).toBeInTheDocument();
+    unmount();
+    showFor("started", "vpcs");
+    expect(screen.queryByText("Open in Flowdeck")).not.toBeInTheDocument();
   });
 });
 
