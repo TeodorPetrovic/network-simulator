@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { ChevronDown, ChevronUp, Cpu, MemoryStick, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Cpu, MemoryStick, Radio, X } from "lucide-react";
 import type { Link, ResourceMonitor, TopologySnapshot } from "./api";
 import type { SimulatorWorkspaceProps } from "./SimulatorWorkspace";
 import { Button } from "@/components/ui/button";
@@ -24,10 +24,11 @@ export type WorkspaceDocksProps = {
   onConfigureNode: () => void;
   onOpenLinkProperties: () => void;
   onToggleLinkSuspend: (link: Link) => void;
+  onOpenCaptureViewer: (link: Link) => void;
   renderNodeContextMenu: (nodeId: string) => ReactNode;
 };
 
-export function WorkspaceDocks({ workspace, topology, topologyOpen, serversOpen, onCloseTopology, onCloseServers, selectedLink, onConfigureNode, onOpenLinkProperties, onToggleLinkSuspend, renderNodeContextMenu }: WorkspaceDocksProps) {
+export function WorkspaceDocks({ workspace, topology, topologyOpen, serversOpen, onCloseTopology, onCloseServers, selectedLink, onConfigureNode, onOpenLinkProperties, onToggleLinkSuspend, onOpenCaptureViewer, renderNodeContextMenu }: WorkspaceDocksProps) {
   return <aside className="col-start-3 row-start-1 flex min-h-0 min-w-0 flex-col gap-2 overflow-y-auto border-l bg-muted/30 p-2" aria-label="Workspace docks">
     {topologyOpen && <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border bg-card text-card-foreground shadow-lg" aria-label="Topology Summary">
       <header className="flex items-center justify-between gap-2 border-b px-3 py-2"><b className="shrink-0 whitespace-nowrap text-sm">Topology Summary</b><span className="ml-auto min-w-0 truncate text-xs text-muted-foreground">{topology.nodes.length} devices · {topology.links.length} links</span><Button className="shrink-0" variant="ghost" size="icon-xs" aria-label="Close Topology Summary" onClick={onCloseTopology}><X /></Button></header>
@@ -39,7 +40,7 @@ export function WorkspaceDocks({ workspace, topology, topologyOpen, serversOpen,
           </Button></ContextMenuTrigger>{renderNodeContextMenu(node.node_id)}</ContextMenu>
           {workspace.selectedNode?.node_id === node.node_id && <NodeInspector key={node.node_id} node={node} links={topology.links} nodes={topology.nodes} onLifecycle={workspace.onNodeLifecycle} onOpenConsole={workspace.onOpenConsole} onRename={workspace.onNodeRename} onConfigure={onConfigureNode} onDelete={workspace.onDeleteSelection} />}
         </div>) : <p className="p-4 text-center text-xs text-muted-foreground">No devices on this topology.</p>}
-        {selectedLink && <Card className="m-2 p-2"><b className="text-xs">Ethernet segment</b><div className="mt-2 flex flex-wrap gap-1"><Button size="sm" variant="outline" onClick={onOpenLinkProperties}>Link properties</Button><Button size="sm" variant="outline" onClick={onOpenLinkProperties}>Packet capture</Button><Button size="sm" variant="outline" onClick={() => onToggleLinkSuspend(selectedLink)}>{selectedLink.suspend ? "Resume link" : "Suspend link"}</Button></div></Card>}
+        {selectedLink && <Card className="m-2 p-2"><b className="text-xs">Ethernet segment</b><div className="mt-2 flex flex-wrap gap-1"><Button size="sm" variant="outline" onClick={onOpenLinkProperties}>Link properties</Button><Button size="sm" variant="outline" onClick={onOpenLinkProperties}>Packet capture</Button><Button size="sm" variant="outline" onClick={() => onOpenCaptureViewer(selectedLink)}><Radio />Capture</Button><Button size="sm" variant="outline" onClick={() => onToggleLinkSuspend(selectedLink)}>{selectedLink.suspend ? "Resume link" : "Suspend link"}</Button></div></Card>}
       </ScrollArea>
     </section>}
     {serversOpen && <ServersSummary resources={workspace.resources} onClose={onCloseServers} />}
