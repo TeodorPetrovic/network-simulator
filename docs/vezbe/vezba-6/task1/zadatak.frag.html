@@ -1,0 +1,93 @@
+<h2>Vežba 6, Zadatak 1 – Open vSwitch kao ruter samo uz OpenFlow pravila</h2>
+
+<p>Mala firma ima jedan Open vSwitch (OVS1) na kojem se nalaze dve IP podmreže: računari PC1 i PC2 su u podmreži <code>10.16.1.0/24</code>, a SERVER je u podmreži <code>10.16.2.0/24</code>. Ruter ne postoji: OVS1 sam treba da preuzme njegovu ulogu, i to isključivo OpenFlow pravilima. To znači da na bridge-u ne sme da radi <code>NORMAL</code> ponašanje: OVS1 mora sam da odgovara na ARP zahteve za adrese gateway-a, da menja MAC adrese i TTL u IP paketima i da ih šalje na pravi port. Bridge-evi se podešavaju komandom <code>ovs-vsctl</code>, a pravila komandom <code>ovs-ofctl</code>, u konzoli Docker uređaja.</p>
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 330" width="840" height="330" font-family="DejaVu Sans, sans-serif" font-size="12">
+  <!-- OVS1 -->
+  <rect x="210" y="40" width="380" height="270" rx="6" fill="#fff3cd" stroke="#555" stroke-width="1.5"/>
+  <text x="400" y="62" text-anchor="middle" font-size="14" font-weight="bold">OVS1 – Open vSwitch</text>
+  <rect x="260" y="80" width="280" height="200" rx="4" fill="#ffffff" stroke="#555" stroke-width="1.2"/>
+  <text x="400" y="102" text-anchor="middle" font-size="14" font-weight="bold">main-net</text>
+  <rect x="290" y="130" width="220" height="110" rx="4" fill="#d9ead3" stroke="#555" stroke-width="1.2"/>
+  <text x="400" y="153" text-anchor="middle" font-weight="bold">ruter pomoću pravila</text>
+  <text x="400" y="178" text-anchor="middle">gateway 10.16.1.1</text>
+  <text x="400" y="198" text-anchor="middle">gateway 10.16.2.1</text>
+  <text x="400" y="224" text-anchor="middle" font-size="11">(samo OpenFlow, bez NORMAL)</text>
+  <!-- PCs -->
+  <rect x="10" y="105" width="110" height="50" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="65" y="126" text-anchor="middle" font-weight="bold">PC1</text>
+  <text x="65" y="144" text-anchor="middle">10.16.1.11</text>
+  <rect x="10" y="210" width="110" height="50" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="65" y="231" text-anchor="middle" font-weight="bold">PC2</text>
+  <text x="65" y="249" text-anchor="middle">10.16.1.12</text>
+  <rect x="720" y="160" width="110" height="50" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="775" y="181" text-anchor="middle" font-weight="bold">SERVER</text>
+  <text x="775" y="199" text-anchor="middle">10.16.2.100</text>
+  <!-- links -->
+  <line x1="120" y1="130" x2="260" y2="130" stroke="#555" stroke-width="2"/>
+  <line x1="120" y1="235" x2="260" y2="235" stroke="#555" stroke-width="2"/>
+  <line x1="540" y1="185" x2="720" y2="185" stroke="#555" stroke-width="2"/>
+  <!-- port labels -->
+  <text x="124" y="124" fill="#aa0000" font-size="11">eth0</text>
+  <text x="222" y="124" fill="#aa0000" font-size="11">eth0</text>
+  <text x="124" y="229" fill="#aa0000" font-size="11">eth0</text>
+  <text x="222" y="229" fill="#aa0000" font-size="11">eth1</text>
+  <text x="716" y="179" text-anchor="end" fill="#aa0000" font-size="11">eth0</text>
+  <text x="544" y="179" fill="#aa0000" font-size="11">eth2</text>
+  <!-- subnets -->
+  <text x="167" y="188" text-anchor="middle" font-style="italic">10.16.1.0/24</text>
+  <text x="630" y="206" text-anchor="middle" font-style="italic">10.16.2.0/24</text>
+</svg>
+
+<p>Slika 1. Veze između uređaja. Ruter nije poseban uređaj: njegovu ulogu u bridge-u <code>main-net</code> igraju OpenFlow pravila.</p>
+
+<p>Za mrežu smete da koristite isključivo adresni blok <code>10.16.0.0/16</code>: računari su u podmreži <code>10.16.1.0/24</code>, a SERVER u podmreži <code>10.16.2.0/24</code>.</p>
+
+<ol>
+<li><strong>Korak –</strong> U GNS3 programu samostalno napravite novi projekat i topologiju sa slike. Potrebni su vam jedan Docker uređaj Open vSwitch (OVS1, slika <code>gns3/openvswitch</code>) i tri Docker uređaja sa slikom <code>alpine</code>: PC1, PC2 i SERVER. Povežite ih kablovima prema tabeli, a zatim pokrenite sve uređaje.
+
+<table>
+<tr><th>Uređaj i port</th><th>Povezuje se sa</th></tr>
+<tr><td>OVS1 eth0</td><td>PC1 eth0</td></tr>
+<tr><td>OVS1 eth1</td><td>PC2 eth0</td></tr>
+<tr><td>OVS1 eth2</td><td>SERVER eth0</td></tr>
+</table>
+</li>
+
+<li><strong>Korak –</strong> Na računarima i SERVER-u podesite MAC adresu interfejsa <code>eth0</code> komandom <code>ip link set eth0 address</code>, zatim IP adresu komandom <code>ip addr add</code> i podrazumevani izlaz (default gateway) komandom <code>ip route add default via</code>. Pravila na OVS1 će sadržati fiksne MAC adrese računara (OVS1 nema ARP tabelu), zato se MAC adrese podešavaju ručno prema tabeli. Interfejs mora da bude isključen (<code>down</code>) dok mu menjate MAC adresu. Gateway adrese 10.16.1.1 i 10.16.2.1 ne pripadaju nijednom uređaju: odgovaraće im OVS1 pravilima, a MAC adrese koje će pri tom koristiti su u drugoj tabeli.
+
+<table>
+<tr><th>Device</th><th>IP Address</th><th>MAC adresa</th><th>Default gateway</th><th>OVS1 port</th></tr>
+<tr><td>PC1</td><td>10.16.1.11 / 24</td><td>02:00:00:00:01:11</td><td>10.16.1.1</td><td>eth0</td></tr>
+<tr><td>PC2</td><td>10.16.1.12 / 24</td><td>02:00:00:00:01:12</td><td>10.16.1.1</td><td>eth1</td></tr>
+<tr><td>SERVER</td><td>10.16.2.100 / 24</td><td>02:00:00:00:02:64</td><td>10.16.2.1</td><td>eth2</td></tr>
+</table>
+
+<table>
+<tr><th>Gateway (OVS1)</th><th>IP adresa</th><th>MAC adresa ("ruter")</th></tr>
+<tr><td>strana podmreže 10.16.1.0/24</td><td>10.16.1.1</td><td>02:00:00:00:01:01</td></tr>
+<tr><td>strana podmreže 10.16.2.0/24</td><td>10.16.2.1</td><td>02:00:00:00:02:01</td></tr>
+</table>
+</li>
+
+<li><strong>Korak –</strong> Otvorite konzolu na OVS1 i izvršite <code>ovs-vsctl show</code>. Zapišite koji bridge-evi postoje i u kom se bridge-u nalaze portovi eth0, eth1 i eth2. Pingujte sa PC1 na PC2 i na SERVER. Objasnite zašto PC1 vidi PC2, a ne vidi SERVER, iako je podrazumevani bridge još uvek običan svič.</li>
+
+<li><strong>Korak –</strong> Na OVS1 napravite novi bridge <code>main-net</code> i u njega dodajte portove eth0, eth1 i eth2. Portove prvo prebacite iz podrazumevanog bridge-a. Proverite komandom <code>ovs-vsctl list-ports main-net</code>.</li>
+
+<li><strong>Korak –</strong> Novi bridge ima samo jedno pravilo, <code>NORMAL</code>. Komandom <code>ovs-ofctl dump-flows main-net</code> ga pogledajte, a zatim ga obrišite komandom <code>ovs-ofctl del-flows main-net</code> i proverite da u bridge-u nema nijednog pravila. Pingujte sa PC1 na PC2 i objasnite zašto komunikacija više ne radi.</li>
+
+<li><strong>Korak –</strong> Na <code>main-net</code> dodajte pravila koja računarima iz iste podmreže omogućavaju komunikaciju (bez rutiranja): (a) ARP zahtev sa PC1 prosleđuje se do PC2, a ARP zahtev sa PC2 do PC1, (b) svaki okvir čija je odredišna MAC adresa PC1 ide na port <code>eth0</code>, a svaki okvir čija je odredišna MAC adresa PC2 na port <code>eth1</code>. Portove u pravilima navodite imenima (<code>eth0</code>, <code>eth1</code>, <code>eth2</code>), a ne brojevima, a svaku komandu pišite u jednom redu. Na PC1 i PC2 prethodno obrišite ARP tabelu komandom <code>ip neigh flush dev eth0</code>, pa pingujte sa PC1 na PC2. Ping mora da uspe, a u odgovoru se vidi <code>ttl=64</code>, jer paket nije prošao kroz ruter.</li>
+
+<li><strong>Korak –</strong> PC1 i PC2 za adresu 10.16.1.1, a SERVER za adresu 10.16.2.1, šalju ARP zahtev koji ostaje bez odgovora, pa ne mogu da pošalju paket ka drugoj podmreži. Napišite dva ARP-responder pravila (po jedno za svaku gateway adresu, viši prioritet nego pravila iz prethodnog koraka) koja na ARP zahtev (<code>arp_op=1</code>) za gateway adresu odgovaraju ARP odgovorom sa MAC adresom iz druge tabele iz koraka 2. Pravilo ne šalje paket nikuda, nego od zahteva pravi odgovor i vraća ga na port sa kog je stigao (<code>in_port</code>).
+
+Proverite da su PC1 i SERVER naučili MAC adrese gateway-a: pingujte gateway adresu (ping neće uspeti, jer OVS1 odgovara samo na ARP) i komandom <code>ip neigh show</code> pogledajte ARP tabelu. Zapišite koju MAC adresu PC1 sada ima za 10.16.1.1.
+
+<div class="note">Odgovor od zahteva se pravi nizom akcija: odredišnu MAC adresu okvira postaviti na izvorišnu (<code>move:NXM_OF_ETH_SRC[]-&gt;NXM_OF_ETH_DST[]</code>), izvorišnu postaviti na MAC "rutera" (<code>mod_dl_src</code>), operaciju ARP paketa promeniti u 2 (<code>load:0x2-&gt;NXM_OF_ARP_OP[]</code>), polja ARP paketa <code>NXM_NX_ARP_SHA</code> i <code>NXM_OF_ARP_SPA</code> (pošiljalac) i <code>NXM_NX_ARP_THA</code> i <code>NXM_OF_ARP_TPA</code> (cilj) razmeniti: pošiljalac postaje "ruter" (MAC i IP adresa zadati kao brojevi, <code>load:0x...-&gt;NXM_NX_ARP_SHA[]</code>), a cilj postaje računar koji je pitao (<code>move:...</code>), i na kraju poslati paket na <code>in_port</code>.</div>
+</li>
+
+<li><strong>Korak –</strong> Dodajte pravila za rutiranje IP saobraćaja sa nižim prioritetom od pravila iz koraka 6 i 7 (okviri koji su već adresirani na MAC adresu računara iz iste podmreže ne smeju da se rutiraju). Za svako odredište jedno pravilo: <code>nw_dst=10.16.2.0/24</code> (SERVER), <code>nw_dst=10.16.1.11</code> (PC1) i <code>nw_dst=10.16.1.12</code> (PC2). Svako pravilo mora da (a) postavi izvorišnu MAC adresu na MAC adresu gateway-a podmreže u koju paket ulazi (<code>mod_dl_src</code>), (b) postavi odredišnu MAC adresu na MAC adresu odredišnog uređaja (<code>mod_dl_dst</code>), (c) smanji TTL za jedan (<code>dec_ttl</code>) i (d) pošalje paket na odgovarajući port. Pingujte sa PC1 na SERVER, sa PC2 na SERVER i sa SERVER-a na PC1. Zapišite vrednost <code>ttl</code> u odgovoru i uporedite je sa pingom PC1 – PC2 iz koraka 6. Zatim sa PC1 pingujte SERVER sa početnim TTL-om 1 (<code>ping -t 1</code>) i objasnite zašto odgovor ne stiže.</li>
+
+<li><strong>Korak –</strong> Komandom <code>ovs-ofctl --names dump-flows main-net</code> pogledajte pravila i brojače paketa. Uočite koja pravila povećavaju brojače pri pingovima PC1 – SERVER i PC1 – PC2 i koja pri ARP razrešavanju gateway adrese. Objasnite zašto SERVER-u za odgovor PC1-u ne treba posebno pravilo, i zašto ping PC1 – PC2 ne povećava brojač pravila za <code>nw_dst=10.16.1.12</code>.</li>
+
+<li><strong>Korak –</strong> Dodajte pravilo za kontrolu pristupa (ACL, <em>access control list</em>) koje odbacuje (<code>drop</code>) IP saobraćaj sa PC2 (<code>nw_src=10.16.1.12</code>) ka podmreži <code>10.16.2.0/24</code>. Pravilo mora imati viši prioritet od pravila za rutiranje, inače nikada neće biti izabrano. Pingujte sa PC1 na SERVER (mora da uspe) i sa PC2 na SERVER (ne sme da uspe), a zatim sa PC2 na PC1 (mora da uspe, jer taj saobraćaj ne prolazi kroz ruter). Ponovo pogledajte brojače i uočite pravilo koje je poraslo za PC2.</li>
+</ol>

@@ -1,0 +1,215 @@
+<h2>Vežba 6, Zadatak 2 – Rešenje (komande)</h2>
+
+<p>Sve komande su kucane na pravim Docker uređajima (<code>gns3/openvswitch</code> za OVS1, <code>alpine</code> za PC i SERVER) i proverene u ovom redosledu. Portovi OVS1: eth0 = PC, eth1 = SERVER. U ispisu <code>dump-flows</code> portovi su brojevi: eth0 = 1, eth1 = 2. Iz ispisa su izostavljeni <code>cookie</code>, <code>duration</code> i <code>idle_age</code>.</p>
+
+<h3>Korak 1 – Topologija</h3>
+
+<p>Veze prema tabeli iz zadatka: OVS1 eth0 – PC eth0, OVS1 eth1 – SERVER eth0. Kabl PC – OVS1 se mora povezati prvi, da bi na OVS1 dobio ime eth0. Zatim pokrenite sva tri uređaja.</p>
+
+<h3>Korak 2 – IP adrese i HTTP serveri</h3>
+
+<p><strong>PC</strong></p>
+<pre data-dev="pc"><code>ip link set eth0 up
+ip addr add 10.17.0.11/24 dev eth0
+echo '#!/bin/sh' &gt; /srv.sh
+echo 'while read l; do [ "${#l}" -le 1 ] &amp;&amp; break; done' &gt;&gt; /srv.sh
+echo 'printf "HTTP/1.0 200 OK\r\nContent-Length: 10\r\n\r\nINSIDE OK\n"' &gt;&gt; /srv.sh
+chmod +x /srv.sh
+nc -lk -p 80 -e /srv.sh &amp;</code></pre>
+
+<p><strong>SERVER</strong></p>
+<pre data-dev="srv"><code>ip link set eth0 up
+ip addr add 10.17.0.100/24 dev eth0
+echo '#!/bin/sh' &gt; /srv.sh
+echo 'while read l; do [ "${#l}" -le 1 ] &amp;&amp; break; done' &gt;&gt; /srv.sh
+echo 'printf "HTTP/1.0 200 OK\r\nContent-Length: 10\r\n\r\nSERVER OK\n"' &gt;&gt; /srv.sh
+chmod +x /srv.sh
+nc -lk -p 80 -e /srv.sh &amp;
+nc -lk -p 8080 -e /srv.sh &amp;</code></pre>
+
+<p>Skripta <code>/srv.sh</code> pročita zaglavlje HTTP zahteva (do prazne linije) i odgovori kratkim tekstom. Komanda <code>nc -lk -p 80 -e /srv.sh</code> sluša na portu 80 i za svaku vezu pokreće skriptu, a <code>&amp;</code> je ostavlja da radi u pozadini. Na uređaju SERVER isti odgovor se nudi i na portu 8080, što će biti potrebno u poslednjem koraku.</p>
+
+<h3>Korak 3 – Bridge main-net bez pravila</h3>
+
+<p>Portovi se prvo uklanjaju iz podrazumevanog bridge-a <code>br0</code>, pa se dodaju u novi bridge. Novi bridge ima jedno podrazumevano pravilo (NORMAL) koje se briše.</p>
+
+<p><strong>OVS1</strong></p>
+<pre data-dev="ovs1"><code>ovs-vsctl del-port br0 eth0
+ovs-vsctl del-port br0 eth1
+ovs-vsctl add-br main-net
+ovs-vsctl add-port main-net eth0
+ovs-vsctl add-port main-net eth1
+ovs-ofctl del-flows main-net
+ovs-ofctl dump-flows main-net</code></pre>
+
+<p>Ispis <code>dump-flows</code> je prazan (samo zaglavlje <code>NXST_FLOW reply</code>).</p>
+
+<p><strong>PC</strong></p>
+<pre data-dev="pc"><code>ping -c 3 -W 1 10.17.0.100</code></pre>
+<pre class="out"><code>3 packets transmitted, 0 packets received, 100% packet loss</code></pre>
+
+<p>Ping ne prolazi: bridge nema nijedno pravilo, a paket koji ne odgovara nijednom pravilu se odbacuje. Ni ARP upit ne stiže do SERVER-a.</p>
+
+<h3>Korak 4 – Prosleđivanje bez zaštite</h3>
+
+<p>Pravilo <code>arp,actions=flood</code> šalje ARP na sve portove osim ulaznog. Preostala dva pravila su prosleđivanje „port na port“: sve što dođe sa eth0 izlazi na eth1 i obrnuto. Bridge ne gleda MAC adrese, jer su u mreži samo dva računara.</p>
+
+<p><strong>OVS1</strong></p>
+<pre data-dev="ovs1"><code>ovs-ofctl add-flow main-net 'priority=100,arp,actions=flood'
+ovs-ofctl add-flow main-net 'priority=10,in_port=eth0,actions=output:eth1'
+ovs-ofctl add-flow main-net 'priority=10,in_port=eth1,actions=output:eth0'
+ovs-ofctl dump-flows main-net</code></pre>
+<pre class="out"><code>table=0, n_packets=0, n_bytes=0, priority=100,arp actions=FLOOD
+table=0, n_packets=0, n_bytes=0, priority=10,in_port=1 actions=output:2
+table=0, n_packets=0, n_bytes=0, priority=10,in_port=2 actions=output:1</code></pre>
+
+<p><strong>PC</strong></p>
+<pre data-dev="pc"><code>ping -c 3 -W 1 10.17.0.100
+wget -qO- -T 3 http://10.17.0.100/</code></pre>
+<pre class="out"><code>3 packets transmitted, 3 packets received, 0% packet loss
+SERVER OK</code></pre>
+
+<p><strong>SERVER</strong></p>
+<pre data-dev="srv"><code>ping -c 3 -W 1 10.17.0.11
+wget -qO- -T 3 http://10.17.0.11/</code></pre>
+<pre class="out"><code>3 packets transmitted, 3 packets received, 0% packet loss
+INSIDE OK</code></pre>
+
+<p>Sve radi u oba smera. To je problem: SERVER (spoljašnji računar) može slobodno da otvara veze ka PC-u.</p>
+
+<h3>Korak 5 – Pokušaj bez stanja (stateless)</h3>
+
+<p>Pravilo za pakete sa eth1 se zamenjuje pravilom koje ih odbacuje. ARP i dalje prolazi, jer ga hvata pravilo prioriteta 100. Komanda <code>del-flows main-net 'in_port=eth1'</code> briše samo pravila koja za ulazni port imaju eth1, pa ARP pravilo ostaje.</p>
+
+<p><strong>OVS1</strong></p>
+<pre data-dev="ovs1"><code>ovs-ofctl del-flows main-net 'in_port=eth1'
+ovs-ofctl add-flow main-net 'priority=10,in_port=eth1,actions=drop'
+ovs-ofctl dump-flows main-net</code></pre>
+<pre class="out"><code>table=0, n_packets=2, n_bytes=84, priority=100,arp actions=FLOOD
+table=0, n_packets=18, n_bytes=1532, priority=10,in_port=1 actions=output:2
+table=0, n_packets=0, n_bytes=0, priority=10,in_port=2 actions=drop</code></pre>
+
+<p>Pravila koja nisu menjana zadržavaju brojače iz prethodnog koraka (brojevi se razlikuju od izvršavanja do izvršavanja), a novo pravilo počinje od nule.</p>
+
+<p><strong>PC</strong></p>
+<pre data-dev="pc"><code>ping -c 3 -W 1 10.17.0.100
+wget -qO- -T 3 http://10.17.0.100/</code></pre>
+<pre class="out"><code>3 packets transmitted, 0 packets received, 100% packet loss
+wget: download timed out</code></pre>
+
+<p><strong>OVS1</strong></p>
+<pre data-dev="ovs1"><code>ovs-ofctl dump-flows main-net</code></pre>
+<pre class="out"><code>table=0, n_packets=7, n_bytes=294, priority=100,arp actions=FLOOD
+table=0, n_packets=25, n_bytes=2118, priority=10,in_port=1 actions=output:2
+table=0, n_packets=8, n_bytes=660, priority=10,in_port=2 actions=drop</code></pre>
+
+<p>Zahtevi PC-a stižu do SERVER-a (brojač pravila <code>in_port=1</code> raste), SERVER odgovara, ali odgovori dolaze sa eth1 i odbacuje ih pravilo <code>in_port=2</code> (njegov brojač raste). Pravilo ne razlikuje odgovor na vezu koju je otvorio PC od veze koju bi otvorio SERVER: gleda samo ulazni port. Zaštita bez stanja zato ili blokira sve u jednom smeru, ili ne blokira ništa.</p>
+
+<h3>Korak 6 – Praćenje konekcija: tabela 0 i tabela 1</h3>
+
+<p>Prvo se brišu sva pravila, pa se pišu pravila obe tabele. Akcija <code>ct(table=1)</code> u tabeli 0 šalje IP paket u modul za praćenje konekcija i zatim ga ponovo obrađuje u tabeli 1, ali sada sa oznakama stanja (<code>ct_state</code>) koje pravila tabele 1 mogu da proveravaju. Akcija <code>ct(commit)</code> upisuje konekciju u tabelu konekcija, pa se naredni paketi te konekcije (u oba smera) smatraju uspostavljenim (<code>+est</code>). Pravila tabele 1 prioriteta 100 se ne preklapaju, jer se razlikuju po stanju ili ulaznom portu.</p>
+
+<p><strong>OVS1</strong></p>
+<pre data-dev="ovs1"><code>ovs-ofctl del-flows main-net
+ovs-ofctl add-flow main-net 'table=0,priority=100,arp,actions=flood'
+ovs-ofctl add-flow main-net 'table=0,priority=50,ip,actions=ct(table=1)'
+ovs-ofctl add-flow main-net 'table=0,priority=0,actions=drop'
+ovs-ofctl add-flow main-net 'table=1,priority=200,ct_state=+inv+trk,ip,actions=drop'
+ovs-ofctl add-flow main-net 'table=1,priority=100,ct_state=+new+trk,in_port=eth0,ip,actions=ct(commit),output:eth1'
+ovs-ofctl add-flow main-net 'table=1,priority=100,ct_state=+est+trk,in_port=eth0,ip,actions=output:eth1'
+ovs-ofctl add-flow main-net 'table=1,priority=100,ct_state=+est+trk,in_port=eth1,ip,actions=output:eth0'
+ovs-ofctl add-flow main-net 'table=1,priority=90,ct_state=+new+trk,in_port=eth1,ip,actions=drop'
+ovs-ofctl add-flow main-net 'table=1,priority=0,actions=drop'
+ovs-ofctl dump-flows main-net</code></pre>
+<pre class="out"><code>table=0, n_packets=0, n_bytes=0, priority=100,arp actions=FLOOD
+table=0, n_packets=0, n_bytes=0, priority=50,ip actions=ct(table=1)
+table=0, n_packets=0, n_bytes=0, priority=0 actions=drop
+table=1, n_packets=0, n_bytes=0, priority=200,ct_state=+inv+trk,ip actions=drop
+table=1, n_packets=0, n_bytes=0, priority=100,ct_state=+new+trk,ip,in_port=1 actions=ct(commit),output:2
+table=1, n_packets=0, n_bytes=0, priority=90,ct_state=+new+trk,ip,in_port=2 actions=drop
+table=1, n_packets=0, n_bytes=0, priority=100,ct_state=+est+trk,ip,in_port=1 actions=output:2
+table=1, n_packets=0, n_bytes=0, priority=100,ct_state=+est+trk,ip,in_port=2 actions=output:1
+table=1, n_packets=0, n_bytes=0, priority=0 actions=drop</code></pre>
+
+<p>Redosled ispisa ne mora da prati prioritete.</p>
+
+<h3>Korak 7 – Veze iz unutrašnje mreže prolaze</h3>
+
+<p><strong>PC</strong></p>
+<pre data-dev="pc"><code>ping -c 3 -W 1 10.17.0.100
+wget -qO- -T 3 http://10.17.0.100/
+wget -qO- -T 3 http://10.17.0.100:8080/</code></pre>
+<pre class="out"><code>3 packets transmitted, 3 packets received, 0% packet loss
+SERVER OK
+SERVER OK</code></pre>
+
+<p>Za razliku od koraka 5, sada prolaze i zahtevi i odgovori: prvi paket svake veze je <code>+new</code> sa eth0, pa ga pravilo upisuje u tabelu konekcija, a svi odgovori sa eth1 su <code>+est</code>.</p>
+
+<h3>Korak 8 – Veze iz spoljašnje mreže se blokiraju</h3>
+
+<p><strong>SERVER</strong></p>
+<pre data-dev="srv"><code>ping -c 3 -W 1 10.17.0.11
+wget -qO- -T 3 http://10.17.0.11/</code></pre>
+<pre class="out"><code>3 packets transmitted, 0 packets received, 100% packet loss
+wget: download timed out</code></pre>
+
+<p>Prvi paket ovih veza dolazi sa eth1 i nije <code>+est</code> (nijedna veza nije upisana), pa ga odbacuje pravilo <code>+new+trk,in_port=eth1</code>. Pošto nikad nije upisan, nema ni odgovora, pa ponovljeni pokušaji (ping šalje tri paketa, <code>wget</code> ponavlja SYN) ponovo bivaju odbačeni.</p>
+
+<h3>Korak 9 – Brojači pravila</h3>
+
+<p><strong>OVS1</strong></p>
+<pre data-dev="ovs1"><code>ovs-ofctl dump-flows main-net</code></pre>
+<pre class="out"><code>table=0, n_packets=0, n_bytes=0, priority=100,arp actions=FLOOD
+table=0, n_packets=38, n_bytes=3145, priority=50,ip actions=ct(table=1)
+table=0, n_packets=0, n_bytes=0, priority=0 actions=drop
+table=1, n_packets=2, n_bytes=148, priority=200,ct_state=+inv+trk,ip actions=drop
+table=1, n_packets=3, n_bytes=246, priority=100,ct_state=+new+trk,ip,in_port=1 actions=ct(commit),output:2
+table=1, n_packets=14, n_bytes=1167, priority=100,ct_state=+est+trk,ip,in_port=1 actions=output:2
+table=1, n_packets=13, n_bytes=1068, priority=100,ct_state=+est+trk,ip,in_port=2 actions=output:1
+table=1, n_packets=6, n_bytes=516, priority=90,ct_state=+new+trk,ip,in_port=2 actions=drop
+table=1, n_packets=0, n_bytes=0, priority=0 actions=drop</code></pre>
+
+<p>Brojevi se razlikuju od izvršavanja do izvršavanja, ali odnosi ostaju isti. Pravilo <code>+new+trk,in_port=1</code> ima mali broj paketa: po jedan za svaku vezu koju je PC otvorio (ping, HTTP na 80, HTTP na 8080), ovde 3. Pravilo <code>+est+trk,in_port=1</code> broji ostale zahteve iz tih veza, a <code>+est+trk,in_port=2</code> sve odgovore SERVER-a: oni prolaze samo zato što pripadaju vezama koje je otvorio PC. Pravilo <code>+new+trk,in_port=2</code> je odbacilo pokušaje SERVER-a iz koraka 8 (tri paketa ping-a i ponovljeni SYN paketi <code>wget</code>-a). Pravilo za <code>+inv</code> hvata pakete koje modul za praćenje smatra nevažećim; njegov brojač je obično 0 ili veoma mali (u ovom okruženju nekoliko SYN-ACK paketa prvih veza bude proglašeno nevažećim, a <code>wget</code> ih ponovi), a poslednje pravilo tabele 1 ima 0 paketa jer su sva stanja koja se pojavljuju obuhvaćena višim pravilima. Pravilo prioriteta 0 u tabeli 0 broji pakete koji nisu ni ARP ni IPv4 (na primer IPv6) i obično ima 0 ili 1 paket. Brojač pravila <code>ip actions=ct(table=1)</code> u tabeli 0 jednak je zbiru brojača svih pravila tabele 1, jer svaki IP paket prolazi kroz tabelu 0 tačno jednom i završava u tačno jednom pravilu tabele 1.</p>
+
+<h3>Korak 10 – Samo ICMP i TCP 80</h3>
+
+<p>Opšte pravilo za nove veze sa eth0 se briše i zamenjuje sa dva uža pravila. Naredba <code>del-flows</code> sa ovim uslovom briše samo to pravilo, jer ostala pravila imaju drugo stanje ili drugi ulazni port.</p>
+
+<p><strong>OVS1</strong></p>
+<pre data-dev="ovs1"><code>ovs-ofctl del-flows main-net 'table=1,ct_state=+new+trk,in_port=eth0,ip'
+ovs-ofctl add-flow main-net 'table=1,priority=100,ct_state=+new+trk,in_port=eth0,icmp,actions=ct(commit),output:eth1'
+ovs-ofctl add-flow main-net 'table=1,priority=100,ct_state=+new+trk,in_port=eth0,tcp,tp_dst=80,actions=ct(commit),output:eth1'
+ovs-ofctl dump-flows main-net table=1</code></pre>
+<pre class="out"><code>table=1, n_packets=2, n_bytes=148, priority=200,ct_state=+inv+trk,ip actions=drop
+table=1, n_packets=14, n_bytes=1167, priority=100,ct_state=+est+trk,ip,in_port=1 actions=output:2
+table=1, n_packets=13, n_bytes=1068, priority=100,ct_state=+est+trk,ip,in_port=2 actions=output:1
+table=1, n_packets=0, n_bytes=0, priority=100,ct_state=+new+trk,icmp,in_port=1 actions=ct(commit),output:2
+table=1, n_packets=0, n_bytes=0, priority=100,ct_state=+new+trk,tcp,in_port=1,tp_dst=80 actions=ct(commit),output:2
+table=1, n_packets=6, n_bytes=516, priority=90,ct_state=+new+trk,ip,in_port=2 actions=drop
+table=1, n_packets=0, n_bytes=0, priority=0 actions=drop</code></pre>
+
+<p><strong>PC</strong></p>
+<pre data-dev="pc"><code>ping -c 3 -W 1 10.17.0.100
+wget -qO- -T 3 http://10.17.0.100/
+wget -qO- -T 3 http://10.17.0.100:8080/</code></pre>
+<pre class="out"><code>3 packets transmitted, 3 packets received, 0% packet loss
+SERVER OK
+wget: download timed out</code></pre>
+
+<p><strong>SERVER</strong></p>
+<pre data-dev="srv"><code>ping -c 3 -W 1 10.17.0.11
+wget -qO- -T 3 http://10.17.0.11/</code></pre>
+<pre class="out"><code>3 packets transmitted, 0 packets received, 100% packet loss
+wget: download timed out</code></pre>
+
+<p><strong>OVS1</strong></p>
+<pre data-dev="ovs1"><code>ovs-ofctl dump-flows main-net table=1</code></pre>
+<pre class="out"><code>table=1, n_packets=3, n_bytes=222, priority=200,ct_state=+inv+trk,ip actions=drop
+table=1, n_packets=21, n_bytes=1780, priority=100,ct_state=+est+trk,ip,in_port=1 actions=output:2
+table=1, n_packets=22, n_bytes=1815, priority=100,ct_state=+est+trk,ip,in_port=2 actions=output:1
+table=1, n_packets=1, n_bytes=98, priority=100,ct_state=+new+trk,icmp,in_port=1 actions=ct(commit),output:2
+table=1, n_packets=1, n_bytes=74, priority=100,ct_state=+new+trk,tcp,in_port=1,tp_dst=80 actions=ct(commit),output:2
+table=1, n_packets=12, n_bytes=1032, priority=90,ct_state=+new+trk,ip,in_port=2 actions=drop
+table=1, n_packets=3, n_bytes=222, priority=0 actions=drop</code></pre>
+
+<p>Brojači dva nova pravila su sada 1 i 1 (jedan ping i jedna HTTP veza sa PC-a), a poslednje pravilo tabele 1 ima nekoliko paketa (SYN koji <code>wget</code> ponavlja ka portu 8080). Ping i HTTP na portu 80 rade, HTTP na portu 8080 ističe, a SERVER i dalje ne može da otvori nijednu vezu ka PC-u. SYN paket ka portu 8080 je <code>+new</code>, ali ne odgovara nijednom pravilu koje dozvoljava nove veze sa eth0, pa ga hvata poslednje pravilo tabele 1 (<code>priority=0</code>) čiji brojač sada raste. Pošto konekcija nije upisana, nema ni odgovora. Pravila za <code>+est</code> nisu menjana: važe za sve veze koje je firewall jednom dozvolio.</p>

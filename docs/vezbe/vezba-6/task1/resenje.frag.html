@@ -1,0 +1,182 @@
+<h2>Vežba 6, Zadatak 1 – Rešenje (komande)</h2>
+
+<p>Sve komande su kucane na pravim Docker uređajima (<code>gns3/openvswitch</code> i <code>alpine</code>) i proverene u ovom redosledu. OVS1 radi kao ruter bez ijednog <code>NORMAL</code> pravila: na ARP zahteve za gateway adrese odgovara ARP-responder pravilima, a IP pakete rutira pravilima koja menjaju MAC adrese, smanjuju TTL i biraju izlazni port.</p>
+
+<h3>Korak 2 – MAC adrese, IP adrese i podrazumevani izlaz</h3>
+
+<p><strong>PC1</strong></p>
+<pre data-dev="pc1"><code>ip link set eth0 down
+ip link set eth0 address 02:00:00:00:01:11
+ip link set eth0 up
+ip addr add 10.16.1.11/24 dev eth0
+ip route add default via 10.16.1.1</code></pre>
+
+<p><strong>PC2</strong></p>
+<pre data-dev="pc2"><code>ip link set eth0 down
+ip link set eth0 address 02:00:00:00:01:12
+ip link set eth0 up
+ip addr add 10.16.1.12/24 dev eth0
+ip route add default via 10.16.1.1</code></pre>
+
+<p><strong>SERVER</strong></p>
+<pre data-dev="srv"><code>ip link set eth0 down
+ip link set eth0 address 02:00:00:00:02:64
+ip link set eth0 up
+ip addr add 10.16.2.100/24 dev eth0
+ip route add default via 10.16.2.1</code></pre>
+
+<p>Podrazumevani izlaz znači: za sve adrese van svoje podmreže uređaj šalje okvir MAC adresi gateway-a. Zato će PC1 pre slanja paketa ka SERVER-u tražiti ARP-om MAC adresu za 10.16.1.1.</p>
+
+<h3>Korak 3 – početno stanje</h3>
+
+<p><strong>OVS1</strong></p>
+<pre data-dev="ovs1"><code>ovs-vsctl show</code></pre>
+
+<p>Slika pri pokretanju sama stavlja sve portove u <code>br0</code> (u izlazu se vide i prazni <code>br1</code>–<code>br3</code>):</p>
+<pre class="out"><code>    Bridge br0
+        datapath_type: netdev
+        Port eth0
+            Interface eth0
+        Port eth1
+            Interface eth1
+        Port eth2
+            Interface eth2
+        Port br0
+            Interface br0
+                type: internal
+    Bridge br1
+        ...</code></pre>
+
+<p><strong>PC1</strong></p>
+<pre data-dev="pc1"><code>ping -c 2 -W 2 10.16.1.12
+ping -c 2 -W 2 10.16.2.100</code></pre>
+
+<p>Ping ka PC2 uspeva (<code>0% packet loss</code>, <code>ttl=64</code>): PC1 i PC2 su u istoj podmreži i <code>br0</code> radi kao običan svič (pravilo <code>NORMAL</code>). Ping ka SERVER-u ne uspeva (<code>100% packet loss</code>): SERVER je u drugoj podmreži, pa PC1 šalje ARP zahtev za gateway 10.16.1.1, a tu adresu nema nijedan uređaj. Svič ne rutira; za to je potreban ruter.</p>
+
+<h3>Korak 4 – bridge main-net</h3>
+
+<p><strong>OVS1</strong></p>
+<pre data-dev="ovs1"><code>ovs-vsctl del-port br0 eth0
+ovs-vsctl del-port br0 eth1
+ovs-vsctl del-port br0 eth2
+ovs-vsctl add-br main-net
+ovs-vsctl add-port main-net eth0
+ovs-vsctl add-port main-net eth1
+ovs-vsctl add-port main-net eth2
+ovs-vsctl list-ports main-net</code></pre>
+
+<pre class="out"><code>eth0
+eth1
+eth2</code></pre>
+
+<h3>Korak 5 – brisanje NORMAL pravila</h3>
+
+<p><strong>OVS1</strong></p>
+<pre data-dev="ovs1"><code>ovs-ofctl dump-flows main-net
+ovs-ofctl del-flows main-net
+ovs-ofctl dump-flows main-net</code></pre>
+
+<p>Prvi <code>dump-flows</code> pokazuje jedino pravilo <code>priority=0 actions=NORMAL</code>, a drugi, posle <code>del-flows</code>, ne pokazuje nijedno pravilo (samo liniju <code>NXST_FLOW reply</code>):</p>
+<pre class="out"><code>NXST_FLOW reply (xid=0x4):
+ cookie=0x0, duration=0.015s, table=0, n_packets=0, n_bytes=0, idle_age=0, priority=0 actions=NORMAL
+NXST_FLOW reply (xid=0x4):</code></pre>
+
+<p><strong>PC1</strong></p>
+<pre data-dev="pc1"><code>ping -c 2 -W 2 10.16.1.12</code></pre>
+
+<p>Ping ne uspeva. Bridge bez pravila nema šta da uradi sa okvirom, pa ga odbacuje: nema ni prosleđivanja, ni učenja MAC adresa, ni ARP-a.</p>
+
+<h3>Korak 6 – pravila za komunikaciju unutar iste podmreže</h3>
+
+<p><strong>OVS1</strong></p>
+<pre data-dev="ovs1"><code>ovs-ofctl add-flow main-net 'priority=140,arp,arp_op=1,in_port=eth0,actions=output:eth1'
+ovs-ofctl add-flow main-net 'priority=140,arp,arp_op=1,in_port=eth1,actions=output:eth0'
+ovs-ofctl add-flow main-net 'priority=150,dl_dst=02:00:00:00:01:11,actions=output:eth0'
+ovs-ofctl add-flow main-net 'priority=150,dl_dst=02:00:00:00:01:12,actions=output:eth1'</code></pre>
+
+<p>Prva dva pravila prosleđuju ARP zahtev sa jednog računara na drugi, a druga dva, prema odredišnoj MAC adresi, isporučuju svaki okvir (ARP odgovor i IP paket) pravom računaru. To je ponašanje običnog sviča sa fiksnom tabelom MAC adresa. Pravila sa <code>dl_dst</code> imaju viši prioritet od budućih pravila za rutiranje, jer okviri adresirani direktno na računar ne smeju da se rutiraju.</p>
+
+<p><strong>PC1</strong></p>
+<pre data-dev="pc1"><code>ip neigh flush dev eth0
+ping -c 2 -W 2 10.16.1.12</code></pre>
+
+<p><strong>PC2</strong></p>
+<pre data-dev="pc2"><code>ip neigh flush dev eth0</code></pre>
+
+<p>Ping uspeva i u odgovoru je <code>ttl=64</code>: početna vrednost TTL-a (64) nije smanjena, jer paket nije prošao kroz ruter, nego samo kroz svič.</p>
+
+<h3>Korak 7 – ARP-responder pravila za gateway adrese</h3>
+
+<p><strong>OVS1</strong></p>
+<pre data-dev="ovs1"><code>ovs-ofctl add-flow main-net 'priority=200,arp,arp_op=1,arp_tpa=10.16.1.1,actions=move:NXM_OF_ETH_SRC[]-&gt;NXM_OF_ETH_DST[],mod_dl_src:02:00:00:00:01:01,load:0x2-&gt;NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]-&gt;NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]-&gt;NXM_OF_ARP_TPA[],load:0x020000000101-&gt;NXM_NX_ARP_SHA[],load:0x0a100101-&gt;NXM_OF_ARP_SPA[],in_port'
+ovs-ofctl add-flow main-net 'priority=200,arp,arp_op=1,arp_tpa=10.16.2.1,actions=move:NXM_OF_ETH_SRC[]-&gt;NXM_OF_ETH_DST[],mod_dl_src:02:00:00:00:02:01,load:0x2-&gt;NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]-&gt;NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]-&gt;NXM_OF_ARP_TPA[],load:0x020000000201-&gt;NXM_NX_ARP_SHA[],load:0x0a100201-&gt;NXM_OF_ARP_SPA[],in_port'</code></pre>
+
+<p>Pravilo hvata ARP zahtev (<code>arp_op=1</code>) čija je tražena adresa (<code>arp_tpa</code>) gateway, i od istog paketa pravi odgovor: (1) odredišna MAC adresa okvira postaje izvorišna, a izvorišna MAC adresa postaje MAC "rutera" (<code>02:00:00:00:01:01</code>); (2) operacija ARP paketa postaje 2 (odgovor); (3) u ARP paketu se stari pošiljalac (<code>ARP_SHA</code>, <code>ARP_SPA</code>) kopira u cilj (<code>ARP_THA</code>, <code>ARP_TPA</code>); (4) pošiljalac postaje "ruter": MAC adresa <code>02:00:00:00:01:01</code> i IP adresa <code>10.16.1.1</code> upisuju se kao brojevi (<code>0x020000000101</code> je MAC bez dvotačaka, <code>0x0a100101</code> je IP adresa 10.16.1.1 u heksadecimalnom zapisu: 10 = 0x0a, 16 = 0x10, 1 = 0x01, 1 = 0x01); (5) <code>in_port</code> šalje odgovor nazad na port sa kog je zahtev stigao. Pravilo ima viši prioritet (200) od pravila za običan ARP (140), pa zahtev za gateway nikada ne stiže do drugog računara.</p>
+
+<p><strong>PC1</strong></p>
+<pre data-dev="pc1"><code>ping -c 1 -W 1 10.16.1.1
+ip neigh show 10.16.1.1</code></pre>
+
+<p><strong>SERVER</strong></p>
+<pre data-dev="srv"><code>ping -c 1 -W 1 10.16.2.1
+ip neigh show 10.16.2.1</code></pre>
+
+<p>Ping na gateway ne uspeva (nema pravila koje odgovara na ICMP), ali <code>ip neigh show</code> sada prikazuje adresu <code>lladdr 02:00:00:00:01:01</code> za 10.16.1.1 na PC1, odnosno <code>lladdr 02:00:00:00:02:01</code> za 10.16.2.1 na SERVER-u, u stanju <code>REACHABLE</code> (ili <code>STALE</code>). Znači, ARP-responder radi: računari su dobili MAC adresu uređaja koji ne postoji.</p>
+
+<h3>Korak 8 – pravila za rutiranje</h3>
+
+<p><strong>OVS1</strong></p>
+<pre data-dev="ovs1"><code>ovs-ofctl add-flow main-net 'priority=100,ip,nw_dst=10.16.2.0/24,actions=mod_dl_src:02:00:00:00:02:01,mod_dl_dst:02:00:00:00:02:64,dec_ttl,output:eth2'
+ovs-ofctl add-flow main-net 'priority=100,ip,nw_dst=10.16.1.11,actions=mod_dl_src:02:00:00:00:01:01,mod_dl_dst:02:00:00:00:01:11,dec_ttl,output:eth0'
+ovs-ofctl add-flow main-net 'priority=100,ip,nw_dst=10.16.1.12,actions=mod_dl_src:02:00:00:00:01:01,mod_dl_dst:02:00:00:00:01:12,dec_ttl,output:eth1'</code></pre>
+
+<p>Svako pravilo radi ono što radi ruter: <code>mod_dl_src</code> postavlja izvorišnu MAC adresu na MAC adresu interfejsa rutera kroz koji paket izlazi (<code>02:00:00:00:02:01</code> u podmreži SERVER-a, <code>02:00:00:00:01:01</code> u podmreži računara), <code>mod_dl_dst</code> postavlja MAC adresu odredišnog uređaja (statički, jer OVS1 ne šalje ARP), <code>dec_ttl</code> smanjuje TTL za jedan i <code>output</code> šalje paket na izlazni port. IP adresa se ne menja.</p>
+
+<p><strong>PC1</strong></p>
+<pre data-dev="pc1"><code>ping -c 2 -W 2 10.16.2.100
+ping -c 2 -W 2 -t 1 10.16.2.100</code></pre>
+
+<p><strong>PC2</strong></p>
+<pre data-dev="pc2"><code>ping -c 2 -W 2 10.16.2.100</code></pre>
+
+<p><strong>SERVER</strong></p>
+<pre data-dev="srv"><code>ping -c 2 -W 2 10.16.1.11</code></pre>
+
+<p>Svi pingovi bez <code>-t 1</code> uspevaju, a u odgovoru je <code>ttl=63</code>, jedan manje nego pri pingu PC1 – PC2 (<code>ttl=64</code>): odgovor SERVER-a kreće sa TTL 64, prolazi kroz pravilo sa <code>dec_ttl</code> i do računara stiže sa 63. Ping sa <code>-t 1</code> šalje zahtev sa TTL 1: <code>dec_ttl</code> ga ne može smanjiti, pa se paket odbacuje i odgovor ne stiže (<code>100% packet loss</code>). Tako se ponaša i pravi ruter: paket kome je TTL istekao ne prosleđuje dalje.</p>
+
+<h3>Korak 9 – brojači pravila</h3>
+
+<p><strong>OVS1</strong></p>
+<pre data-dev="ovs1"><code>ovs-ofctl --names dump-flows main-net</code></pre>
+
+<p>Izlaz (skraćeno; vrednosti brojača zavise od toga šta je sve poslato):</p>
+<pre class="out"><code>... n_packets=2, n_bytes=84, priority=200,arp,arp_tpa=10.16.1.1,arp_op=1 actions=move:NXM_OF_ETH_SRC[]-&gt;NXM_OF_ETH_DST[],mod_dl_src:02:00:00:00:01:01,...,IN_PORT
+... n_packets=1, n_bytes=42, priority=200,arp,arp_tpa=10.16.2.1,arp_op=1 actions=move:NXM_OF_ETH_SRC[]-&gt;NXM_OF_ETH_DST[],mod_dl_src:02:00:00:00:02:01,...,IN_PORT
+... n_packets=3, n_bytes=238, priority=150,dl_dst=02:00:00:00:01:11 actions=output:eth0
+... n_packets=3, n_bytes=238, priority=150,dl_dst=02:00:00:00:01:12 actions=output:eth1
+... n_packets=1, n_bytes=42, priority=140,arp,in_port=eth0,arp_op=1 actions=output:eth1
+... n_packets=1, n_bytes=42, priority=140,arp,in_port=eth1,arp_op=1 actions=output:eth0
+... n_packets=7, n_bytes=686, priority=100,ip,nw_dst=10.16.2.0/24 actions=mod_dl_src:02:00:00:00:02:01,mod_dl_dst:02:00:00:00:02:64,dec_ttl,output:eth2
+... n_packets=3, n_bytes=294, priority=100,ip,nw_dst=10.16.1.11 actions=mod_dl_src:02:00:00:00:01:01,mod_dl_dst:02:00:00:00:01:11,dec_ttl,output:eth0
+... n_packets=2, n_bytes=196, priority=100,ip,nw_dst=10.16.1.12 actions=mod_dl_src:02:00:00:00:01:01,mod_dl_dst:02:00:00:00:01:12,dec_ttl,output:eth1</code></pre>
+
+<p>Pravila koja su se koristila imaju <code>n_packets</code> veće od nule (tačne vrednosti variraju). ARP-responder pravila su porasla pri razrešavanju MAC adresa gateway-a, a pravilo <code>nw_dst=10.16.2.0/24</code> pri pingovima ka SERVER-u. Odgovor SERVER-a ka PC1 ne treba posebno pravilo: to je običan IP paket sa odredištem 10.16.1.11, pa ga hvata pravilo <code>nw_dst=10.16.1.11</code> i vraća ga kroz isti "ruter". Ping PC1 – PC2 ne povećava ni jedno pravilo <code>nw_dst</code>, nego pravila <code>dl_dst</code> i ARP pravila: PC1 šalje okvir direktno na MAC adresu PC2 (ne na MAC adresu gateway-a), pa ga pravilo višeg prioriteta isporučuje bez rutiranja i bez smanjenja TTL-a, a pravilo za rutiranje do njega ni ne dolazi. (Brojač pravila <code>nw_dst=10.16.1.12</code> raste samo zbog odgovora SERVER-a na pingove sa PC2.)</p>
+
+<h3>Korak 10 – ACL pravilo</h3>
+
+<p><strong>OVS1</strong></p>
+<pre data-dev="ovs1"><code>ovs-ofctl add-flow main-net 'priority=300,ip,nw_src=10.16.1.12,nw_dst=10.16.2.0/24,actions=drop'</code></pre>
+
+<p><strong>PC1</strong></p>
+<pre data-dev="pc1"><code>ping -c 2 -W 2 10.16.2.100</code></pre>
+
+<p><strong>PC2</strong></p>
+<pre data-dev="pc2"><code>ping -c 2 -W 2 10.16.2.100
+ping -c 2 -W 2 10.16.1.11</code></pre>
+
+<p><strong>OVS1</strong></p>
+<pre data-dev="ovs1"><code>ovs-ofctl --names dump-flows main-net | grep drop</code></pre>
+
+<pre class="out"><code>... n_packets=2, n_bytes=196, priority=300,ip,nw_src=10.16.1.12,nw_dst=10.16.2.0/24 actions=drop</code></pre>
+
+<p>Ping PC1 – SERVER uspeva, ping PC2 – SERVER ne uspeva (<code>100% packet loss</code>), a ping PC2 – PC1 uspeva (<code>ttl=64</code>, jer se ne rutira). Paket sa PC2 ka podmreži 10.16.2.0/24 odgovara i ACL pravilu i pravilu za rutiranje, a OVS izvršava pravilo višeg prioriteta: <code>priority=300</code> je veći od 100, pa paket biva odbačen i pravilo za rutiranje ga ne vidi. Brojač ACL pravila je porastao (ovde 2, po jedan za svaki ping zahtev). Da je ACL pravilo imalo prioritet niži od 100, paket bi bio rutiran, a ACL pravilo nikada ne bi bilo izabrano. Saobraćaj PC2 – PC1 ne odgovara ACL pravilu (odredište nije u podmreži 10.16.2.0/24).</p>

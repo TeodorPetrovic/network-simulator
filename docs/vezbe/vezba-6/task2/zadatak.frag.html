@@ -1,0 +1,113 @@
+<h2>Vežba 6, Zadatak 2 – Stateful firewall: praćenje konekcija (conntrack) u OpenFlow-u</h2>
+
+<p>Računar PC je u unutrašnjoj mreži, a SERVER u spoljašnjoj. Između njih je jedan Open vSwitch (OVS1) koji treba da radi kao firewall. Politika glasi: PC sme da otvara veze ka SERVER-u (ping i HTTP), SERVER ne sme da otvara veze ka PC-u, ali odgovori na veze koje je otvorio PC moraju da prođu. Standardno prosleđivanje (NORMAL) se ne sme koristiti: sve ponašanje mreže zadaje se isključivo OpenFlow pravilima. Videćete zašto pravila koja gledaju samo ulazni port ne mogu da zadovolje ovu politiku i kako je rešava praćenje konekcija (conntrack), koje se u OpenFlow-u koristi akcijom <code>ct</code>.</p>
+
+<svg viewBox="0 0 700 190" width="100%" role="img" aria-label="Topologija: PC, OVS1 i SERVER" font-family="DejaVu Sans, Verdana, sans-serif">
+  <line x1="170" y1="95" x2="290" y2="95" stroke="#333333" stroke-width="2"/>
+  <line x1="410" y1="95" x2="530" y2="95" stroke="#333333" stroke-width="2"/>
+
+  <rect x="30" y="63" width="140" height="64" rx="8" fill="#dce6f1" stroke="#1f4e79" stroke-width="1.2"/>
+  <text x="100" y="86" text-anchor="middle" font-size="13" font-weight="bold" fill="#111111">PC</text>
+  <text x="100" y="101" text-anchor="middle" font-size="9" fill="#333333">10.17.0.11</text>
+  <text x="100" y="115" text-anchor="middle" font-size="9" fill="#333333">unutrašnja mreža</text>
+
+  <rect x="290" y="60" width="120" height="70" rx="8" fill="#fff3cd" stroke="#8a6d00" stroke-width="1.2"/>
+  <text x="350" y="87" text-anchor="middle" font-size="13" font-weight="bold" fill="#111111">OVS1</text>
+  <text x="350" y="102" text-anchor="middle" font-size="9" fill="#333333">firewall</text>
+  <text x="350" y="116" text-anchor="middle" font-size="9" fill="#333333">bridge main-net</text>
+
+  <rect x="530" y="63" width="140" height="64" rx="8" fill="#dce6f1" stroke="#1f4e79" stroke-width="1.2"/>
+  <text x="600" y="86" text-anchor="middle" font-size="13" font-weight="bold" fill="#111111">SERVER</text>
+  <text x="600" y="101" text-anchor="middle" font-size="9" fill="#333333">10.17.0.100</text>
+  <text x="600" y="115" text-anchor="middle" font-size="9" fill="#333333">spoljašnja mreža</text>
+
+  <text x="230" y="85" text-anchor="middle" font-size="10" fill="#aa0000">eth0</text>
+  <text x="470" y="85" text-anchor="middle" font-size="10" fill="#aa0000">eth1</text>
+</svg>
+<p class="caption">Slika 1. Veze između uređaja (OVS1 eth0 – PC, eth1 – SERVER).</p>
+
+<p>Za mrežu smete da koristite isključivo adresni blok <code>10.17.0.0/24</code>. Računari u ovoj vežbi nemaju podrazumevani izlaz jer nema rutera.</p>
+
+<p><strong>1. Korak –</strong> U GNS3 programu samostalno napravite novi projekat i topologiju sa slike. Potreban vam je jedan Docker uređaj Open vSwitch (OVS1, slika <code>gns3/openvswitch</code>) i dva Docker uređaja (slika <code>alpine</code>): PC i SERVER. Povežite ih kablovima prema tabeli (prvo kabl PC – OVS1, da bi imao port eth0) i pokrenite sve uređaje.</p>
+
+<table>
+  <tr><th>Uređaj i port</th><th>Povezuje se sa</th></tr>
+  <tr><td>OVS1 eth0</td><td>PC eth0</td></tr>
+  <tr><td>OVS1 eth1</td><td>SERVER eth0</td></tr>
+</table>
+
+<p><strong>2. Korak –</strong> Na uređajima PC i SERVER podesite IP adrese prema tabeli komandom <code>ip addr add</code>. Na oba uređaja napravite skriptu <code>/srv.sh</code> koja pročita zaglavlje HTTP zahteva i odgovori kratkim tekstom, i pokrenite je u pozadini komandom <code>nc</code> koja sluša na TCP portu: na uređaju PC na portu 80 (odgovor <code>INSIDE OK</code>), a na uređaju SERVER na portovima 80 i 8080 (odgovor <code>SERVER OK</code>). Port 8080 je potreban u poslednjem koraku.</p>
+
+<table>
+  <tr><th>Device</th><th>IP Address</th><th>Port na OVS1</th><th>HTTP portovi</th></tr>
+  <tr><td>PC</td><td>10.17.0.11 / 24</td><td>eth0</td><td>80</td></tr>
+  <tr><td>SERVER</td><td>10.17.0.100 / 24</td><td>eth1</td><td>80, 8080</td></tr>
+</table>
+
+<div class="note">Skripta <code>/srv.sh</code> nije predmet vežbe. Odgovor mora da bude oblika <code>HTTP/1.0 200 OK</code>, zaglavlje <code>Content-Length: 10</code>, prazna linija i tekst od tačno 10 bajtova (<code>INSIDE OK</code> ili <code>SERVER OK</code> sa novim redom); skripta pre odgovora čita zaglavlje zahteva do prazne linije. Server se pokreće komandom <code>nc -lk -p 80 -e /srv.sh &amp;</code> u <code>sh</code> konzoli uređaja.</div>
+
+<p><strong>3. Korak –</strong> Na OVS1 napravite novi bridge <code>main-net</code> i u njega dodajte portove eth0 i eth1 (bez tagova i trunk-ova). Novi bridge ima podrazumevano jedno pravilo koje radi NORMAL: obrišite sva pravila komandom <code>ovs-ofctl del-flows main-net</code>. Proverite da ping sa PC-a na SERVER sada ne prolazi i objasnite zašto.</p>
+
+<p><strong>4. Korak –</strong> Napravite prosleđivanje bez ikakve zaštite. Bridge ne treba da gleda MAC adrese: pravilo <code>arp</code> prioriteta 100 šalje ARP na sve portove osim ulaznog (akcija <code>flood</code>), a dva pravila prioriteta 10 šalju sve što dođe sa eth0 na eth1 i obrnuto. Pravila pišite sa imenima portova. Proverite da ping i HTTP na portu 80 rade u oba smera: sa PC-a ka SERVER-u (<code>wget -qO- -T 3 http://10.17.0.100/</code>) i sa SERVER-a ka PC-u (<code>wget -qO- -T 3 http://10.17.0.11/</code>). Objasnite zašto ovo ne zadovoljava politiku.</p>
+
+<p><strong>5. Korak –</strong> Pokušajte da politiku ostvarite pravilima bez stanja: pravilo za pakete sa eth1 zamenite pravilom koje ih odbacuje (ARP pravilo ostaje). Proverite ping i HTTP sa PC-a ka SERVER-u. Komandom <code>ovs-ofctl dump-flows main-net</code> pročitajte brojače i objasnite šta se desilo sa zahtevima, a šta sa odgovorima i zašto ovakva zaštita ne može da razlikuje odgovor od novog zahteva. U ispisu su portovi brojevi, a ne imena (eth0 = 1, eth1 = 2).</p>
+
+<p><strong>6. Korak –</strong> Pravila prepravite da koriste praćenje konekcija. Akcija <code>ct(table=1)</code> šalje IP paket u modul za praćenje konekcija i zatim ga ponovo obrađuje u tabeli 1 sa postavljenom oznakom stanja <code>ct_state</code>. Oznake koje koristimo: <code>+trk</code> (paket je prošao kroz praćenje), <code>+new</code> (prvi paket nove veze), <code>+est</code> (paket pripada vezi koja je već upisana, bilo u kom smeru) i <code>+inv</code> (nevažeći paket). Akcija <code>ct(commit)</code> upisuje vezu u tabelu konekcija. Prvo obrišite sva pravila (<code>del-flows main-net</code>), pa napravite pravila prema tabelama. Svako pravilo pišite sa <code>table=0</code> odnosno <code>table=1</code>, a za ulazni port koristite ime porta (<code>in_port=eth0</code>).</p>
+
+<svg viewBox="0 0 700 150" width="100%" role="img" aria-label="Tok paketa kroz tabelu 0 i tabelu 1" font-family="DejaVu Sans, Verdana, sans-serif">
+  <defs>
+    <marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#333333"/></marker>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#aa0000"/></marker>
+  </defs>
+  <rect x="5" y="30" width="90" height="50" rx="8" fill="#dce6f1" stroke="#1f4e79" stroke-width="1.2"/>
+  <text x="50" y="52" text-anchor="middle" font-size="12" font-weight="bold" fill="#111111">IP paket</text>
+  <text x="50" y="68" text-anchor="middle" font-size="9" fill="#333333">stiže na port</text>
+
+  <rect x="150" y="30" width="150" height="50" rx="8" fill="#fff3cd" stroke="#8a6d00" stroke-width="1.2"/>
+  <text x="225" y="52" text-anchor="middle" font-size="12" font-weight="bold" fill="#111111">Tabela 0</text>
+  <text x="225" y="68" text-anchor="middle" font-size="9" fill="#333333">ARP flood, ip: ct(table=1)</text>
+
+  <rect x="410" y="30" width="150" height="50" rx="8" fill="#fff3cd" stroke="#8a6d00" stroke-width="1.2"/>
+  <text x="485" y="52" text-anchor="middle" font-size="12" font-weight="bold" fill="#111111">Tabela 1</text>
+  <text x="485" y="68" text-anchor="middle" font-size="9" fill="#333333">odluka po ct_state i portu</text>
+
+  <rect x="620" y="30" width="75" height="50" rx="8" fill="#dce6f1" stroke="#1f4e79" stroke-width="1.2"/>
+  <text x="657" y="60" text-anchor="middle" font-size="12" font-weight="bold" fill="#111111">Izlaz</text>
+
+  <line x1="95" y1="55" x2="148" y2="55" stroke="#333333" stroke-width="2" marker-end="url(#ar)"/>
+  <line x1="300" y1="55" x2="408" y2="55" stroke="#aa0000" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="354" y="46" text-anchor="middle" font-size="10" fill="#aa0000">ct(table=1)</text>
+  <line x1="560" y1="55" x2="618" y2="55" stroke="#333333" stroke-width="2" marker-end="url(#ar)"/>
+  <line x1="485" y1="80" x2="485" y2="112" stroke="#aa0000" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="496" y="106" font-size="10" fill="#aa0000">drop</text>
+  <text x="354" y="72" text-anchor="middle" font-size="9" fill="#333333">+ct_state</text>
+  <text x="590" y="46" text-anchor="middle" font-size="9" fill="#333333">output</text>
+</svg>
+<p class="caption">Slika 2. Tok IP paketa: tabela 0 poziva praćenje konekcija, tabela 1 odlučuje na osnovu stanja.</p>
+
+<p>Tabela 0:</p>
+<table>
+  <tr><th>Saobraćaj</th><th>Akcija</th><th>Prioritet</th></tr>
+  <tr><td>ARP</td><td><code>flood</code></td><td>100</td></tr>
+  <tr><td>IP (<code>ip</code>)</td><td><code>ct(table=1)</code></td><td>50</td></tr>
+  <tr><td>Sve ostalo</td><td>odbaciti</td><td>0</td></tr>
+</table>
+
+<p>Tabela 1 (sva pravila odgovaraju samo IP paketima):</p>
+<table>
+  <tr><th>Uslov</th><th>Akcija</th><th>Prioritet</th></tr>
+  <tr><td><code>ct_state=+inv+trk</code></td><td>odbaciti</td><td>200</td></tr>
+  <tr><td><code>ct_state=+new+trk</code>, ulaz eth0</td><td><code>ct(commit)</code>, pa izlaz na eth1</td><td>100</td></tr>
+  <tr><td><code>ct_state=+est+trk</code>, ulaz eth0</td><td>izlaz na eth1</td><td>100</td></tr>
+  <tr><td><code>ct_state=+est+trk</code>, ulaz eth1</td><td>izlaz na eth0</td><td>100</td></tr>
+  <tr><td><code>ct_state=+new+trk</code>, ulaz eth1</td><td>odbaciti</td><td>90</td></tr>
+  <tr><td>Sve ostalo</td><td>odbaciti</td><td>0</td></tr>
+</table>
+
+<p><strong>7. Korak –</strong> Proverite da veze iz unutrašnje mreže prolaze: sa PC-a ping ka SERVER-u i HTTP zahtevi na portove 80 i 8080 (<code>wget -qO- -T 3 http://10.17.0.100:8080/</code>) vraćaju odgovor. Za razliku od koraka 5, prolaze i zahtevi i odgovori. Objasnite zašto odgovori sada prolaze, iako dolaze sa istog porta koji je u koraku 5 bio blokiran.</p>
+
+<p><strong>8. Korak –</strong> Proverite da veze iz spoljašnje mreže ne prolaze: sa uređaja SERVER pingujte PC i pokušajte HTTP zahtev ka PC-u na portu 80 (<code>wget -qO- -T 3 http://10.17.0.11/</code>, iako PC nudi tu uslugu). Zapišite šta se desilo i objasnite zašto se paket ne odbacuje samo zbog porta, nego zbog stanja veze.</p>
+
+<p><strong>9. Korak –</strong> Komandom <code>ovs-ofctl dump-flows main-net</code> ispišite pravila obe tabele i pročitajte brojače <code>n_packets</code>. Na osnovu brojača odgovorite: koje pravilo broji otvorene veze sa PC-a (poredite njegov brojač sa brojem veza koje ste otvorili u koraku 7), koja dva pravila su propustila saobraćaj tih veza, koje pravilo je odbacilo pokušaje SERVER-a iz koraka 8, i da li je neki paket stigao do poslednjeg pravila tabele 1. Kako se brojač pravila <code>ct(table=1)</code> u tabeli 0 odnosi prema zbiru brojača u tabeli 1?</p>
+
+<p><strong>10. Korak –</strong> Ograničite politiku: PC sme da otvara samo ICMP veze i TCP veze ka portu 80. Opšte pravilo za <code>+new+trk</code> sa eth0 obrišite komandom <code>del-flows</code> sa istim uslovom (<code>table=1,ct_state=+new+trk,in_port=eth0,ip</code>), a umesto njega dodajte dva pravila prioriteta 100: za <code>icmp</code> i za <code>tcp</code> sa odredišnim portom 80 (<code>tp_dst=80</code>), oba sa <code>ct(commit)</code> i izlazom na eth1. Pravila za <code>+est</code> se ne menjaju. Proverite da ping i HTTP na portu 80 sa PC-a rade, da HTTP na portu 8080 sa PC-a ističe i da SERVER i dalje ne može da otvori vezu ka PC-u. Pročitajte <code>dump-flows main-net table=1</code> i objasnite koji brojač raste zbog pokušaja ka portu 8080 i zašto pravila za odgovore nije trebalo menjati.</p>

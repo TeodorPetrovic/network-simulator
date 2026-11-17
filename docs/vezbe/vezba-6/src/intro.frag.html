@@ -1,0 +1,46 @@
+<h3>1. OVS kao ruter pomoću OpenFlow pravila</h3>
+<p>Ruter radi četiri stvari: odgovara na ARP upite za svoju adresu (gateway), menja MAC adrese okvira, smanjuje TTL i bira izlazni port. OpenFlow ima akciju za svaku od njih, pa se OVS može ponašati kao ruter bez <code>NORMAL</code> pravila.</p>
+<table>
+<tr><th>Akcija</th><th>Šta radi</th></tr>
+<tr><td><code>mod_dl_src:MAC</code></td><td>postavlja izvorišnu MAC adresu (MAC "rutera" u podmreži kroz koju paket izlazi)</td></tr>
+<tr><td><code>mod_dl_dst:MAC</code></td><td>postavlja odredišnu MAC adresu (MAC sledećeg uređaja: računara u toj podmreži)</td></tr>
+<tr><td><code>dec_ttl</code></td><td>smanjuje TTL za 1; paket čiji je TTL već 1 se odbacuje</td></tr>
+<tr><td><code>output:port</code></td><td>šalje paket na izlazni port</td></tr>
+</table>
+<p><strong>ARP responder.</strong> Računar pre slanja ka gateway-u pita ARP-om za njegovu MAC adresu, a nijedan uređaj tu adresu nema. Zato pravilo hvata ARP zahtev (<code>arp_op=1</code>) za gateway adresu (<code>arp_tpa</code>) i od istog paketa pravi odgovor: akcija <code>move</code> kopira jedno polje paketa u drugo (npr. izvorišnu MAC adresu u odredišnu), akcija <code>load</code> upisuje konstantu (npr. <code>arp_op</code> postaje 2, odgovor), a <code>in_port</code> vraća paket na port sa kog je stigao.</p>
+<pre><code>move:NXM_OF_ETH_SRC[]-&gt;NXM_OF_ETH_DST[]      MAC pošiljaoca postaje odredišna MAC adresa
+mod_dl_src:02:00:00:00:01:01                  izvorišna MAC adresa je MAC "rutera"
+load:0x2-&gt;NXM_OF_ARP_OP[]                     ARP operacija postaje 2 (odgovor)
+move:NXM_NX_ARP_SHA[]-&gt;NXM_NX_ARP_THA[]        stari pošiljalac (MAC) postaje cilj
+move:NXM_OF_ARP_SPA[]-&gt;NXM_OF_ARP_TPA[]        stari pošiljalac (IP) postaje cilj
+load:0x020000000101-&gt;NXM_NX_ARP_SHA[]         pošiljalac je MAC "rutera"
+load:0x0a100101-&gt;NXM_OF_ARP_SPA[]             pošiljalac je IP adresa "rutera" (10.16.1.1)
+in_port                                       odgovor ide nazad na ulazni port</code></pre>
+<p>Ovih osam akcija (razdvojenih zarezima) čine <code>actions=</code> deo jednog pravila; cela komanda je u rešenju Zadatka 1. MAC i IP adresa u <code>load</code> akciji pišu se kao brojevi: <code>0x020000000101</code> je MAC <code>02:00:00:00:01:01</code> bez dvotačaka, a <code>0x0a100101</code> je <code>10.16.1.1</code> (10 = 0x0a, 16 = 0x10, 1 = 0x01).</p>
+<div class="note"><strong>OVS nije pravi ruter:</strong> <code>dec_ttl</code> samo smanjuje TTL, a OVS ne generiše ICMP poruku "time exceeded". Paket sa TTL 1 se tiho odbacuje, pa <code>ping -t 1</code> kroz ovakav ruter daje 100% gubitka paketa, bez ikakve poruke o grešci.</div>
+<p><strong>Prioriteti.</strong> Pravilo za rutiranje (<code>nw_dst=10.16.2.0/24</code>) hvata svaki IP paket za tu podmrežu. Okviri koji su u istom segmentu adresirani direktno na računar ne smeju da se rutiraju, pa pravila za isti segment (<code>dl_dst=...</code>) moraju imati <strong>veći prioritet</strong> od pravila za rutiranje. Isto važi za ACL pravilo koje treba da odbaci paket pre rutiranja: ono mora imati veći prioritet od pravila koje bi paket rutiralo.</p>
+<table>
+<tr><th>Prioritet</th><th>Pravilo</th></tr>
+<tr><td>300</td><td>ACL: <code>nw_src=10.16.1.12,nw_dst=10.16.2.0/24,actions=drop</code></td></tr>
+<tr><td>200</td><td>ARP responder za gateway adrese</td></tr>
+<tr><td>150</td><td>isporuka okvira po <code>dl_dst</code> (isti segment)</td></tr>
+<tr><td>140</td><td>običan ARP između računara u istom segmentu</td></tr>
+<tr><td>100</td><td>rutiranje po <code>nw_dst</code></td></tr>
+</table>
+
+<h3>2. Praćenje konekcija (conntrack)</h3>
+<p>Do sada su pravila bila <strong>stateless</strong>: gledaju samo jedan paket i ne znaju da li je deo neke veze. Takvim pravilima se ne može napisati "pusti odgovore, ali blokiraj nove veze spolja". Pravilo koje odbacuje sve sa porta eth1 blokira i odgovore na veze koje je otvorio PC, jer odgovor izgleda kao bilo koji drugi paket sa eth1. Modul za <strong>praćenje konekcija</strong> pamti veze, pa pravilo može da pita da li paket pripada već otvorenoj vezi. Akcija <code>ct(table=N)</code> šalje paket u conntrack i ponovo ga obrađuje u tabeli N, sada sa oznakama stanja, a <code>ct(commit)</code> upisuje vezu u tabelu konekcija: od tada su paketi te veze u oba smera <code>+est</code>.</p>
+<table>
+<tr><th>ct_state</th><th>Značenje</th></tr>
+<tr><td><code>+trk</code></td><td>paket je prošao kroz conntrack (oznake stanja važe)</td></tr>
+<tr><td><code>+new</code></td><td>prvi paket veze koja još nije upisana</td></tr>
+<tr><td><code>+est</code></td><td>paket pripada upisanoj vezi (uspostavljena veza, u bilo kom smeru)</td></tr>
+<tr><td><code>+inv</code></td><td>nevažeći paket (ne uklapa se ni u jednu vezu)</td></tr>
+</table>
+<p><strong>Dve faze.</strong> Pravila se ne proveravaju u jednom prolazu. U tabeli 0 paket nema stanje, pa ga pravilo samo šalje u conntrack. Tek kad se paket vrati u tabelu 1, ima oznake <code>ct_state</code> i pravila tabele 1 odlučuju šta s njim.</p>
+<pre><code>ovs-ofctl add-flow main-net 'table=0,priority=50,ip,actions=ct(table=1)'
+ovs-ofctl add-flow main-net 'table=1,priority=100,ct_state=+new+trk,in_port=eth0,ip,actions=ct(commit),output:eth1'
+ovs-ofctl add-flow main-net 'table=1,priority=100,ct_state=+est+trk,in_port=eth1,ip,actions=output:eth0'
+ovs-ofctl add-flow main-net 'table=1,priority=90,ct_state=+new+trk,in_port=eth1,ip,actions=drop'</code></pre>
+<p>Tok je sledeći: prvi paket sa eth0 je <code>+new</code>, pa ga pravilo upisuje (<code>commit</code>) i prosleđuje; svaki odgovor sa eth1 je tada <code>+est</code> i prolazi; a prvi paket veze koju otvara eth1 je <code>+new</code> i odbacuje se.</p>
+<div class="note"><strong>Pažnja pri kopiranju:</strong> svaka komanda mora biti u <strong>jednom redu</strong>. Ako se pri kopiranju iz PDF-a duga komanda prelomi u dva reda, shell izvršava samo prvi deo i javlja grešku. Spojite redove pre nego što pritisnete Enter.</div>
