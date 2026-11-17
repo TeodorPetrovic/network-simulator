@@ -1,0 +1,113 @@
+<h2>Vežba 5, Zadatak 2 – Višetabelarni OpenFlow tok i ograničenje brzine (meter)</h2>
+
+<p>Mala kancelarija ima jedan Open vSwitch (OVS1) na koji su povezani računari PC1 i PC2 i server SERVER. Server nudi HTTP stranicu na portu 80. Sviču se ne sme dozvoliti standardno prosleđivanje (NORMAL): sve ponašanje mreže zadaje se isključivo OpenFlow pravilima. Pravila se dele u dve tabele: tabela 0 je lista kontrole pristupa (ACL) koja odlučuje šta sme da prođe, a tabela 1 je prosleđivanje po odredišnoj MAC adresi koje odlučuje na koji port paket izlazi. PC1 sme da pristupa serveru i pingom i HTTP-om, a PC2 sme samo da pinguje. Pošto je PC2 manje pouzdan računar, brzina njegovih ICMP paketa ograničava se pomoću meter-a.</p>
+
+<svg viewBox="0 0 700 290" width="100%" role="img" aria-label="Topologija: PC1, PC2 i SERVER povezani na OVS1" font-family="DejaVu Sans, Verdana, sans-serif">
+  <line x1="170" y1="62" x2="290" y2="118" stroke="#333333" stroke-width="2"/>
+  <line x1="170" y1="228" x2="290" y2="152" stroke="#333333" stroke-width="2"/>
+  <line x1="530" y1="135" x2="410" y2="135" stroke="#333333" stroke-width="2"/>
+
+  <rect x="30" y="30" width="140" height="64" rx="8" fill="#dce6f1" stroke="#1f4e79" stroke-width="1.2"/>
+  <text x="100" y="53" text-anchor="middle" font-size="13" font-weight="bold" fill="#111111">PC1</text>
+  <text x="100" y="68" text-anchor="middle" font-size="9" fill="#333333">10.15.0.11</text>
+  <text x="100" y="82" text-anchor="middle" font-size="9" fill="#333333">00:00:00:00:00:01</text>
+
+  <rect x="30" y="196" width="140" height="64" rx="8" fill="#dce6f1" stroke="#1f4e79" stroke-width="1.2"/>
+  <text x="100" y="219" text-anchor="middle" font-size="13" font-weight="bold" fill="#111111">PC2</text>
+  <text x="100" y="234" text-anchor="middle" font-size="9" fill="#333333">10.15.0.12</text>
+  <text x="100" y="248" text-anchor="middle" font-size="9" fill="#333333">00:00:00:00:00:02</text>
+
+  <rect x="530" y="103" width="140" height="64" rx="8" fill="#dce6f1" stroke="#1f4e79" stroke-width="1.2"/>
+  <text x="600" y="126" text-anchor="middle" font-size="13" font-weight="bold" fill="#111111">SERVER</text>
+  <text x="600" y="141" text-anchor="middle" font-size="9" fill="#333333">10.15.0.80</text>
+  <text x="600" y="155" text-anchor="middle" font-size="9" fill="#333333">00:00:00:00:00:03</text>
+
+  <rect x="290" y="100" width="120" height="70" rx="8" fill="#fff3cd" stroke="#8a6d00" stroke-width="1.2"/>
+  <text x="350" y="127" text-anchor="middle" font-size="13" font-weight="bold" fill="#111111">OVS1</text>
+  <text x="350" y="142" text-anchor="middle" font-size="9" fill="#333333">Open vSwitch</text>
+  <text x="350" y="156" text-anchor="middle" font-size="9" fill="#333333">bridge main-net</text>
+
+  <text x="236" y="80" text-anchor="middle" font-size="10" fill="#aa0000">eth0</text>
+  <text x="236" y="206" text-anchor="middle" font-size="10" fill="#aa0000">eth1</text>
+  <text x="470" y="127" text-anchor="middle" font-size="10" fill="#aa0000">eth2</text>
+</svg>
+<p class="caption">Slika 1. Veze između uređaja (OVS1 eth0 – PC1, eth1 – PC2, eth2 – SERVER).</p>
+
+<p>Za mrežu smete da koristite isključivo adresni blok <code>10.15.0.0/24</code>. Računari u ovoj vežbi nemaju podrazumevani izlaz jer nema rutera.</p>
+
+<p><strong>1. Korak –</strong> U GNS3 programu samostalno napravite novi projekat i topologiju sa slike. Potreban vam je jedan Docker uređaj Open vSwitch (OVS1, slika <code>gns3/openvswitch</code>) i tri Docker uređaja (slika <code>alpine</code>): PC1, PC2 i SERVER. Povežite ih kablovima prema tabeli i pokrenite sve uređaje.</p>
+
+<table>
+  <tr><th>Uređaj i port</th><th>Povezuje se sa</th></tr>
+  <tr><td>OVS1 eth0</td><td>PC1 eth0</td></tr>
+  <tr><td>OVS1 eth1</td><td>PC2 eth0</td></tr>
+  <tr><td>OVS1 eth2</td><td>SERVER eth0</td></tr>
+</table>
+
+<p><strong>2. Korak –</strong> Na računarima PC1, PC2 i SERVER podesite IP i MAC adrese iz tabele (MAC adrese se postavljaju ručno jer će se pravila prosleđivanja pisati po njima). Na uređaju SERVER pokrenite HTTP server na TCP portu 80 koji na svaki zahtev vraća kratak tekst. Proverite adrese komandom <code>ip addr show eth0</code>.</p>
+
+<table>
+  <tr><th>Device</th><th>IP Address</th><th>MAC adresa</th><th>Port na OVS1</th></tr>
+  <tr><td>PC1</td><td>10.15.0.11 / 24</td><td>00:00:00:00:00:01</td><td>eth0</td></tr>
+  <tr><td>PC2</td><td>10.15.0.12 / 24</td><td>00:00:00:00:00:02</td><td>eth1</td></tr>
+  <tr><td>SERVER</td><td>10.15.0.80 / 24</td><td>00:00:00:00:00:03</td><td>eth2</td></tr>
+</table>
+
+<p><strong>3. Korak –</strong> Na OVS1 napravite novi bridge <code>main-net</code> i u njega dodajte portove eth0, eth1 i eth2 (bez tagova i trunk-ova). Na bridge-u uključite protokol OpenFlow 1.3, jer su meter-i dostupni tek od te verzije. Novi bridge ima podrazumevano jedno pravilo koje radi NORMAL: obrišite sva pravila komandom <code>ovs-ofctl -O OpenFlow13 del-flows main-net</code>. Proverite da ping sa PC1 na SERVER sada ne prolazi i objasnite zašto (šta OVS radi sa paketom kada nijedno pravilo ne odgovara).</p>
+
+<p><strong>4. Korak –</strong> Napravite tabelu 1 (prosleđivanje po odredišnoj MAC adresi). Ova tabela ne uči adrese: pravila su statička. Za svaku od tri MAC adrese iz tabele dodajte pravilo koje paket šalje na odgovarajući port, za broadcast adresu <code>ff:ff:ff:ff:ff:ff</code> pravilo koje paket šalje na sve portove osim ulaznog (akcija <code>flood</code>, potrebna za ARP), a za sve ostalo odbacivanje. Sva pravila ove tabele pišite sa <code>table=1</code>. Zapišite zašto ping još uvek ne radi iako tabela 1 postoji (paket do nje ne stiže).</p>
+
+<p><strong>5. Korak –</strong> Napravite tabelu 0 (ACL) sa pravilima iz tabele. Svako pravilo koje dozvoljava saobraćaj završava akcijom <code>goto_table:1</code>, što paket prosleđuje u tabelu 1. Sve što nije dozvoljeno odbacuje se.</p>
+
+<table>
+  <tr><th>Saobraćaj</th><th>Odluka</th><th>Prioritet</th></tr>
+  <tr><td>ARP (bilo ko)</td><td>dozvoljeno, goto_table:1</td><td>100</td></tr>
+  <tr><td>ICMP (bilo ko)</td><td>dozvoljeno, goto_table:1</td><td>100</td></tr>
+  <tr><td>TCP 80, od PC1 ka SERVER-u (zahtev)</td><td>dozvoljeno, goto_table:1</td><td>100</td></tr>
+  <tr><td>TCP 80, od SERVER-a ka PC1 (odgovor)</td><td>dozvoljeno, goto_table:1</td><td>100</td></tr>
+  <tr><td>Ostali TCP na portu 80 (na primer PC2)</td><td>odbaciti (zasebno pravilo, da bi imalo brojač)</td><td>50</td></tr>
+  <tr><td>Sve ostalo</td><td>odbaciti</td><td>0</td></tr>
+</table>
+
+<svg viewBox="0 0 700 140" width="100%" role="img" aria-label="Tok paketa kroz tabelu 0 i tabelu 1" font-family="DejaVu Sans, Verdana, sans-serif">
+  <defs>
+    <marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#333333"/></marker>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#aa0000"/></marker>
+  </defs>
+  <rect x="5" y="30" width="90" height="50" rx="8" fill="#dce6f1" stroke="#1f4e79" stroke-width="1.2"/>
+  <text x="50" y="52" text-anchor="middle" font-size="12" font-weight="bold" fill="#111111">Paket</text>
+  <text x="50" y="68" text-anchor="middle" font-size="9" fill="#333333">stiže na port</text>
+
+  <rect x="150" y="30" width="150" height="50" rx="8" fill="#fff3cd" stroke="#8a6d00" stroke-width="1.2"/>
+  <text x="225" y="52" text-anchor="middle" font-size="12" font-weight="bold" fill="#111111">Tabela 0</text>
+  <text x="225" y="68" text-anchor="middle" font-size="9" fill="#333333">ACL: sme li da prođe?</text>
+
+  <rect x="410" y="30" width="150" height="50" rx="8" fill="#fff3cd" stroke="#8a6d00" stroke-width="1.2"/>
+  <text x="485" y="52" text-anchor="middle" font-size="12" font-weight="bold" fill="#111111">Tabela 1</text>
+  <text x="485" y="68" text-anchor="middle" font-size="9" fill="#333333">kuda ide? (po MAC adresi)</text>
+
+  <rect x="620" y="30" width="75" height="50" rx="8" fill="#dce6f1" stroke="#1f4e79" stroke-width="1.2"/>
+  <text x="657" y="60" text-anchor="middle" font-size="12" font-weight="bold" fill="#111111">Izlaz</text>
+
+  <line x1="95" y1="55" x2="148" y2="55" stroke="#333333" stroke-width="2" marker-end="url(#ar)"/>
+  <line x1="300" y1="55" x2="408" y2="55" stroke="#aa0000" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="354" y="46" text-anchor="middle" font-size="10" fill="#aa0000">goto_table:1</text>
+  <line x1="560" y1="55" x2="618" y2="55" stroke="#333333" stroke-width="2" marker-end="url(#ar)"/>
+  <line x1="225" y1="80" x2="225" y2="112" stroke="#aa0000" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="236" y="106" font-size="10" fill="#aa0000">drop</text>
+  <line x1="485" y1="80" x2="485" y2="112" stroke="#aa0000" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="496" y="106" font-size="10" fill="#aa0000">drop</text>
+</svg>
+<p class="caption">Slika 2. Tok paketa kroz dve tabele.</p>
+
+<p>Proverite: ping PC1 – PC2, PC1 – SERVER i PC2 – SERVER radi; HTTP zahtev sa PC1 (<code>wget -qO- -T 3 http://10.15.0.80/</code>) vraća odgovor servera; isti zahtev sa PC2 ističe po vremenu.</p>
+
+<p><strong>6. Korak –</strong> Komandom <code>ovs-ofctl -O OpenFlow13 dump-flows main-net</code> ispišite pravila obe tabele i pročitajte brojače <code>n_packets</code>. Na osnovu brojača odgovorite: koje pravilo je odbacilo pokušaje PC2 da otvori HTTP stranicu, koje pravilo u tabeli 1 je prosledilo odgovor servera ka PC1 i da li je neki paket stigao do tabele 1 a da ga tabela 0 nije dozvolila. U ispisu su portovi brojevi, a ne imena (eth0 = 1, eth1 = 2, eth2 = 3).</p>
+
+<p><strong>7. Korak –</strong> Napravite meter 1 koji odbacuje sve preko 5 paketa u sekundi (vrsta <code>pktps</code>, traka <code>drop</code>, <code>rate=5</code>) i proverite ga komandom <code>dump-meters</code>. Meter mora da postoji pre pravila koje ga koristi. Zatim dodajte pravilo u tabelu 0 prioriteta 200 koje za ICMP saobraćaj koji dolazi sa porta eth1 (PC2) prvo primenjuje <code>meter:1</code>, a zatim radi <code>goto_table:1</code>. PC1 i server ostaju bez ograničenja jer za njih važi opšte ICMP pravilo prioriteta 100.</p>
+
+<p><strong>8. Korak –</strong> Sa PC2 pošaljite brzi ping ka serveru (<code>ping -q -i 0.01 -c 500 -W 1 10.15.0.80</code>, oko 100 paketa u sekundi) i zapišite koliko je paketa stiglo. Zatim isti ping pošaljite sa PC1. Komandom <code>ovs-ofctl -O OpenFlow13 meter-stats main-net</code> pročitajte koliko je paketa meter video, a koliko odbacio, a pomoću <code>dump-flows main-net table=0</code> uporedite brojač pravila prioriteta 200 sa brojem paketa koji su stvarno stigli do servera. Proverite da običan ping sa PC2 (<code>ping -c 3 10.15.0.80</code>) i dalje radi.</p>
+
+<p><strong>9. Korak –</strong> Promenite ograničenje na 50 paketa u sekundi komandom <code>mod-meter</code> (bez brisanja meter-a i bez izmene pravila) i ponovite brzi ping sa PC2. Objasnite zašto je sada više paketa prošlo i zašto se pravilo nije moralo ponovo dodavati. Zapišite šta bi se desilo sa pravilima koja koriste meter da je umesto <code>mod-meter</code> korišćeno <code>del-meter</code>.</p>
+
+<p><strong>10. Korak –</strong> Pokažite zašto je podela na dve tabele korisna. Na uređaju SERVER promenite MAC adresu u <code>00:00:00:00:00:33</code> (zamena mrežne kartice), na računarima PC1 i PC2 obrišite ARP keš (<code>ip neigh flush dev eth0</code>), a proverite da HTTP sa PC1 sada ne radi, pa komandom <code>dump-flows main-net table=1</code> pronađite pravilo čiji brojač raste i objasnite zašto. Zatim na OVS1 izmenite samo tabelu 1 tako da se paketi za novu MAC adresu šalju na eth2. Tabelu 0 ne diramo. Proverite da HTTP sa PC1 i ping sa PC2 ponovo rade, da HTTP sa PC2 i dalje ne radi i objasnite zašto ACL pravila nije bilo potrebno menjati.</p>

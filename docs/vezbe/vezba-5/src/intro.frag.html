@@ -1,0 +1,31 @@
+<h3>1. Više bridge-eva na istom switch-u i patch portovi</h3>
+<p>Jedan OVS može da ima proizvoljno mnogo bridge-eva, a svaki od njih je poseban virtuelni svič sa sopstvenim portovima i sopstvenim pravilima. Saobraćaj ne prelazi iz jednog bridge-a u drugi sam od sebe: dva računara u različitim bridge-evima ne vide se, kao da su na dva sviča koji nisu povezani. Bridge-evi se spajaju <strong>patch portovima</strong>: to je par portova, jedan u svakom bridge-u, koji se ponašaju kao kabl unutar OVS-a. Patch port nema fizički interfejs (<code>ethN</code>) ni kabl, a svaki od dva porta navodi drugi kao svog peer-a.</p>
+<pre><code>ovs-vsctl add-br br-a
+ovs-vsctl add-br br-b
+ovs-vsctl add-port br-a patch-a -- set interface patch-a type=patch options:peer=patch-b
+ovs-vsctl add-port br-b patch-b -- set interface patch-b type=patch options:peer=patch-a</code></pre>
+<p>Komanda <code>ovs-vsctl get interface patch-a options</code> prikazuje peer. Kad se patch port obriše, drugi kraj ostaje, ali javlja grešku jer nema svog peer-a. Pravila na bridge-u gledaju patch port kao svaki drugi port: u pravilu se navodi <code>in_port=patch-a</code> ili <code>output:patch-a</code>.</p>
+
+<h3>2. OpenFlow tabele i goto_table</h3>
+<p>Do sada su sva pravila bila u jednoj tabeli (tabeli 0). OpenFlow dozvoljava više tabela koje paket prolazi redom kao <strong>pipeline</strong>: paket uvek počinje u tabeli 0, a pravilo ga akcijom <code>goto_table:N</code> prosleđuje u tabelu N (samo unapred, na veći broj). Tabela se u pravilu bira poljem <code>table=N</code> (ako se izostavi, podrazumeva se 0). Paket koji ne odgovara nijednom pravilu u tabeli u kojoj se nalazi odbacuje se.</p>
+<table>
+<tr><th>Tabela</th><th>Uloga u Zadatku 2</th></tr>
+<tr><td>0</td><td>ACL: odlučuje šta sme da prođe (ko, koji protokol, koji port)</td></tr>
+<tr><td>1</td><td>prosleđivanje: odlučuje na koji port paket izlazi (po odredišnoj MAC adresi)</td></tr>
+</table>
+<pre><code>ovs-ofctl -O OpenFlow13 add-flow main-net 'table=0,priority=100,arp,actions=goto_table:1'
+ovs-ofctl -O OpenFlow13 add-flow main-net 'table=1,priority=100,dl_dst=00:00:00:00:00:03,actions=output:eth2'</code></pre>
+<p>Zašto razdvajati ACL i prosleđivanje? Svaka tabela rešava jedan problem, pa se i menja nezavisno: kad se računar zameni (nova MAC adresa), menja se samo tabela prosleđivanja, a pravila pristupa ostaju ista. Bez podele bi se svako pravilo pristupa moralo ponavljati za svaki izlazni port.</p>
+
+<h3>3. Meter: ograničenje brzine</h3>
+<p>Meter je brojač brzine koji pravilo može da pozove akcijom <code>meter:ID</code>. Svaki meter ima jednu ili više traka (<code>band</code>): kad saobraćaj pređe zadatu brzinu (<code>rate</code>), traka tipa <code>drop</code> odbacuje višak paketa. Brzina se meri u paketima u sekundi (<code>pktps</code>) ili u kilobitima u sekundi (<code>kbps</code>). Meteri postoje tek od OpenFlow 1.3, pa se svaka komanda piše sa <code>-O OpenFlow13</code>.</p>
+<pre><code>ovs-ofctl -O OpenFlow13 add-meter main-net 'meter=1,pktps,band=type=drop,rate=5'
+ovs-ofctl -O OpenFlow13 add-flow main-net 'table=0,priority=200,icmp,in_port=eth1,actions=meter:1,goto_table:1'
+ovs-ofctl -O OpenFlow13 dump-meters main-net</code></pre>
+<ul>
+<li><strong>Redosled:</strong> meter se pravi <strong>pre</strong> pravila koje ga koristi, inače OVS odbija pravilo.</li>
+<li><strong>Akcija:</strong> <code>meter:1</code> se piše pre <code>goto_table</code> ili <code>output</code>, jer paket prvo prolazi kroz meter, pa tek onda dalje.</li>
+<li><strong><code>mod-meter</code></strong> menja parametre postojećeg meter-a (npr. novu brzinu); pravila koja ga koriste ostaju i odmah važe sa novom brzinom.</li>
+<li><strong><code>del-meter</code></strong> briše meter <strong>i sva pravila koja ga koriste</strong>, pa ih posle treba ponovo dodati.</li>
+</ul>
+<div class="note"><strong>Pažnja pri kopiranju:</strong> svaka komanda mora biti u <strong>jednom redu</strong>. Ako se pri kopiranju iz PDF-a duga komanda prelomi u dva reda, shell izvršava samo prvi deo i javlja grešku. Spojite redove pre nego što pritisnete Enter.</div>

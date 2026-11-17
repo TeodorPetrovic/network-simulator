@@ -1,0 +1,226 @@
+<h2>Vežba 5, Zadatak 2 – Rešenje (komande)</h2>
+
+<p>Sve komande su kucane na pravim Docker uređajima <code>gns3/openvswitch</code> (OVS1) i <code>alpine</code> (PC1, PC2 i SERVER) i proverene. Portovi OVS1: eth0 = PC1, eth1 = PC2, eth2 = SERVER. U ispisu pravila portovi su brojevi: eth0 = 1, eth1 = 2, eth2 = 3.</p>
+
+<h3>Korak 1 – Topologija</h3>
+
+<p>Veze prema tabeli iz zadatka: OVS1 eth0 – PC1, OVS1 eth1 – PC2, OVS1 eth2 – SERVER. Zatim pokrenite sva četiri uređaja. Redosled kablova je bitan jer od njega zavisi koji port na OVS1 je eth0, eth1 i eth2.</p>
+
+<h3>Korak 2 – IP i MAC adrese, HTTP server</h3>
+
+<p>Na uređaju PC1:</p>
+<pre><code>ip link set dev eth0 address 00:00:00:00:00:01
+ip addr flush dev eth0
+ip addr add 10.15.0.11/24 dev eth0
+ip addr show eth0</code></pre>
+<pre class="out"><code>2: eth0@if239: &lt;BROADCAST,MULTICAST,UP,LOWER_UP,M-DOWN&gt; mtu 1500 qdisc noqueue state UP
+    link/ether 00:00:00:00:00:01 brd ff:ff:ff:ff:ff:ff
+    inet 10.15.0.11/24 scope global eth0</code></pre>
+
+<p>Na uređaju PC2:</p>
+<pre><code>ip link set dev eth0 address 00:00:00:00:00:02
+ip addr flush dev eth0
+ip addr add 10.15.0.12/24 dev eth0
+ip addr show eth0</code></pre>
+
+<p>Na SERVER-u se pored adrese pokreće i HTTP server na portu 80. Ova verzija alpine slike nema <code>busybox httpd</code>, pa se server pravi pomoću <code>nc</code> i kratke skripte koja pročita zahtev i vrati odgovor. Na uređaju SERVER:</p>
+<pre><code>ip link set dev eth0 address 00:00:00:00:00:03
+ip addr flush dev eth0
+ip addr add 10.15.0.80/24 dev eth0
+cat &gt; /srv.sh &lt;&lt;'X'
+#!/bin/sh
+while read l; do [ "$l" = "$(printf '\r')" ] &amp;&amp; break; done
+printf 'HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\nSERVER OK\n'
+X
+chmod +x /srv.sh
+nc -lk -p 80 -e /srv.sh &amp;
+ip addr show eth0</code></pre>
+
+<h3>Korak 3 – Bridge, OpenFlow 1.3 i prazna tabela pravila</h3>
+
+<p>Na uređaju OVS1:</p>
+<pre><code>ovs-vsctl del-port br0 eth0
+ovs-vsctl del-port br0 eth1
+ovs-vsctl del-port br0 eth2
+ovs-vsctl add-br main-net
+ovs-vsctl add-port main-net eth0
+ovs-vsctl add-port main-net eth1
+ovs-vsctl add-port main-net eth2
+ovs-vsctl set bridge main-net protocols=OpenFlow13
+ovs-ofctl -O OpenFlow13 del-flows main-net
+ovs-ofctl -O OpenFlow13 dump-flows main-net</code></pre>
+
+<p>Na uređaju PC1:</p>
+<pre><code>ping -c 3 -W 1 10.15.0.80</code></pre>
+
+<pre class="out"><code>3 packets transmitted, 0 packets received, 100% packet loss</code></pre>
+
+<p>Ispis <code>dump-flows</code> je prazan (samo zaglavlje <code>OFPST_FLOW reply</code>). Bez pravila ping ne prolazi: u OpenFlow 1.3 paket koji ne odgovara nijednom pravilu (table-miss) se odbacuje, a svič ne uči ništa sam. Komanda <code>del-flows</code> je potrebna jer novi bridge ima podrazumevano pravilo koje radi NORMAL.</p>
+
+<h3>Korak 4 – Tabela 1: prosleđivanje po MAC adresi</h3>
+
+<p>Pravilo za broadcast adresu koristi akciju <code>flood</code>: paket se šalje na sve portove osim na onaj na koji je stigao. Bez njega ARP upit nikada ne bi stigao do odredišta. U ispisu <code>dump-flows</code> izostavljeni su <code>cookie</code> i <code>duration</code>.</p>
+
+<p>Na uređaju OVS1:</p>
+<pre><code>ovs-ofctl -O OpenFlow13 add-flow main-net 'table=1,priority=100,dl_dst=00:00:00:00:00:01,actions=output:eth0'
+ovs-ofctl -O OpenFlow13 add-flow main-net 'table=1,priority=100,dl_dst=00:00:00:00:00:02,actions=output:eth1'
+ovs-ofctl -O OpenFlow13 add-flow main-net 'table=1,priority=100,dl_dst=00:00:00:00:00:03,actions=output:eth2'
+ovs-ofctl -O OpenFlow13 add-flow main-net 'table=1,priority=100,dl_dst=ff:ff:ff:ff:ff:ff,actions=flood'
+ovs-ofctl -O OpenFlow13 add-flow main-net 'table=1,priority=0,actions=drop'
+ovs-ofctl -O OpenFlow13 dump-flows main-net</code></pre>
+<pre class="out"><code>table=1, n_packets=0, n_bytes=0, priority=100,dl_dst=00:00:00:00:00:01 actions=output:1
+table=1, n_packets=0, n_bytes=0, priority=100,dl_dst=00:00:00:00:00:02 actions=output:2
+table=1, n_packets=0, n_bytes=0, priority=100,dl_dst=00:00:00:00:00:03 actions=output:3
+table=1, n_packets=0, n_bytes=0, priority=100,dl_dst=ff:ff:ff:ff:ff:ff actions=FLOOD
+table=1, n_packets=0, n_bytes=0, priority=0 actions=drop</code></pre>
+
+<p>Na uređaju PC1:</p>
+<pre><code>ping -c 3 -W 1 10.15.0.80</code></pre>
+<pre class="out"><code>3 packets transmitted, 0 packets received, 100% packet loss</code></pre>
+
+<p>Ping i dalje ne radi jer se paketi uvek prvo traže u tabeli 0, a ona je prazna (table-miss), pa do tabele 1 ne stižu. U tabelu 1 paket može da dođe samo akcijom <code>goto_table:1</code>.</p>
+
+<h3>Korak 5 – Tabela 0: ACL</h3>
+
+<p>Pravila se razlikuju po prioritetu: što je broj veći, pravilo se prvo proverava. Pravilo prioriteta 50 hvata TCP port 80 koji nije dozvoljen višim pravilima (PC2), a pravilo prioriteta 0 hvata sve ostalo.</p>
+
+<p>Na uređaju OVS1:</p>
+<pre><code>ovs-ofctl -O OpenFlow13 add-flow main-net 'table=0,priority=100,arp,actions=goto_table:1'
+ovs-ofctl -O OpenFlow13 add-flow main-net 'table=0,priority=100,icmp,actions=goto_table:1'
+ovs-ofctl -O OpenFlow13 add-flow main-net 'table=0,priority=100,tcp,in_port=eth0,nw_dst=10.15.0.80,tp_dst=80,actions=goto_table:1'
+ovs-ofctl -O OpenFlow13 add-flow main-net 'table=0,priority=100,tcp,in_port=eth2,nw_src=10.15.0.80,tp_src=80,actions=goto_table:1'
+ovs-ofctl -O OpenFlow13 add-flow main-net 'table=0,priority=50,tcp,tp_dst=80,actions=drop'
+ovs-ofctl -O OpenFlow13 add-flow main-net 'table=0,priority=0,actions=drop'</code></pre>
+
+<p>Provera:</p>
+
+<p>Na uređaju PC1:</p>
+<pre><code>ping -c 3 10.15.0.12
+ping -c 3 10.15.0.80
+wget -qO- -T 3 http://10.15.0.80/</code></pre>
+<pre class="out"><code>3 packets transmitted, 3 packets received, 0% packet loss
+3 packets transmitted, 3 packets received, 0% packet loss
+SERVER OK</code></pre>
+
+<p>Na uređaju PC2:</p>
+<pre><code>ping -c 3 10.15.0.80
+wget -qO- -T 3 http://10.15.0.80/</code></pre>
+<pre class="out"><code>3 packets transmitted, 3 packets received, 0% packet loss
+wget: download timed out</code></pre>
+
+<p>Pingovi sa oba računara rade, HTTP radi samo sa PC1, a sa PC2 zahtev ističe jer SYN paket odbacuje tabela 0.</p>
+
+<h3>Korak 6 – Brojači pravila</h3>
+
+<p>Na uređaju OVS1:</p>
+<pre><code>ovs-ofctl -O OpenFlow13 dump-flows main-net</code></pre>
+<pre class="out"><code>table=0, n_packets=8, n_bytes=336, priority=100,arp actions=goto_table:1
+table=0, n_packets=18, n_bytes=1764, priority=100,icmp actions=goto_table:1
+table=0, n_packets=6, n_bytes=490, priority=100,tcp,in_port=1,nw_dst=10.15.0.80,tp_dst=80 actions=goto_table:1
+table=0, n_packets=6, n_bytes=459, priority=100,tcp,in_port=3,nw_src=10.15.0.80,tp_src=80 actions=goto_table:1
+table=0, n_packets=3, n_bytes=222, priority=50,tcp,tp_dst=80 actions=drop
+table=0, n_packets=3, n_bytes=210, priority=0 actions=drop
+table=1, n_packets=15, n_bytes=1173, priority=100,dl_dst=00:00:00:00:00:01 actions=output:1
+table=1, n_packets=8, n_bytes=672, priority=100,dl_dst=00:00:00:00:00:02 actions=output:2
+table=1, n_packets=12, n_bytes=1078, priority=100,dl_dst=00:00:00:00:00:03 actions=output:3
+table=1, n_packets=3, n_bytes=126, priority=100,dl_dst=ff:ff:ff:ff:ff:ff actions=FLOOD
+table=1, n_packets=0, n_bytes=0, priority=0 actions=drop</code></pre>
+
+<p>Brojevi se razlikuju od izvršavanja do izvršavanja, ali odnosi ostaju isti. Pokušaje PC2 da otvori HTTP stranicu odbacilo je pravilo <code>priority=50,tcp,tp_dst=80</code> (3 paketa: SYN i dva ponovljena pokušaja). Odgovor servera ka PC1 prosledilo je pravilo <code>dl_dst=00:00:00:00:00:01</code> u tabeli 1. Poslednje pravilo tabele 1 (<code>priority=0</code>) ima 0 paketa: do tabele 1 stižu samo paketi koje je tabela 0 dozvolila. Pravilo <code>priority=0</code> u tabeli 0 broji ostale pakete koje računari sami šalju, na primer IPv6 (MLD), jer oni nisu ni ARP ni dozvoljen IPv4 saobraćaj.</p>
+
+<p>Zašto dve tabele: tabela 0 odgovara na pitanje „sme li ovo da prođe“ (IP adrese, protokoli, portovi), a tabela 1 na pitanje „kuda ide“ (MAC adrese i portovi). Svaka se menja nezavisno od druge, a pravila se ne množe (sa jednom tabelom bi svaka dozvola morala da se ponavlja za svaki izlazni port).</p>
+
+<h3>Korak 7 – Meter i pravilo koje ga koristi</h3>
+
+<p>Na uređaju OVS1:</p>
+<pre><code>ovs-ofctl -O OpenFlow13 add-meter main-net 'meter=1,pktps,band=type=drop,rate=5'
+ovs-ofctl -O OpenFlow13 dump-meters main-net
+ovs-ofctl -O OpenFlow13 add-flow main-net 'table=0,priority=200,icmp,in_port=eth1,actions=meter:1,goto_table:1'
+ovs-ofctl -O OpenFlow13 dump-flows main-net table=0</code></pre>
+<pre class="out"><code>meter=1 pktps bands=
+type=drop rate=5
+table=0, n_packets=0, n_bytes=0, priority=200,icmp,in_port=2 actions=meter:1,goto_table:1
+table=0, n_packets=18, n_bytes=1764, priority=100,icmp actions=goto_table:1
+...</code></pre>
+
+<p>Pravilo prioriteta 200 se proverava pre pravila prioriteta 100, pa ICMP sa PC2 prvo prolazi kroz meter, a zatim ide u tabelu 1. ICMP sa ostalih portova koristi pravilo prioriteta 100 bez meter-a. Meter 1 dozvoljava 5 paketa u sekundi, sve ostalo odbacuje.</p>
+
+<h3>Korak 8 – Brzi ping i brojači meter-a</h3>
+
+<p>Opcija <code>-i 0.01</code> šalje oko 100 paketa u sekundi, a <code>-q</code> ispisuje samo zbir. Na uređaju PC2:</p>
+<pre><code>ping -q -i 0.01 -c 500 -W 1 10.15.0.80</code></pre>
+<pre class="out"><code>500 packets transmitted, 30 packets received, 94% packet loss</code></pre>
+
+<p>Na uređaju PC1:</p>
+<pre><code>ping -q -i 0.01 -c 500 -W 1 10.15.0.80</code></pre>
+<pre class="out"><code>500 packets transmitted, 500 packets received, 0% packet loss</code></pre>
+
+<p>Na uređaju OVS1:</p>
+<pre><code>ovs-ofctl -O OpenFlow13 meter-stats main-net
+ovs-ofctl -O OpenFlow13 dump-flows main-net table=0</code></pre>
+<pre class="out"><code>meter:1 flow_count:1 packet_in_count:500 byte_in_count:49000 duration:11.753s bands:
+0: packet_count:470 byte_count:46060
+table=0, n_packets=500, n_bytes=49000, priority=200,icmp,in_port=2 actions=meter:1,goto_table:1
+table=0, n_packets=1028, n_bytes=100744, priority=100,icmp actions=goto_table:1
+...</code></pre>
+
+<p>Od 500 paketa sa PC2 meter je 470 odbacio (<code>band 0 packet_count</code>), pa je do servera stiglo 30 (oko 5 u sekundi tokom oko 5 sekundi, uz početni rafal), što se slaže sa ispisom <code>ping</code>-a. Brojač pravila prioriteta 200 pokazuje 500 jer broji pakete pre meter-a. Isti ping sa PC1 nije ograničen jer ne prolazi kroz pravilo prioriteta 200. Odgovori servera i ICMP sa PC1 računaju se u pravilu prioriteta 100, koje nema meter.</p>
+
+<p>Na uređaju PC2:</p>
+<pre><code>ping -c 3 10.15.0.80</code></pre>
+<pre class="out"><code>3 packets transmitted, 3 packets received, 0% packet loss</code></pre>
+
+<p>Običan ping (1 paket u sekundi) je ispod limita, pa meter ništa ne odbacuje.</p>
+
+<h3>Korak 9 – Promena brzine meter-a</h3>
+
+<p>Na uređaju OVS1:</p>
+<pre><code>ovs-ofctl -O OpenFlow13 mod-meter main-net 'meter=1,pktps,band=type=drop,rate=50'
+ovs-ofctl -O OpenFlow13 dump-meters main-net</code></pre>
+<pre class="out"><code>meter=1 pktps bands=
+type=drop rate=50</code></pre>
+
+<p>Na uređaju PC2:</p>
+<pre><code>ping -q -i 0.01 -c 500 -W 1 10.15.0.80</code></pre>
+<pre class="out"><code>500 packets transmitted, 309 packets received, 38% packet loss</code></pre>
+
+<p>Pravilo se pozivalo na meter 1 po broju, pa promena parametara meter-a odmah važi bez izmene pravila. Pošto je limit 50 paketa u sekundi, a ping šalje oko 100, prolazi otprilike polovina paketa. Da je umesto <code>mod-meter</code> korišćeno <code>del-meter</code>, OVS bi zajedno sa meter-om obrisao i pravila koja ga koriste (pravilo prioriteta 200 bi nestalo, pa bi PC2 prešao na opšte ICMP pravilo bez ograničenja), zato meter treba menjati komandom <code>mod-meter</code>.</p>
+
+<h3>Korak 10 – Zamena MAC adrese servera menja samo tabelu 1</h3>
+
+<p>Na uređaju SERVER:</p>
+<pre><code>ip link set dev eth0 address 00:00:00:00:00:33</code></pre>
+
+<p>Na uređaju PC1:</p>
+<pre><code>ip neigh flush dev eth0</code></pre>
+
+<p>Na uređaju PC2:</p>
+<pre><code>ip neigh flush dev eth0</code></pre>
+
+<p>Pre izmene pravila HTTP ne radi. Na uređaju PC1:</p>
+<pre><code>wget -qO- -T 3 http://10.15.0.80/</code></pre>
+<pre class="out"><code>wget: download timed out</code></pre>
+
+<p>Na uređaju OVS1:</p>
+<pre><code>ovs-ofctl -O OpenFlow13 dump-flows main-net table=1</code></pre>
+<pre class="out"><code>table=1, n_packets=516, n_bytes=50215, priority=100,dl_dst=00:00:00:00:00:01 actions=output:1
+table=1, n_packets=352, n_bytes=34272, priority=100,dl_dst=00:00:00:00:00:02 actions=output:2
+table=1, n_packets=1517, n_bytes=148456, priority=100,dl_dst=00:00:00:00:00:03 actions=output:3
+table=1, n_packets=4, n_bytes=168, priority=100,dl_dst=ff:ff:ff:ff:ff:ff actions=FLOOD
+table=1, n_packets=3, n_bytes=222, priority=0 actions=drop</code></pre>
+
+<p>Brojač pravila <code>priority=0</code> u tabeli 1 je sada veći od nule (3 paketa, SYN i ponovljeni pokušaji): paketi za novu MAC adresu su prošli ACL u tabeli 0, ali ih tabela 1 ne poznaje, pa ih odbacuje. Zatim izmena samo tabele 1:</p>
+<pre><code>ovs-ofctl -O OpenFlow13 del-flows main-net 'table=1,dl_dst=00:00:00:00:00:03'
+ovs-ofctl -O OpenFlow13 add-flow main-net 'table=1,priority=100,dl_dst=00:00:00:00:00:33,actions=output:eth2'</code></pre>
+
+<p>Na uređaju PC1:</p>
+<pre><code>wget -qO- -T 3 http://10.15.0.80/</code></pre>
+<pre class="out"><code>SERVER OK</code></pre>
+
+<p>Na uređaju PC2:</p>
+<pre><code>ping -c 3 10.15.0.80
+wget -qO- -T 3 http://10.15.0.80/</code></pre>
+<pre class="out"><code>3 packets transmitted, 3 packets received, 0% packet loss
+wget: download timed out</code></pre>
+
+<p>Tabela 0 odlučuje po IP adresama i portovima (ko sme da pristupi serveru), a one se nisu promenile, pa je za zamenu mrežne kartice bilo dovoljno izmeniti jedno pravilo u tabeli 1 (MAC adresa je isključivo stvar prosleđivanja). Da je sve bilo u jednoj tabeli, MAC adresa servera bi bila upisana u svako pravilo i svako bi se moralo menjati.</p>

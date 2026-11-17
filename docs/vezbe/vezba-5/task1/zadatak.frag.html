@@ -1,0 +1,92 @@
+<h2>Vežba 5, Zadatak 1 – Patch portovi i OpenFlow pravila između dva bridge-a</h2>
+
+<p>Mala firma ima jedan Open vSwitch (OVS1) koji treba da radi kao dva odvojena sviča (bridge-a): <code>br-a</code> za računare PC1 i PC2 i <code>br-b</code> za računar PC3 i SERVER. Bridge-evi se spajaju patch vezom, a zatim se OpenFlow pravilima na <code>br-a</code> određuje čiji saobraćaj sme da pređe u <code>br-b</code>. U ovoj vežbi nema rutera. Bridge-evi se podešavaju komandom <code>ovs-vsctl</code>, a pravila komandom <code>ovs-ofctl</code>, u konzoli Docker uređaja.</p>
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 330" width="840" height="330" font-family="DejaVu Sans, sans-serif" font-size="12">
+  <!-- OVS1 -->
+  <rect x="190" y="40" width="460" height="270" rx="6" fill="#fff3cd" stroke="#555" stroke-width="1.5"/>
+  <text x="420" y="62" text-anchor="middle" font-size="14" font-weight="bold">OVS1 – Open vSwitch</text>
+  <!-- bridges -->
+  <rect x="235" y="80" width="130" height="200" rx="4" fill="#ffffff" stroke="#555" stroke-width="1.2"/>
+  <text x="300" y="102" text-anchor="middle" font-size="14" font-weight="bold">br-a</text>
+  <rect x="475" y="80" width="130" height="200" rx="4" fill="#ffffff" stroke="#555" stroke-width="1.2"/>
+  <text x="540" y="102" text-anchor="middle" font-size="14" font-weight="bold">br-b</text>
+  <!-- patch link -->
+  <line x1="365" y1="170" x2="475" y2="170" stroke="#aa0000" stroke-width="5"/>
+  <text x="420" y="140" text-anchor="middle" fill="#aa0000" font-weight="bold">patch link</text>
+  <text x="369" y="162" fill="#aa0000" font-size="11">patch-a</text>
+  <text x="471" y="190" text-anchor="end" fill="#aa0000" font-size="11">patch-b</text>
+  <!-- PCs -->
+  <rect x="10" y="105" width="100" height="50" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="60" y="126" text-anchor="middle" font-weight="bold">PC1</text>
+  <text x="60" y="144" text-anchor="middle">10.15.1.11</text>
+  <rect x="10" y="210" width="100" height="50" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="60" y="231" text-anchor="middle" font-weight="bold">PC2</text>
+  <text x="60" y="249" text-anchor="middle">10.15.1.12</text>
+  <rect x="730" y="105" width="100" height="50" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="780" y="126" text-anchor="middle" font-weight="bold">PC3</text>
+  <text x="780" y="144" text-anchor="middle">10.15.1.13</text>
+  <rect x="730" y="210" width="100" height="50" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="780" y="231" text-anchor="middle" font-weight="bold">SERVER</text>
+  <text x="780" y="249" text-anchor="middle">10.15.1.100</text>
+  <!-- links -->
+  <line x1="110" y1="130" x2="235" y2="130" stroke="#555" stroke-width="2"/>
+  <line x1="110" y1="235" x2="235" y2="235" stroke="#555" stroke-width="2"/>
+  <line x1="605" y1="130" x2="730" y2="130" stroke="#555" stroke-width="2"/>
+  <line x1="605" y1="235" x2="730" y2="235" stroke="#555" stroke-width="2"/>
+  <!-- port labels -->
+  <text x="114" y="124" fill="#aa0000" font-size="11">eth0</text>
+  <text x="198" y="124" fill="#aa0000" font-size="11">eth0</text>
+  <text x="114" y="229" fill="#aa0000" font-size="11">eth0</text>
+  <text x="198" y="229" fill="#aa0000" font-size="11">eth1</text>
+  <text x="726" y="124" text-anchor="end" fill="#aa0000" font-size="11">eth0</text>
+  <text x="642" y="124" text-anchor="end" fill="#aa0000" font-size="11">eth2</text>
+  <text x="726" y="229" text-anchor="end" fill="#aa0000" font-size="11">eth0</text>
+  <text x="642" y="229" text-anchor="end" fill="#aa0000" font-size="11">eth3</text>
+</svg>
+
+<p>Slika 1. Veze između uređaja (debela crvena linija je patch veza unutar OVS1, ona nema kabl ni port <code>ethN</code>).</p>
+
+<p>Za mrežu smete da koristite isključivo adresni blok <code>10.15.0.0/16</code>: svi uređaji koriste podmrežu <code>10.15.1.0/24</code>.</p>
+
+<ol>
+<li><strong>Korak –</strong> U GNS3 programu samostalno napravite novi projekat i topologiju sa slike. Potrebni su vam jedan Docker uređaj Open vSwitch (OVS1, slika <code>gns3/openvswitch</code>) i četiri Docker uređaja sa slikom <code>alpine</code>: PC1, PC2, PC3 i SERVER. Povežite ih kablovima prema tabeli, a zatim pokrenite sve uređaje.
+
+<table>
+<tr><th>Uređaj i port</th><th>Povezuje se sa</th></tr>
+<tr><td>OVS1 eth0</td><td>PC1 eth0</td></tr>
+<tr><td>OVS1 eth1</td><td>PC2 eth0</td></tr>
+<tr><td>OVS1 eth2</td><td>PC3 eth0</td></tr>
+<tr><td>OVS1 eth3</td><td>SERVER eth0</td></tr>
+</table>
+</li>
+
+<li><strong>Korak –</strong> Na računarima i SERVER-u podesite IP adrese prema tabeli komandom <code>ip addr add</code> (podrazumevani izlaz ne postoji jer u vežbi nema rutera). Na SERVER-u zatim napravite skriptu <code>/srv.sh</code> koja pročita zaglavlje HTTP zahteva i odgovori tekstom <code>SERVER OK</code>, i pokrenite je u pozadini komandom <code>nc</code> koja sluša na portu 80 (<code>nc -lk -p 80 -e /srv.sh</code>).
+
+<table>
+<tr><th>Device</th><th>IP Address</th><th>Bridge</th></tr>
+<tr><td>PC1</td><td>10.15.1.11 / 24</td><td>br-a</td></tr>
+<tr><td>PC2</td><td>10.15.1.12 / 24</td><td>br-a</td></tr>
+<tr><td>PC3</td><td>10.15.1.13 / 24</td><td>br-b</td></tr>
+<tr><td>SERVER</td><td>10.15.1.100 / 24</td><td>br-b</td></tr>
+</table>
+
+<div class="note">Skripta <code>/srv.sh</code> nije predmet vežbe. Odgovor mora da bude oblika <code>HTTP/1.0 200 OK</code>, zaglavlje <code>Content-Length: 10</code>, prazna linija i tekst <code>SERVER OK</code>; skripta pre odgovora čita zaglavlje zahteva do prazne linije. Radi se u <code>sh</code> konzoli uređaja SERVER.</div>
+</li>
+
+<li><strong>Korak –</strong> Otvorite konzolu na OVS1 i izvršite <code>ovs-vsctl show</code>. Zapišite koji bridge-evi postoje i u kom se bridge-u nalaze portovi eth0, eth1, eth2 i eth3. Pingujte sa PC1 na PC2, PC3 i SERVER i objasnite zašto komunikacija radi iako još niste ništa podesili.</li>
+
+<li><strong>Korak –</strong> Na OVS1 napravite dva nova bridge-a: <code>br-a</code> sa portovima eth0 i eth1 i <code>br-b</code> sa portovima eth2 i eth3. Portove prvo prebacite iz podrazumevanog bridge-a.</li>
+
+<li><strong>Korak –</strong> Komandama <code>ovs-vsctl list-br</code>, <code>ovs-vsctl list-ports br-a</code>, <code>ovs-vsctl list-ports br-b</code>, <code>ovs-vsctl port-to-br eth2</code> i <code>ovs-vsctl show</code> proverite stanje na OVS1 i zapišite izlaze. Pingujte sa PC1 na PC2, PC3 i SERVER. Proverite da PC1 vidi samo PC2 i objasnite zašto ne vidi računare iz drugog bridge-a.</li>
+
+<li><strong>Korak –</strong> Povežite bridge-eve patch vezom: u <code>br-a</code> dodajte port <code>patch-a</code>, a u <code>br-b</code> port <code>patch-b</code>, tako da je svaki od njih tipa <code>patch</code> i da mu je drugi port peer (<code>options:peer</code>). Komandama <code>ovs-vsctl list-ports br-a</code>, <code>ovs-vsctl get interface patch-a type</code> i <code>ovs-vsctl get interface patch-a options</code> proverite portove. Pingujte sa PC1 na PC3 i SERVER, sa PC2 na PC3 i sa PC3 na SERVER. Objasnite šta je patch veza i zašto nema port <code>ethN</code>, i da li ping PC3 – SERVER prolazi kroz nju.</li>
+
+<li><strong>Korak –</strong> Na OVS1 uklonite podrazumevano <code>NORMAL</code> ponašanje bridge-a <code>br-a</code> i umesto njega komandom <code>ovs-ofctl add-flow</code> napišite sopstvena pravila. Pravila moraju da: (a) ARP zahtev sa PC1 prosleđuju do PC2 i kroz patch port ka <code>br-b</code>, ARP sa PC2 prosleđuju samo do PC1, a ARP koji stiže iz <code>br-b</code> isporučuju samo PC1, (b) IP saobraćaj između PC1 i PC2 propuštaju direktno, (c) IP saobraćaj koji stiže iz <code>br-b</code> isporučuju samo računaru PC1, (d) od IP saobraćaja sa PC1 ka <code>br-b</code> propuštaju samo ICMP (ping) kroz patch port, (e) sav ostali saobraćaj odbace (najniži prioritet). Portove u pravilima navodite imenima (<code>eth0</code>, <code>patch-a</code>), a ne brojevima, a svaku komandu pišite u jednom redu. Bridge <code>br-b</code> ne menjate. Pingujte: PC1 – PC2, PC1 – PC3, PC1 – SERVER, PC2 – PC1, PC2 – PC3, PC2 – SERVER, PC3 – PC1 i PC3 – PC2 i zapišite koji uspevaju.</li>
+
+<li><strong>Korak –</strong> Komandom <code>ovs-ofctl --names dump-flows br-a</code> proverite pravila i brojače paketa. Uočite koja pravila povećavaju brojače pri pingovima PC1 – PC3 i PC1 – PC2 i šta se desi sa brojačima kada PC2 pokuša da pinguje PC3. Zatim sa PC1 pokušajte HTTP zahtev ka SERVER-u komandom <code>wget -qO- -T 3 http://10.15.1.100</code>. Objasnite zašto ne uspeva i koji se brojač povećao.</li>
+
+<li><strong>Korak –</strong> Samo dodavanjem jednog pravila na <code>br-a</code> omogućite da HTTP (TCP port 80) sa PC1 do SERVER-a ide kroz patch port <code>patch-a</code>; pravilo mora da važi samo za PC1 i samo za odredište SERVER. Proverite <code>wget</code> sa PC1 (mora da ispiše <code>SERVER OK</code>) i da isti zahtev sa PC2 ne uspeva. Ponovo pogledajte brojače i objasnite koji su porasli (pravilo za HTTP, pravilo za odgovore iz <code>br-b</code>) i koji nisu.</li>
+
+<li><strong>Korak –</strong> Dokažite da je patch veza jedini put između bridge-eva: obrišite port <code>patch-a</code> iz bridge-a <code>br-a</code> i pingujte sa PC1 na PC3, pokušajte HTTP zahtev ka SERVER-u i pingujte PC2. Komandom <code>ovs-vsctl show</code> pogledajte šta prijavljuje <code>patch-b</code> i objasnite zašto komunikacija više ne radi, a PC1 i PC2 se još vide.</li>
+</ol>
