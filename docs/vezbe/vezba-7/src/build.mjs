@@ -28,7 +28,7 @@ function checkPre(html, name) {
 
 const cover = `<div class="cover">
 <h2>Vežba 7 – VLAN-ovi, trunk kroz patch portove i ruter na štapu</h2>
-<p>Ova vežba ima jedan zadatak. Na prvom Open vSwitch-u (SW1) dva bridge-a, <code>br0</code> i <code>br2</code>, povezana su parom patch portova koji radi kao VLAN trunk, a na svakom od njih je po jedan VPC u svom VLAN-u. Na <code>br2</code> je jednim trunk kablom priključen MikroTik ruter (SW2) koji radi kao ruter na štapu (<em>router on a stick</em>) između dva VLAN-a; realizovan je drugim Open vSwitch-om koji se, isključivo OpenFlow pravilima, ponaša isto kao MikroTik ruter sa VLAN podinterfejsima. Pre zadatka sledi kratak uvod u nove pojmove.</p>
+<p>Ova vežba ima jedan zadatak. Na prvom Open vSwitch-u (SW1) dva bridge-a, <code>br0</code> i <code>br2</code>, povezana su parom patch portova koji radi kao VLAN trunk, a na svakom od njih je po jedan VPC u svom VLAN-u. Na <code>br2</code> je jednim trunk kablom priključen drugi Open vSwitch (SW2) koji radi kao ruter na štapu (<em>router on a stick</em>) između dva VLAN-a; SW2 se, isključivo OpenFlow pravilima, ponaša isto kao MikroTik ruter sa VLAN podinterfejsima. Pre zadatka sledi kratak uvod u nove pojmove.</p>
 <h2 style="font-size:13pt;border:none;margin-top:18px">Šta je novo u ovoj vežbi</h2>
 ${fs.readFileSync(path.join(here, 'intro.frag.html'), 'utf8')}
 </div>`;
