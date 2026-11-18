@@ -471,3 +471,38 @@ async fn docker_create_and_tty_resize_reach_the_runtime_cli() {
         "POST /containers/{container_id}/resize?h=40&w=120 HTTP/1.1"
     )));
 }
+
+#[tokio::test]
+async fn docker_stop_kills_the_container_like_gns3_instead_of_waiting_for_sigterm() {
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("docker-test-double");
+    let log = directory.path().join("docker-args.log");
+    let killed = directory.path().join("killed");
+    fs::write(
+        &binary,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\ncase \"$1\" in inspect) if [ -e '{killed}' ]; then echo exited; else echo running; fi;; kill) touch '{killed}';; esac\n",
+            log = log.display(),
+            killed = killed.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+    let runtime = DockerRuntime::with_paths(binary, directory.path().join("state"));
+    let container_id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    runtime
+        .mark_container_managed(
+            "00000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-000000000002",
+            container_id,
+        )
+        .unwrap();
+    let status = runtime
+        .lifecycle(container_id, crate::runtime::NodeAction::Stop)
+        .await
+        .unwrap();
+    assert_eq!(status, "stopped");
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(calls.contains(&format!("kill {container_id}")), "{calls}");
+    assert!(!calls.contains("stop --time"), "{calls}");
+}

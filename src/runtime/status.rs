@@ -97,8 +97,13 @@ impl DockerRuntime {
                     self.command(["unpause", container_id], DOCKER_TIMEOUT)
                         .await?;
                 }
-                self.command(["stop", "--time", "10", container_id], DOCKER_TIMEOUT)
-                    .await?;
+                // GNS3 kills the container right away: its main process is usually an interactive
+                // shell that ignores SIGTERM, so a stop grace period only adds 10 s per node.
+                if let Err(error) = self.command(["kill", container_id], DOCKER_TIMEOUT).await
+                    && self.container_status(container_id).await? == "started"
+                {
+                    return Err(error);
+                }
             }
             NodeAction::Stop => {}
             NodeAction::Suspend if status == "started" => {
@@ -112,7 +117,7 @@ impl DockerRuntime {
                 ));
             }
             NodeAction::Reload => {
-                self.command(["restart", "--time", "10", container_id], DOCKER_TIMEOUT)
+                self.command(["restart", "--time", "0", container_id], DOCKER_TIMEOUT)
                     .await?;
             }
         }
