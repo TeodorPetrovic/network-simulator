@@ -277,7 +277,7 @@ impl DockerRuntime {
         {
             return Ok(());
         }
-        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, host.console_port))
+        let listener = TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, host.console_port))
             .await
             .map_err(|error| {
                 RuntimeError::Unavailable(format!(

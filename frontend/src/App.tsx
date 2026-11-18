@@ -188,7 +188,7 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
     }
     if (!auxiliary && node.node_type === "docker" && (consoleType === "http" || consoleType === "https")) {
       const host = typeof node.console_host === "string" && node.console_host ? node.console_host : serverHostname();
-      const url = dockerHttpConsoleUrl(consoleType, host, Number(node.console_http_port ?? 80), String(node.console_http_path ?? "/"));
+      const url = dockerHttpConsoleUrl(consoleType, host, Number(node.console) > 0 ? Number(node.console) : Number(node.console_http_port ?? 80), String(node.console_http_path ?? "/"));
       if (!url) {
         setNotice("The HTTP console address is invalid. Check its host, port, and path in device settings.");
         return;

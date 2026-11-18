@@ -174,7 +174,7 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
   function openHttpConsole() {
     if (!node || (draft.console_type !== "http" && draft.console_type !== "https")) return;
     const host = typeof node.console_host === "string" && node.console_host ? node.console_host : serverHostname();
-    const url = dockerHttpConsoleUrl(draft.console_type, host, Number(draft.console_http_port), draft.console_http_path || "/");
+    const url = dockerHttpConsoleUrl(draft.console_type, host, Number(node.console) > 0 ? Number(node.console) : Number(draft.console_http_port), draft.console_http_path || "/");
     if (!url) {
       setError("Enter a valid HTTP console port and path before opening the console.");
       return;
