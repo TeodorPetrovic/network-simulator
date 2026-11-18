@@ -212,7 +212,8 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
     if (!projectId) return;
     const targetId = `${node.node_id}:${auxiliary ? "aux" : "main"}`;
     const target: ConsoleTarget = { id: targetId, projectId, nodeId: node.node_id, nodeName: node.name, nodeType: node.node_type as ConsoleTarget["nodeType"], auxiliary };
-    setConsoleTargets((current) => current.some((item) => item.id === targetId) ? current : [...current, target]);
+    // Opening an already open console again reconnects it when its session ended (node restarted).
+    setConsoleTargets((current) => current.some((item) => item.id === targetId) ? current.map((item) => item.id === targetId ? { ...item, reconnect: (item.reconnect ?? 0) + 1 } : item) : [...current, target]);
     setActiveConsoleId(targetId);
     setConsoleDockOpen(true);
     setConsoleMinimized(false);

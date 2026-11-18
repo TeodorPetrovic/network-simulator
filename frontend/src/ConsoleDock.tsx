@@ -14,7 +14,11 @@ export type ConsoleTarget = {
   nodeName: string;
   nodeType: "docker" | "qemu" | "vpcs" | "dynamips";
   auxiliary?: boolean;
+  /** Bumped when the user opens this console again; a closed session then reconnects. */
+  reconnect?: number;
 };
+
+export const CONSOLE_RECONNECT_HINT = "Console disconnected. Press Enter or open the console again to reconnect.";
 
 export function dockerResizeControlFrame(rows: number, columns: number): string | null {
   if (!Number.isInteger(rows) || !Number.isInteger(columns) || rows < 1 || columns < 1 || rows > 65_535 || columns > 65_535) return null;
@@ -94,6 +98,7 @@ export function ConsoleSession({ target, active }: { target: ConsoleTarget; acti
   const terminalElement = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const terminalRef = useRef<Xterm | null>(null);
+  const reconnectRef = useRef<(() => void) | null>(null);
   const activeRef = useRef(active);
   activeRef.current = active;
   const docker = target.nodeType === "docker";
@@ -118,6 +123,7 @@ export function ConsoleSession({ target, active }: { target: ConsoleTarget; acti
     if (activeRef.current) terminal.focus();
     let socket: WebSocket | null = null;
     let cancelled = false;
+    let pending = false;
     let lastResizeFrame: string | null = null;
     const sendResize = () => {
       if (!docker || auxiliary) return;
@@ -132,22 +138,47 @@ export function ConsoleSession({ target, active }: { target: ConsoleTarget; acti
     };
     const resize = terminal.onResize(sendResize);
     requestAnimationFrame(fitVisibleTerminal);
-    const socketUrl = docker
-      ? auxiliary ? dockerAuxConsoleUrl(target.projectId, target.nodeId) : dockerConsoleUrl(target.projectId, target.nodeId)
-      : vpcs ? vpcsConsoleUrl(target.projectId, target.nodeId) : dynamips ? dynamipsConsoleUrl(target.projectId, target.nodeId) : qemuConsoleUrl(target.projectId, target.nodeId);
-    void Promise.resolve(socketUrl).then((url) => {
-      if (cancelled) return;
-      socket = new WebSocket(url);
-      socket.binaryType = "arraybuffer";
-      socket.onopen = () => {
-        terminal.writeln(docker ? auxiliary ? "Attached to Docker auxiliary console." : "Attached to Docker container terminal." : vpcs ? "Connected to VPCS console." : dynamips ? "Connected to Cisco IOS console." : "Connected to QEMU serial port.");
-        sendResize();
-      };
-      socket.onmessage = (event) => terminal.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data as ArrayBuffer));
-      socket.onerror = () => terminal.writeln("\r\nConsole connection failed.");
-      socket.onclose = () => terminal.writeln("\r\nConsole disconnected.");
-    }).catch(() => terminal.writeln("\r\nConsole connection failed."));
-    const input = terminal.onData((data) => { if (socket?.readyState === WebSocket.OPEN) socket.send(data); });
+    const detach = (current: WebSocket) => {
+      current.onopen = null;
+      current.onmessage = null;
+      current.onerror = null;
+      current.onclose = null;
+    };
+    // A session ends when the node stops (the server closes the attach stream). Keep the tab and
+    // reconnect on demand, so a restarted node gets a fresh `docker attach` instead of a dead tab.
+    const connect = () => {
+      if (cancelled || pending || (socket && socket.readyState !== WebSocket.CLOSED && socket.readyState !== WebSocket.CLOSING)) return;
+      pending = true;
+      if (socket) detach(socket);
+      socket = null;
+      lastResizeFrame = null;
+      const socketUrl = docker
+        ? auxiliary ? dockerAuxConsoleUrl(target.projectId, target.nodeId) : dockerConsoleUrl(target.projectId, target.nodeId)
+        : vpcs ? vpcsConsoleUrl(target.projectId, target.nodeId) : dynamips ? dynamipsConsoleUrl(target.projectId, target.nodeId) : qemuConsoleUrl(target.projectId, target.nodeId);
+      void Promise.resolve(socketUrl).then((url) => {
+        pending = false;
+        if (cancelled) return;
+        const current = new WebSocket(url);
+        socket = current;
+        current.binaryType = "arraybuffer";
+        current.onopen = () => {
+          terminal.writeln(docker ? auxiliary ? "Attached to Docker auxiliary console." : "Attached to Docker container terminal." : vpcs ? "Connected to VPCS console." : dynamips ? "Connected to Cisco IOS console." : "Connected to QEMU serial port.");
+          sendResize();
+        };
+        current.onmessage = (event) => terminal.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data as ArrayBuffer));
+        current.onerror = () => terminal.writeln("\r\nConsole connection failed.");
+        current.onclose = () => terminal.writeln(`\r\n${CONSOLE_RECONNECT_HINT}`);
+      }).catch(() => {
+        pending = false;
+        terminal.writeln(`\r\nConsole connection failed. ${CONSOLE_RECONNECT_HINT}`);
+      });
+    };
+    reconnectRef.current = connect;
+    connect();
+    const input = terminal.onData((data) => {
+      if (socket?.readyState === WebSocket.OPEN) socket.send(data);
+      else if (data.includes("\r")) connect();
+    });
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fitVisibleTerminal);
     observer?.observe(terminalElement.current);
     window.addEventListener("resize", fitVisibleTerminal);
@@ -157,18 +188,20 @@ export function ConsoleSession({ target, active }: { target: ConsoleTarget; acti
       observer?.disconnect();
       input.dispose();
       resize.dispose();
+      reconnectRef.current = null;
       if (socket) {
-        socket.onopen = null;
-        socket.onmessage = null;
-        socket.onerror = null;
-        socket.onclose = null;
+        detach(socket);
         socket.close();
       }
       terminal.dispose();
       fitRef.current = null;
       terminalRef.current = null;
     };
-  }, [auxiliary, docker, dynamips, target.nodeId, target.nodeName, target.projectId, vpcs]);
+  }, [auxiliary, docker, dynamips, target.nodeId, target.projectId, vpcs]);
+
+  useEffect(() => {
+    if (target.reconnect) reconnectRef.current?.();
+  }, [target.reconnect]);
 
   useEffect(() => {
     if (!active) return;
