@@ -1,0 +1,49 @@
+<h3>1. VLAN oznake u Open vSwitch-u</h3>
+<p>VLAN (<em>virtual LAN</em>) deli jedan fizički svič na više odvojenih mreža. Okvir koji pripada nekom VLAN-u nosi oznaku po standardu IEEE 802.1Q: četiri bajta umetnuta iza izvorišne MAC adrese, sa tipom <code>0x8100</code> i 12-bitnim brojem VLAN-a (VID, od 1 do 4094). Okvir iz jednog VLAN-a nikada ne izlazi na port drugog VLAN-a, pa računari u različitim VLAN-ovima ne mogu da razmenjuju ni broadcast okvire (npr. ARP zahteve). Komunikacija između VLAN-ova moguća je samo preko rutera.</p>
+<p>U OVS-u se uloga porta određuje kolonama <code>tag</code> i <code>trunks</code> u tabeli <code>Port</code> (podešavaju se komandom <code>ovs-vsctl</code>, a vide se u izlazu <code>ovs-vsctl show</code>):</p>
+<table>
+<tr><th style="width:20%">Podešavanje</th><th style="width:24%">Vrsta porta</th><th>Šta radi sa okvirima</th></tr>
+<tr><td><code>tag=N</code></td><td>access port u VLAN-u N</td><td>okvir ulazi i izlazi bez oznake, a u sviču pripada VLAN-u N; računar nikad ne vidi oznaku</td></tr>
+<tr><td><code>trunks=N,M</code></td><td>trunk za VLAN-ove N i M</td><td>okviri prolaze sa 802.1Q oznakom, samo VLAN-ovi sa liste</td></tr>
+<tr><td>ni <code>tag</code> ni <code>trunks</code></td><td>trunk za sve VLAN-ove</td><td>prolaze svi VLAN-ovi (podrazumevano)</td></tr>
+</table>
+<p>Ova podešavanja koristi akcija <code>NORMAL</code> (bridge koji radi kao običan svič). OpenFlow pravila ih ne gledaju: pravilo vidi stvarnu oznaku okvira onakvu kakva je stigla na port.</p>
+
+<h3>2. Patch portovi kao trunk</h3>
+<p>Patch par (Vežba 5) spaja dva bridge-a u istom OVS-u bez kabla: okvir poslat na jedan kraj pojavljuje se na drugom. Patch port je port kao i svaki drugi, pa i on može biti access ili trunk port. Kada su oba kraja trunk portovi, okvir prelazi iz jednog bridge-a u drugi zajedno sa svojim VLAN-om: okvir koji je u prvom bridge-u bio u VLAN-u 10 i u drugom bridge-u je u VLAN-u 10. Tako se jedan VLAN može protezati kroz više bridge-eva, isto kao kroz više sviča povezanih trunk kablovima. Lista <code>trunks</code> na oba kraja određuje koji VLAN-ovi smeju da pređu.</p>
+
+<h3>3. Ruter na štapu (<em>router on a stick</em>)</h3>
+<p>Ruter koji povezuje dva VLAN-a ne mora da ima po jedan kabl za svaki VLAN. Dovoljan je jedan trunk kabl ka sviču, a na ruteru se na tom fizičkom interfejsu prave VLAN podinterfejsi: svaki podinterfejs prima i šalje okvire sa jednom VLAN oznakom i ima svoju IP adresu, koja je gateway za taj VLAN. Paket iz VLAN-a 10 ka VLAN-u 20 stiže na ruter sa oznakom 10, ruter ga rutira (nove MAC adrese, TTL manji za 1) i vraća ga <strong>istim kablom</strong>, ali sa oznakom 20.</p>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 138" width="640" height="138" font-family="DejaVu Sans, sans-serif" font-size="12">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#aa0000"/></marker>
+  </defs>
+  <rect x="20" y="40" width="150" height="70" rx="5" fill="#fff3cd" stroke="#555" stroke-width="1.5"/>
+  <text x="95" y="70" text-anchor="middle" font-weight="bold">svič</text>
+  <text x="95" y="90" text-anchor="middle" font-size="11">VLAN 10 i VLAN 20</text>
+  <rect x="460" y="40" width="160" height="70" rx="5" fill="#d9ead3" stroke="#555" stroke-width="1.5"/>
+  <text x="540" y="64" text-anchor="middle" font-weight="bold">ruter</text>
+  <text x="540" y="82" text-anchor="middle" font-size="11">podinterfejs VLAN 10</text>
+  <text x="540" y="98" text-anchor="middle" font-size="11">podinterfejs VLAN 20</text>
+  <line x1="170" y1="75" x2="460" y2="75" stroke="#aa0000" stroke-width="3"/>
+  <text x="315" y="132" text-anchor="middle" fill="#aa0000" font-size="11">jedan trunk kabl (802.1Q)</text>
+  <line x1="200" y1="52" x2="430" y2="52" stroke="#aa0000" stroke-width="1.2" marker-end="url(#ar)"/>
+  <text x="315" y="45" text-anchor="middle" font-size="11">paket ulazi sa oznakom VLAN 10</text>
+  <line x1="430" y1="98" x2="200" y2="98" stroke="#aa0000" stroke-width="1.2" marker-end="url(#ar)"/>
+  <text x="315" y="114" text-anchor="middle" font-size="11">isti paket izlazi sa oznakom VLAN 20, TTL − 1</text>
+</svg>
+<p class="caption">Slika 1. Ruter na štapu: oba smera prolaze kroz isti trunk kabl.</p>
+
+<h3>4. VLAN u OpenFlow pravilima</h3>
+<table>
+<tr><th>Polje ili akcija</th><th>Značenje</th></tr>
+<tr><td><code>dl_vlan=N</code></td><td>poklapa okvire sa 802.1Q oznakom čiji je VID jednak N</td></tr>
+<tr><td><code>vlan_tci=vrednost/maska</code></td><td>poklapa celo 16-bitno polje oznake (TCI); bit <code>0x1000</code> znači "oznaka postoji": <code>vlan_tci=0x1000/0x1000</code> je bilo koji označen okvir, <code>vlan_tci=0x0000/0x1000</code> je okvir bez oznake</td></tr>
+<tr><td><code>mod_vlan_vid:N</code></td><td>menja VID u oznaci na N; ako okvir nema oznaku, dodaje je</td></tr>
+<tr><td><code>strip_vlan</code></td><td>uklanja oznaku (okvir postaje neoznačen, kao na access portu)</td></tr>
+<tr><td><code>in_port</code> (isto što i <code>output:in_port</code>)</td><td>šalje paket na port sa kog je stigao</td></tr>
+</table>
+<p><strong>Povratak na ulazni port.</strong> OpenFlow po pravilu ne šalje paket nazad na port sa kog je stigao: akcija <code>output:eth0</code> za paket koji je ušao na <code>eth0</code> se ne izvršava, paket se tiho odbacuje (brojač pravila raste, a paket nigde ne izlazi). Da bi se paket vratio na ulazni port, mora se koristiti posebna akcija <code>in_port</code>. To je upravo slučaj rutera na štapu: ulaz i izlaz su isti port.</p>
+<p><strong>ARP responder i VLAN.</strong> ARP responder iz Vežbe 6 radi i ovde, uz jednu razliku: gateway adresa postoji samo u svom VLAN-u, pa pravilo pored <code>arp_tpa</code> mora da proveri i VLAN oznaku. Odgovor se vraća sa istom oznakom sa kojom je zahtev stigao. Adrese u akciji <code>load</code> pišu se heksadecimalno, bajt po bajt: npr. IP adresa <code>192.168.1.1</code> je <code>0xc0a80101</code> (192 = 0xc0, 168 = 0xa8, 1 = 0x01), a MAC <code>02:00:00:00:aa:01</code> je <code>0x02000000aa01</code>.</p>
+<p><strong>Prioriteti.</strong> Na bridge-u bez pravila <code>NORMAL</code> sve što nijedno pravilo ne poklopi se odbacuje. ARP responder pravila treba da imaju viši prioritet od pravila za rutiranje.</p>
+<div class="note"><strong>Duge komande:</strong> duga komanda se može razbiti na više redova znakom <code>\</code> na kraju reda (posle njega ne sme biti razmaka). To radi i unutar dvostrukih navodnika (<code>"..."</code>), npr. posle zareza u listi akcija, ali ne i unutar jednostrukih (<code>'...'</code>).</div>
