@@ -9,8 +9,8 @@ use tokio::{
 };
 
 use super::{
-    UbridgeRuntime, endpoint_name, escape_ubridge_arg, guest_veth_name, host_veth_name,
-    is_final_reply, stop_existing_ubridge,
+    UbridgeRuntime, docker_adapter_veth_names, endpoint_name, escape_ubridge_arg,
+    guest_veth_name, host_veth_name, is_final_reply, is_legacy_link_veth, stop_existing_ubridge,
 };
 use crate::{
     runtime::{DockerRuntime, NodeAction, RuntimeError},
@@ -32,6 +32,65 @@ fn generates_endpoint_and_veth_names_that_fit_linux_limits() {
         );
     }
     assert_eq!(super::compact_id(id).unwrap(), "0123456789ab");
+}
+
+#[test]
+fn docker_adapter_veth_names_are_stable_per_node_and_adapter() {
+    let node = "eb3da4ee-8ee4-420b-a9c4-d13bac048388";
+    let other = "eb3da4ee-8ff4-420b-a9c4-d13bac048388";
+    let mut seen = std::collections::HashSet::new();
+    for port in 0..99 {
+        let (host, guest) = docker_adapter_veth_names(node, port).unwrap();
+        assert_eq!((host.clone(), guest.clone()), docker_adapter_veth_names(node, port).unwrap());
+        for name in [&host, &guest] {
+            assert!(name.len() <= 15, "{name} exceeds IFNAMSIZ");
+            assert!(name.bytes().all(|byte| byte.is_ascii_alphanumeric()));
+            assert!(!name.starts_with("eth"), "root-namespace names must not clash with eth{port}");
+        }
+        assert!(!is_legacy_link_veth(&host));
+        assert!(seen.insert(host));
+        assert!(seen.insert(guest));
+        let (other_host, _) = docker_adapter_veth_names(other, port).unwrap();
+        assert!(!seen.contains(&other_host));
+    }
+    assert_eq!(docker_adapter_veth_names(node, 5).unwrap().0, "nsdeb3da4ee8e05");
+    assert!(docker_adapter_veth_names(node, 256).is_err());
+    assert!(docker_adapter_veth_names("not-an-id", 0).is_err());
+    assert!(is_legacy_link_veth(&host_veth_name(node).unwrap()));
+}
+
+#[test]
+fn docker_link_nio_uses_the_adapter_veth_not_the_link() {
+    use crate::links::{AdapterNio, NioAdapter};
+    let docker = DockerRuntime::new();
+    let node = "eb3da4ee-8ee4-420b-a9c4-d13bac048388";
+    let first = serde_json::json!({"node_id": node, "adapter_number": 0, "port_number": 5,
+        "runtime_endpoint_id": "11111111-2222-3333-4444-555555555555"});
+    let second = serde_json::json!({"node_id": node, "adapter_number": 0, "port_number": 5,
+        "runtime_endpoint_id": "99999999-8888-7777-6666-555555555555"});
+    let expected = AdapterNio::Ethernet {
+        host_interface: docker_adapter_veth_names(node, 5).unwrap().0,
+        guest_interface: "eth5".to_owned(),
+    };
+    // A new link on the same port lands on the same, already existing eth5.
+    assert_eq!(docker.adapter_nio(&first).unwrap(), expected);
+    assert_eq!(docker.adapter_nio(&second).unwrap(), expected);
+    assert!(docker.adapter_nio(&serde_json::json!({"port_number": 0})).is_err());
+}
+
+#[test]
+fn ubridge_binary_availability_checks_the_path_or_path_lookup() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let missing = UbridgeRuntime::with_paths(directory.path().join("ubridge"), directory.path().join("s"));
+    assert!(!missing.binary_available());
+    let binary = directory.path().join("ubridge");
+    fs::write(&binary, "#!/bin/sh\n").unwrap();
+    assert!(!missing.binary_available(), "not executable yet");
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(missing.binary_available());
+    assert!(UbridgeRuntime::with_paths("sh", directory.path().join("s")).binary_available());
+    assert!(!UbridgeRuntime::with_paths("ubridge-not-on-path-xyz", directory.path().join("s")).binary_available());
 }
 
 #[test]

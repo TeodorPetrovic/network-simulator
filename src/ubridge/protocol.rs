@@ -116,6 +116,12 @@ impl UbridgeRuntime {
         Ok(())
     }
 
+    pub async fn set_interface_down(&self, interface: &str) -> Result<(), RuntimeError> {
+        validate_interface_name(interface)?;
+        self.command(&format!("link set {interface} down")).await?;
+        Ok(())
+    }
+
     pub async fn reserve_udp_port(&self) -> Result<u16, RuntimeError> {
         self.reserve_udp_port_for(&uuid::Uuid::new_v4().to_string())
             .await

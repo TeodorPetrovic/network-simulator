@@ -179,12 +179,11 @@ async fn nat_live_routes_docker_traffic_through_libvirt() {
     let nat_endpoint = endpoints[0].clone();
     let docker_endpoint = endpoints[1].clone();
     let nat_tap = host_ethernet_tap_name(&nat_endpoint).expect("derive NAT bridge TAP");
-    let docker_host =
-        crate::ubridge::host_veth_name(docker_endpoint["runtime_endpoint_id"].as_str().unwrap())
-            .expect("derive Docker host veth");
-    let docker_guest =
-        crate::ubridge::guest_veth_name(docker_endpoint["runtime_endpoint_id"].as_str().unwrap())
-            .expect("derive Docker guest veth");
+    let (docker_host, docker_guest) = crate::ubridge::docker_adapter_veth_names(
+        &docker_id,
+        docker_endpoint["port_number"].as_u64().unwrap_or_default(),
+    )
+    .expect("derive Docker adapter veth pair");
     let docker_node = Uuid::parse_str(&docker_id).unwrap();
     let mac = format!(
         "02:{:02x}:{:02x}:{:02x}:{:02x}:00",

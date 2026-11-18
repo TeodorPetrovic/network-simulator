@@ -25,18 +25,35 @@ pub(super) async fn apply_node_lifecycle(
                 .get("container_id")
                 .and_then(Value::as_str)
                 .ok_or_else(|| ApiError::conflict("Docker node has no runtime container"))?;
-            if matches!(action, NodeAction::Start | NodeAction::Reload) {
-                let linked: Vec<i64> = sqlx::query_scalar(
-                    "SELECT DISTINCT port_number FROM link_endpoints WHERE project_id = ? AND node_id = ? ORDER BY port_number",
-                )
-                .bind(project_id)
-                .bind(node_id)
-                .fetch_all(state.store.pool())
-                .await?;
-                let linked: Vec<u64> = linked.into_iter().filter_map(|port| u64::try_from(port).ok()).collect();
+            // GNS3 refuses to start a Docker node without uBridge; here a node without links still
+            // starts (with no NICs, as before), so the init shim must not wait for any.
+            let adapters = if state.ubridge.binary_available() {
+                docker_adapter_count(node)
+            } else {
+                if matches!(action, NodeAction::Start | NodeAction::Reload) {
+                    tracing::warn!(node_id, "uBridge is not installed; Docker adapters are not created");
+                }
+                0
+            };
+            // A container that is already running (or paused) has been through init.sh.
+            let was_running = matches!(
                 state
                     .runtime
-                    .write_expected_adapters(project_id, node_id, &linked)
+                    .container_status(container_id)
+                    .await
+                    .as_deref(),
+                Ok("started" | "suspended")
+            );
+            if matches!(action, NodeAction::Start | NodeAction::Reload) {
+                // GNS3 waits for every adapter (GNS3_MAX_ETHERNET), linked or not.
+                state
+                    .runtime
+                    .write_expected_adapters(
+                        project_id,
+                        node_id,
+                        adapters,
+                        !was_running || matches!(action, NodeAction::Reload),
+                    )
                     .map_err(runtime_api_error)?;
                 // "Edit network configuration": files written through the node file API
                 // are applied by the init shim (ifup) when the container boots.
@@ -61,14 +78,32 @@ pub(super) async fn apply_node_lifecycle(
                 .await
                 .map_err(runtime_api_error)?;
             if matches!(action, NodeAction::Start | NodeAction::Reload) {
-                if let Err(error) = attach_node_links(state, project_id, node_id, false).await {
+                let fresh_start = !was_running || matches!(action, NodeAction::Reload);
+                let attached = match create_docker_adapters(
+                    state,
+                    node_id,
+                    container_id,
+                    adapters,
+                    !fresh_start,
+                )
+                .await
+                {
+                    Ok(()) => attach_node_links(state, project_id, node_id, false).await,
+                    Err(error) => Err(error),
+                };
+                if let Err(error) = attached {
                     let _ = detach_node_links(state, project_id, node_id).await;
                     let _ = state
                         .runtime
                         .lifecycle(container_id, NodeAction::Stop)
                         .await;
+                    remove_docker_adapters(state, node_id, adapters).await;
                     return Err(error);
                 }
+            }
+            if matches!(action, NodeAction::Stop) {
+                // The veths die with the container's network namespace; this only sweeps leftovers.
+                remove_docker_adapters(state, node_id, adapters).await;
             }
             Ok(status)
         }
@@ -373,6 +408,120 @@ pub(super) async fn cleanup_node_runtime(state: &AppState, node: &Value) -> Resu
             Ok(())
         }
         _ => Ok(()),
+    }
+}
+
+pub(super) fn docker_adapter_count(node: &Value) -> u64 {
+    node.get("adapters").and_then(Value::as_u64).unwrap_or(1)
+}
+
+/// GNS3 `DockerVM.start()` calls `_add_ubridge_connection(nio, adapter)` for every adapter,
+/// linked or not, right after `docker start`: each adapter gets a veth pair whose guest end
+/// becomes `eth{N}` in the container (init.sh waits for all of them) and whose host end stays
+/// down (no carrier) until a link attaches to it.
+pub(super) async fn create_docker_adapters(
+    state: &AppState,
+    node_id: &str,
+    container_id: &str,
+    adapters: u64,
+    container_initialized: bool,
+) -> Result<(), ApiError> {
+    if adapters == 0 {
+        return Ok(());
+    }
+    let pid = state
+        .runtime
+        .container_pid(container_id)
+        .await
+        .map_err(runtime_api_error)?;
+    for port in 0..adapters {
+        ensure_docker_adapter(
+            state,
+            node_id,
+            container_id,
+            pid,
+            port,
+            container_initialized,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Make sure adapter `port` of a running container exists as `eth{port}`; returns the veth
+/// host end. An existing pair is reused untouched (its guest end is inside the container).
+/// `container_initialized`: init.sh has already brought the NICs up, so a NIC created now
+/// must be brought up in the container explicitly.
+pub(super) async fn ensure_docker_adapter(
+    state: &AppState,
+    node_id: &str,
+    container_id: &str,
+    pid: u32,
+    port: u64,
+    container_initialized: bool,
+) -> Result<String, ApiError> {
+    let (host, guest) =
+        ubridge::docker_adapter_veth_names(node_id, port).map_err(runtime_api_error)?;
+    if ubridge::host_interface_exists(&host) && !ubridge::host_interface_exists(&guest) {
+        return Ok(host);
+    }
+    // A pair whose guest end is still in the root namespace is from a failed start.
+    let _ = state.ubridge.delete_veth(&host).await;
+    let _ = state.ubridge.delete_veth(&guest).await;
+    let guest_name = format!("eth{port}");
+    let created = async {
+        let mac = docker_interface_mac(node_id, port)?;
+        state
+            .ubridge
+            .create_veth_pair(&host, &guest)
+            .await
+            .map_err(runtime_api_error)?;
+        state
+            .ubridge
+            .set_interface_down(&host)
+            .await
+            .map_err(runtime_api_error)?;
+        state
+            .ubridge
+            .set_docker_mac_address(&guest, &mac)
+            .await
+            .map_err(runtime_api_error)?;
+        state
+            .ubridge
+            .move_veth_to_container(&guest, pid, &guest_name)
+            .await
+            .map_err(runtime_api_error)
+    }
+    .await;
+    if let Err(error) = created {
+        let _ = state.ubridge.delete_veth(&host).await;
+        return Err(error);
+    }
+    if container_initialized
+        && let Err(error) = state
+            .runtime
+            .set_container_interface_up(container_id, &guest_name)
+            .await
+    {
+        tracing::warn!(
+            node_id,
+            interface = guest_name,
+            error = error.message(),
+            "Could not bring a late Docker NIC up"
+        );
+    }
+    Ok(host)
+}
+
+pub(super) async fn remove_docker_adapters(state: &AppState, node_id: &str, adapters: u64) {
+    for port in 0..adapters {
+        if let Ok((host, guest)) = ubridge::docker_adapter_veth_names(node_id, port) {
+            for interface in [host, guest] {
+                if ubridge::host_interface_exists(&interface) {
+                    let _ = state.ubridge.delete_veth(&interface).await;
+                }
+            }
+        }
     }
 }
 

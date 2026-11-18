@@ -44,10 +44,11 @@ pub trait NioAdapter {
 
 impl NioAdapter for DockerRuntime {
     fn adapter_nio(&self, endpoint: &Value) -> Result<AdapterNio, RuntimeError> {
-        let endpoint_id = required_text(endpoint, "runtime_endpoint_id")?;
+        let node_id = required_text(endpoint, "node_id")?;
         let port = endpoint["port_number"].as_u64().unwrap_or_default();
+        let (host_interface, _) = crate::ubridge::docker_adapter_veth_names(&node_id, port)?;
         Ok(AdapterNio::Ethernet {
-            host_interface: crate::ubridge::host_veth_name(&endpoint_id)?,
+            host_interface,
             guest_interface: format!("eth{port}"),
         })
     }

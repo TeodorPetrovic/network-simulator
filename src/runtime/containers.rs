@@ -1,7 +1,12 @@
 use super::*;
 
-const INIT_SH: &str = include_str!("resources/init.sh");
-const RUN_CMD_SH: &str = include_str!("resources/run-cmd.sh");
+pub(super) const INIT_SH: &str = include_str!("resources/init.sh");
+pub(super) const RUN_CMD_SH: &str = include_str!("resources/run-cmd.sh");
+
+/// Contents of /gns3/expected-eth: one `ethN` per adapter.
+pub(super) fn expected_adapter_list(adapters: u64) -> String {
+    (0..adapters).map(|adapter| format!("eth{adapter}\n")).collect()
+}
 
 fn sample_interfaces(adapters: u32) -> String {
     let mut text = String::from(
@@ -464,7 +469,7 @@ impl DockerRuntime {
         }
         let expected = shim_dir.join("expected-eth");
         if !expected.exists() {
-            fs::write(&expected, "").map_err(|error| RuntimeError::Failed(format!("Could not write adapter list: {error}")))?;
+            fs::write(&expected, expected_adapter_list(u64::from(options.adapters))).map_err(|error| RuntimeError::Failed(format!("Could not write adapter list: {error}")))?;
         }
         let max = options.adapters.saturating_sub(1);
         let args = vec![
@@ -484,16 +489,34 @@ impl DockerRuntime {
         Ok(Some((args, interfaces)))
     }
 
-    /// Tell the init shim which adapters have links, so it waits for exactly those NICs.
-    pub fn write_expected_adapters(&self, project_id: &str, node_id: &str, adapters: &[u64]) -> Result<(), RuntimeError> {
+    /// Before a start: list every adapter (eth0..eth{adapters-1}) for the init shim to wait for,
+    /// like GNS3's GNS3_MAX_ETHERNET, and (when the container is not running) refresh the shim
+    /// scripts so containers created by an older build pick up the current init.sh.
+    pub fn write_expected_adapters(
+        &self,
+        project_id: &str,
+        node_id: &str,
+        adapters: u64,
+        refresh_shim: bool,
+    ) -> Result<(), RuntimeError> {
         let project_id = validate_docker_topology_id(project_id, "project")?;
         let node_id = validate_docker_topology_id(node_id, "node")?;
         let dir = self.state_dir.join(project_id).join(node_id).join("gns3");
         if !dir.is_dir() {
             return Ok(());
         }
-        let text: String = adapters.iter().map(|adapter| format!("eth{adapter}\n")).collect();
-        fs::write(dir.join("expected-eth"), text).map_err(|error| RuntimeError::Failed(format!("Could not write adapter list: {error}")))
+        if refresh_shim {
+            for (name, content) in [("init.sh", INIT_SH), ("run-cmd.sh", RUN_CMD_SH)] {
+                let path = dir.join(name);
+                // Rewrite in place (same inode): the file is bind-mounted into the container.
+                if path.is_file() && fs::read(&path).ok().as_deref() != Some(content.as_bytes()) {
+                    fs::write(&path, content)
+                        .map_err(|error| RuntimeError::Failed(format!("Could not refresh Docker init shim: {error}")))?;
+                }
+            }
+        }
+        fs::write(dir.join("expected-eth"), expected_adapter_list(adapters))
+            .map_err(|error| RuntimeError::Failed(format!("Could not write adapter list: {error}")))
     }
 
     /// Persist an `/etc/network/interfaces` file for a node (GNS3's "Edit network configuration").

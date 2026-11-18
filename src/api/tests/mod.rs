@@ -113,7 +113,7 @@ async fn test_router_with_vpcs(vpcs_available: bool) -> (axum::Router, TempDir) 
     };
     (
         super::router_with_client_dir(
-            AppState::with_runtimes(
+            AppState::with_runtimes_and_ubridge(
                 store,
                 DockerRuntime::with_binary(docker),
                 QemuRuntime::with_paths(
@@ -128,6 +128,11 @@ async fn test_router_with_vpcs(vpcs_available: bool) -> (axum::Router, TempDir) 
                     directory.path().join("dynamips-test-double-not-installed"),
                     directory.path().join("dynamips-images"),
                     directory.path().join("dynamips-state"),
+                ),
+                // Never the default socket: that is the developer's live controller's uBridge.
+                crate::ubridge::UbridgeRuntime::with_paths(
+                    directory.path().join("ubridge-test-double-not-installed"),
+                    directory.path().join("ubridge.sock"),
                 ),
                 crate::marketplace::MarketplaceCatalog::with_directory(
                     directory.path().join("appliances"),

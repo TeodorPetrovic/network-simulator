@@ -281,8 +281,9 @@ async fn builtin_hub_live_forwards_docker_vpcs_traffic_and_cleans_links() {
             .iter()
             .find(|endpoint| endpoint["node_id"] == node_id)
         {
-            let host = crate::ubridge::host_veth_name(
-                endpoint["runtime_endpoint_id"].as_str().unwrap_or_default(),
+            let (host, _) = crate::ubridge::docker_adapter_veth_names(
+                node_id,
+                endpoint["port_number"].as_u64().unwrap_or_default(),
             )
             .expect("Docker host veth name");
             let output = Command::new("ip")

@@ -330,9 +330,11 @@ async fn chr_routes_vpcs_and_docker_over_controller_udp_nios() {
                 endpoint["node_id"].as_str()
                     == Some(docker_node_id.as_deref().unwrap_or_default())
             }) {
-                let endpoint_id = endpoint["runtime_endpoint_id"].as_str().unwrap_or_default();
-                let host = crate::ubridge::host_veth_name(endpoint_id)
-                    .map_err(|error| error.message().to_owned())?;
+                let (host, _) = crate::ubridge::docker_adapter_veth_names(
+                    docker_node_id.as_deref().unwrap_or_default(),
+                    endpoint["port_number"].as_u64().unwrap_or_default(),
+                )
+                .map_err(|error| error.message().to_owned())?;
                 let link = Command::new("ip")
                     .args(["-s", "-d", "link", "show", "dev", &host])
                     .output()
@@ -581,9 +583,11 @@ async fn chr_routes_vpcs_and_docker_over_controller_udp_nios() {
             .iter()
             .filter(|endpoint| endpoint["node_id"].as_str() == Some(node_id))
         {
-            let host =
-                crate::ubridge::host_veth_name(endpoint["runtime_endpoint_id"].as_str().unwrap())
-                    .expect("Docker host veth name");
+            let (host, _) = crate::ubridge::docker_adapter_veth_names(
+                node_id,
+                endpoint["port_number"].as_u64().unwrap_or_default(),
+            )
+            .expect("Docker host veth name");
             let inspect = Command::new("ip")
                 .args(["link", "show", "dev", &host])
                 .output()

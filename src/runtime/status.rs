@@ -156,6 +156,21 @@ impl DockerRuntime {
         })
     }
 
+    /// `ip link set dev <interface> up` inside a running container (for a NIC added after
+    /// init.sh already brought the others up).
+    pub async fn set_container_interface_up(&self, container_id: &str, interface: &str) -> Result<(), RuntimeError> {
+        self.ensure_managed_container(container_id)?;
+        if !interface.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+            return Err(RuntimeError::Failed("Invalid container interface name".to_owned()));
+        }
+        self.command(
+            ["exec", container_id, "/gns3/bin/busybox", "ip", "link", "set", "dev", interface, "up"],
+            DOCKER_TIMEOUT,
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Resize the TTY attached to a running Docker container (height, width).
     /// The console WebSocket route should call this when it receives a terminal
     /// resize control frame.

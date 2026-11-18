@@ -30,11 +30,7 @@ pub(crate) async fn attach_runtime_link_endpoint(
                 .runtime
                 .adapter_nio(&endpoint)
                 .map_err(runtime_api_error)?;
-            let AdapterNio::Ethernet {
-                host_interface,
-                guest_interface,
-            } = adapter.clone()
-            else {
+            let AdapterNio::Ethernet { host_interface, .. } = adapter.clone() else {
                 return Err(ApiError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Docker did not provide an Ethernet NIO",
@@ -44,39 +40,29 @@ pub(crate) async fn attach_runtime_link_endpoint(
                 .as_str()
                 .unwrap_or_default();
             let endpoint_id = endpoint["runtime_endpoint_id"].as_str().unwrap_or_default();
+            let port = endpoint["port_number"].as_u64().unwrap_or_default();
             let setup = async {
                 if !state.ubridge.has_link_endpoint(endpoint_id).await {
+                    // The adapter's NIC already exists (created for every adapter at start, as in
+                    // GNS3); the link only gives its host end carrier and attaches the relay.
                     let pid = state
                         .runtime
                         .container_pid(container_id)
                         .await
                         .map_err(runtime_api_error)?;
-                    let _ = state.ubridge.delete_veth(&host_interface).await;
-                    state
-                        .ubridge
-                        .create_veth_pair(&host_interface, &guest_interface)
-                        .await
-                        .map_err(runtime_api_error)?;
-                    let port = endpoint["port_number"].as_u64().unwrap_or_default();
-                    let mac = docker_interface_mac(node_id, port)?;
-                    state
-                        .ubridge
-                        .set_docker_mac_address(&guest_interface, &mac)
-                        .await
-                        .map_err(runtime_api_error)?;
-                    state
-                        .ubridge
-                        .set_interface_up(&guest_interface)
-                        .await
-                        .map_err(runtime_api_error)?;
+                    let host = crate::api::node_runtime::ensure_docker_adapter(
+                        state,
+                        node_id,
+                        container_id,
+                        pid,
+                        port,
+                        true,
+                    )
+                    .await?;
+                    debug_assert_eq!(host, host_interface);
                     state
                         .ubridge
                         .set_interface_up(&host_interface)
-                        .await
-                        .map_err(runtime_api_error)?;
-                    state
-                        .ubridge
-                        .move_veth_to_container(&guest_interface, pid, &guest_interface)
                         .await
                         .map_err(runtime_api_error)?;
                 }
@@ -87,7 +73,8 @@ pub(crate) async fn attach_runtime_link_endpoint(
             }
             .await;
             if let Err(error) = setup {
-                let _ = state.ubridge.delete_veth(&host_interface).await;
+                // Keep eth{port} in the container; only drop the carrier again.
+                let _ = state.ubridge.set_interface_down(&host_interface).await;
                 return Err(error);
             }
             endpoint["runtime_host_veth"] = json!(host_interface);

@@ -193,6 +193,39 @@ pub fn host_veth_name(endpoint_id: &str) -> Result<String, RuntimeError> {
     Ok(format!("nsv{}", compact_id(endpoint_id)?))
 }
 
+/// Root-namespace names of a Docker adapter's veth pair, like GNS3 3.1's `_veth_names`:
+/// (host end, guest end before `move_to_ns` renames it `eth{port}` inside the container).
+/// They depend only on the node and the adapter, so a link always lands on the same NIC.
+pub fn docker_adapter_veth_names(
+    node_id: &str,
+    port: u64,
+) -> Result<(String, String), RuntimeError> {
+    let node = compact_id(node_id)?;
+    if port > 0xff {
+        return Err(RuntimeError::Failed(format!(
+            "Docker adapter {port} is out of range"
+        )));
+    }
+    let node = &node[..10.min(node.len())];
+    Ok((
+        format!("nsd{node}{port:02x}"),
+        format!("nsc{node}{port:02x}"),
+    ))
+}
+
+/// Per-link veth host ends from before adapters were pre-created (`host_veth_name`).
+pub fn is_legacy_link_veth(interface: &str) -> bool {
+    interface.starts_with("nsv")
+}
+
+/// Whether a network interface exists in the controller's (root) network namespace.
+pub fn host_interface_exists(interface: &str) -> bool {
+    validate_interface_name(interface).is_ok()
+        && std::path::Path::new("/sys/class/net")
+            .join(interface)
+            .exists()
+}
+
 #[cfg(test)]
 pub fn guest_veth_name(endpoint_id: &str) -> Result<String, RuntimeError> {
     Ok(format!("nsg{}", compact_id(endpoint_id)?))

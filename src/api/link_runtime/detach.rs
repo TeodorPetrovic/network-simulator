@@ -11,16 +11,33 @@ pub(crate) async fn detach_runtime_link_endpoint(
     let engine_result = engine.detach_endpoint(endpoint).await;
     match runtime_endpoint["node_type"].as_str().unwrap_or_default() {
         "docker" => {
+            let adapter_host = ubridge::docker_adapter_veth_names(
+                node_id,
+                endpoint["port_number"].as_u64().unwrap_or_default(),
+            )
+            .ok()
+            .map(|(host, _)| host);
             let host = endpoint["runtime_host_veth"]
                 .as_str()
                 .map(str::to_owned)
-                .or_else(|| {
-                    endpoint["runtime_endpoint_id"]
-                        .as_str()
-                        .and_then(|id| ubridge::host_veth_name(id).ok())
-                });
-            if let Some(host) = host {
-                let _ = state.ubridge.delete_veth(&host).await;
+                .or_else(|| adapter_host.clone());
+            match host {
+                // Links made before adapters were pre-created own a per-link veth.
+                Some(host) if ubridge::is_legacy_link_veth(&host) => {
+                    let _ = state.ubridge.delete_veth(&host).await;
+                }
+                // Like GNS3's adapter_remove_nio_binding: eth{N} stays, it just loses carrier.
+                Some(host) if ubridge::host_interface_exists(&host) => {
+                    let _ = state.ubridge.set_interface_down(&host).await;
+                }
+                _ => {}
+            }
+            if let Some(legacy) = endpoint["runtime_endpoint_id"]
+                .as_str()
+                .and_then(|id| ubridge::host_veth_name(id).ok())
+                && ubridge::host_interface_exists(&legacy)
+            {
+                let _ = state.ubridge.delete_veth(&legacy).await;
             }
         }
         // Like GNS3, QEMU keeps its boot-time NIC and UDP tunnel; only the relay side is torn down.

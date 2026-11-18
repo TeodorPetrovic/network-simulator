@@ -506,3 +506,100 @@ async fn docker_stop_kills_the_container_like_gns3_instead_of_waiting_for_sigter
     assert!(calls.contains(&format!("kill {container_id}")), "{calls}");
     assert!(!calls.contains("stop --time"), "{calls}");
 }
+
+#[test]
+fn every_adapter_is_expected_by_the_init_shim_like_gns3_max_ethernet() {
+    assert_eq!(super::containers::expected_adapter_list(1), "eth0\n");
+    let all = super::containers::expected_adapter_list(16);
+    assert_eq!(all.lines().count(), 16);
+    assert_eq!(all.lines().next(), Some("eth0"));
+    assert_eq!(all.lines().last(), Some("eth15"));
+    assert_eq!(super::containers::expected_adapter_list(0), "");
+}
+
+#[test]
+fn start_lists_all_adapters_and_refreshes_a_stale_init_shim() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = DockerRuntime::with_paths("docker", directory.path().join("state"));
+    let project = "00000000-0000-4000-8000-000000000001";
+    let node = "00000000-0000-4000-8000-000000000002";
+    let shim = directory.path().join("state").join(project).join(node).join("gns3");
+    fs::create_dir_all(&shim).unwrap();
+    // A container created by an older build: it only waited for linked adapters.
+    fs::write(shim.join("init.sh"), "old init").unwrap();
+    fs::write(shim.join("run-cmd.sh"), super::containers::RUN_CMD_SH).unwrap();
+    fs::write(shim.join("expected-eth"), "eth0\n").unwrap();
+
+    runtime.write_expected_adapters(project, node, 16, false).unwrap();
+    assert_eq!(fs::read_to_string(shim.join("expected-eth")).unwrap().lines().count(), 16);
+    assert_eq!(fs::read_to_string(shim.join("init.sh")).unwrap(), "old init", "running container: keep its script");
+
+    runtime.write_expected_adapters(project, node, 16, true).unwrap();
+    assert_eq!(fs::read_to_string(shim.join("init.sh")).unwrap(), super::containers::INIT_SH);
+
+    // Nodes without the shim (no static BusyBox) are left alone.
+    let other = "00000000-0000-4000-8000-000000000003";
+    runtime.write_expected_adapters(project, other, 4, true).unwrap();
+    assert!(!directory.path().join("state").join(project).join(other).exists());
+}
+
+/// The init.sh wait loop, run against a fake /proc/net/dev: it returns as soon as every adapter
+/// exists, and gives up (instead of hanging) when one never appears.
+#[test]
+fn init_shim_waits_for_all_adapters_but_never_forever() {
+    let Some(busybox) = ["/usr/bin/busybox", "/bin/busybox"].into_iter().map(Path::new).find(|path| path.is_file())
+    else {
+        eprintln!("skipping: no busybox");
+        return;
+    };
+    let script = super::containers::INIT_SH;
+    let start = script.find("waited=0").expect("wait loop");
+    let end = script.find("# activate eth interfaces").expect("activation");
+    let directory = tempfile::tempdir().unwrap();
+    let dev = directory.path().join("dev");
+    let expected = directory.path().join("expected");
+    let wait = script[start..end]
+        .replace("/proc/net/dev", &dev.display().to_string())
+        .replace("/gns3/expected-eth", &expected.display().to_string())
+        .replace("-lt 240", "-lt 4");
+    let wait_path = directory.path().join("wait.sh");
+    fs::write(&wait_path, format!("{wait}\necho waited=$waited\n")).unwrap();
+    fs::write(&expected, super::containers::expected_adapter_list(16)).unwrap();
+    let run = |dev_contents: String| {
+        fs::write(&dev, dev_contents).unwrap();
+        let output = std::process::Command::new(busybox)
+            .args(["sh", wait_path.to_str().unwrap()])
+            .env("PATH", format!("{}:/usr/bin:/bin", directory.path().display()))
+            .env("GNS3_MAX_ETHERNET", "eth15")
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    };
+    // usleep is a BusyBox applet; expose it on PATH for the plain `sh` applet.
+    std::os::unix::fs::symlink(busybox, directory.path().join("usleep")).unwrap();
+    let header = "Inter-|   Receive\n face |bytes\n    lo: 0 0\n";
+    let all: String = (0..16).map(|n| format!("  eth{n}: 0 0 0\n")).collect();
+    assert_eq!(run(format!("{header}{all}")), "waited=0");
+    // eth1 is present but eth10..eth15 are not: a prefix match must not satisfy eth15.
+    let partial: String = (0..10).map(|n| format!("  eth{n}: 0 0 0\n")).collect();
+    assert_eq!(run(format!("{header}{partial}")), "waited=4");
+}
+
+#[tokio::test]
+async fn late_nic_is_brought_up_inside_the_container() {
+    let directory = tempfile::tempdir().unwrap();
+    let (binary, log) = docker_test_double(directory.path());
+    let runtime = DockerRuntime::with_paths(binary, directory.path().join("state"));
+    let container_id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    runtime
+        .mark_container_managed(
+            "00000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-000000000002",
+            container_id,
+        )
+        .unwrap();
+    runtime.set_container_interface_up(container_id, "eth5").await.unwrap();
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(calls.contains(&format!("exec {container_id} /gns3/bin/busybox ip link set dev eth5 up")), "{calls}");
+    assert!(runtime.set_container_interface_up(container_id, "eth5;reboot").await.is_err());
+}

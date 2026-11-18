@@ -19,6 +19,7 @@ mod tests;
 #[cfg(test)]
 pub use common::guest_veth_name;
 pub use common::host_veth_name;
+pub use common::{docker_adapter_veth_names, host_interface_exists, is_legacy_link_veth};
 
 pub(super) use common::*;
 
@@ -60,6 +61,21 @@ impl UbridgeRuntime {
             host_bridge_taps: Arc::new(Mutex::new(HashMap::new())),
             allocated_udp_ports: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Whether the configured uBridge executable exists (a path, or a name found on PATH).
+    pub fn binary_available(&self) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        let executable = |path: &std::path::Path| {
+            path.metadata()
+                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        };
+        if self.binary.components().count() > 1 {
+            return executable(&self.binary);
+        }
+        std::env::var_os("PATH").is_some_and(|paths| {
+            std::env::split_paths(&paths).any(|dir| executable(&dir.join(&self.binary)))
+        })
     }
 
     #[cfg(test)]

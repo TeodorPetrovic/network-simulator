@@ -337,7 +337,11 @@ async fn builtin_switch_live_connects_three_hosts_and_isolates_access_vlans() {
                 .iter()
                 .any(|(_, docker_node, _, _)| docker_node == node_id)
         {
-            let host = crate::ubridge::host_veth_name(endpoint_id).expect("Docker veth name");
+            let (host, _) = crate::ubridge::docker_adapter_veth_names(
+                node_id,
+                endpoint["port_number"].as_u64().unwrap_or_default(),
+            )
+            .expect("Docker veth name");
             let output = Command::new("ip")
                 .args(["link", "show", "dev", &host])
                 .output()

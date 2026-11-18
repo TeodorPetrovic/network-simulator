@@ -1,6 +1,6 @@
 #!/gns3/bin/busybox sh
 # Container entrypoint shim modelled on GNS3's docker init.sh: wait until the
-# simulator has attached every Ethernet adapter, apply /etc/network/interfaces
+# simulator has created every Ethernet adapter (eth0..ethN-1), apply /etc/network/interfaces
 # and then run the image's original entrypoint/command.
 OLD_PATH="$PATH"
 PATH=/gns3/bin:/tmp/gns3/bin:/sbin:$PATH
@@ -26,13 +26,14 @@ grep -q "[[:space:]]$HOSTNAME\$" /etc/hosts || echo "127.0.1.1	$HOSTNAME" >> /et
 
 ip link set dev lo up
 
-# The controller lists the adapters that have links in /gns3/expected-eth (one per line) before
-# starting the container. Wait for those, but never forever: unlinked adapters never appear.
+# Wait for all eth available. As in GNS3, the controller creates eth0..eth{N-1} for every
+# adapter (linked or not) right after the container starts; /gns3/expected-eth lists them and
+# GNS3_MAX_ETHERNET names the last one. Bounded (2 min) so a failed attach cannot hang boot.
 waited=0
 while [ "$waited" -lt 240 ]
 do
     missing=0
-    for dev in `cat /gns3/expected-eth 2>/dev/null`
+    for dev in `cat /gns3/expected-eth 2>/dev/null` $GNS3_MAX_ETHERNET
     do
         grep -q "^ *$dev:" /proc/net/dev || missing=1
     done
@@ -41,26 +42,12 @@ do
     waited=$((waited + 1))
 done
 
+# activate eth interfaces
 sed -n 's/^ *\(eth[0-9]*\):.*/\1/p' < /proc/net/dev | while read dev; do
 	ip link set dev $dev up
-	touch "/tmp/gns3/seen_$dev"
 done
 
+# configure network interfaces
 ifup -a -f
-
-# Adapters are attached when the peer node of a link is running, so some can appear
-# after this point (GNS3 pre-creates them all). Bring late ones up and configure them.
-(
-	while true
-	do
-		sed -n 's/^ *\(eth[0-9]*\):.*/\1/p' < /proc/net/dev | while read dev; do
-			[ -e "/tmp/gns3/seen_$dev" ] && continue
-			touch "/tmp/gns3/seen_$dev"
-			ip link set dev $dev up
-			ifup -f $dev > /dev/null 2>&1
-		done
-		usleep 500000
-	done
-) &
 
 exec su ${GNS3_USER-root} -p -- /gns3/run-cmd.sh "$OLD_PATH" "$@"
