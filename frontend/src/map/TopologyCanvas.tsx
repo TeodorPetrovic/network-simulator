@@ -480,7 +480,7 @@ export function TopologyCanvas(props: CanvasProps) {
           key={node.node_id}
           data-canvas-node="true"
           transform={`translate(${x},${y})`}
-          className={`[pointer-events:all] ${props.connecting ? "cursor-crosshair" : node.locked || props.projectLocked ? "cursor-not-allowed" : "cursor-move"} ${selected ? "[filter:drop-shadow(0_0_0.2rem_var(--primary))]" : ""}`}
+          className={`[pointer-events:all] ${props.connecting ? "cursor-crosshair" : node.locked || props.projectLocked ? "cursor-not-allowed" : "cursor-move"} outline-none focus:outline-none focus-visible:outline-none`}
           style={{ pointerEvents: "all" }}
           onPointerDown={(event) => startMove(event, node)}
           onClick={(event) => {

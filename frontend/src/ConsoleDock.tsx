@@ -70,8 +70,8 @@ export function ConsoleDock({
     <header className={`flex select-none touch-none cursor-grab items-stretch justify-between active:cursor-grabbing ${minimized ? "h-9 pl-3 pr-1" : "h-9 border-b border-border"}`} onPointerDown={(event) => { if ((event.target as HTMLElement).closest("button")) return; beginDrag(event); }}>
       {minimized
         ? <div className="flex items-center gap-2 whitespace-nowrap text-xs text-muted-foreground"><Terminal size={14} />Console{targets.length ? ` · ${targets.length}` : ""}</div>
-        : <div className="flex min-w-0 overflow-x-auto" role="tablist" aria-label="Open consoles">
-          {targets.map((target) => <div className={`flex min-w-28 items-center gap-1 border-r border-border pl-2.5 ${activeNodeId === target.id ? "border-t-2 border-t-primary bg-card" : "border-t-2 border-t-transparent bg-muted/40"}`} key={target.id}>
+        : <div className="flex min-w-0 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" aria-label="Open consoles">
+          {targets.map((target) => <div className={`flex h-full min-w-28 shrink-0 items-center gap-1 border-r border-border pl-2.5 ${activeNodeId === target.id ? "border-t-2 border-t-primary bg-card" : "border-t-2 border-t-transparent bg-muted/40"}`} key={target.id}>
             <Button variant="ghost" className={`flex h-full min-w-0 flex-1 justify-start gap-2 overflow-hidden px-0 text-xs font-medium hover:bg-transparent ${activeNodeId === target.id ? "text-foreground" : "text-muted-foreground"}`} role="tab" aria-selected={activeNodeId === target.id} onClick={() => { onSelect(target.id); onRestore(); }}><span className="size-1.5 shrink-0 rounded-full bg-success" /><span className="truncate">{target.nodeName}{target.auxiliary ? " · Aux" : ""}</span></Button>
             <Button variant="ghost" size="icon-xs" aria-label={`Close ${target.nodeName}${target.auxiliary ? " auxiliary" : ""} console`} onClick={() => onClose(target.id)}><X /></Button>
           </div>)}
