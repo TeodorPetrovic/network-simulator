@@ -1051,6 +1051,8 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "libc",
  "md-5",
  "reqwest",

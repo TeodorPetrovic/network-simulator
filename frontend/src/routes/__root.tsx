@@ -12,6 +12,17 @@ import { themeBootScript, watchSystemTheme } from "../theme";
 import { iconUrl } from "@/components/app-logo";
 import appCss from "../styles.css?url";
 
+// A reload inside a proxied container web console lands here (the proxy hides its URL prefix from
+// single-page apps); send this tab back to the proxy.
+if (typeof window !== "undefined") {
+  try {
+    const prefix = window.sessionStorage.getItem("ns_proxy");
+    if (prefix && /^\/proxy\/[0-9a-f]+$/.test(prefix) && !window.location.pathname.startsWith("/proxy/")) {
+      window.location.replace(`${prefix}${window.location.pathname}${window.location.search}${window.location.hash}`);
+    }
+  } catch { /* storage unavailable */ }
+}
+
 export const Route = createRootRoute({
   head: () => ({
     meta: [

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { ExternalLink } from "lucide-react";
 import type { Node } from "./api";
-import { dockerHttpConsoleUrl, serverHostname } from "./api";
+import { dockerWebProxyUrl } from "./api";
 import { Button } from "@/components/ui/button";
 import { SettingsDialog, SettingsNotice, SettingsSection, type SettingsTab } from "@/components/settings-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -173,13 +173,10 @@ export function NodeSettingsDialog({ node, open, onOpenChange, onSave }: {
 
   function openHttpConsole() {
     if (!node || (draft.console_type !== "http" && draft.console_type !== "https")) return;
-    const host = typeof node.console_host === "string" && node.console_host ? node.console_host : serverHostname();
-    const url = dockerHttpConsoleUrl(draft.console_type, host, Number(node.console) > 0 ? Number(node.console) : Number(draft.console_http_port), draft.console_http_path || "/");
-    if (!url) {
-      setError("Enter a valid HTTP console port and path before opening the console.");
-      return;
-    }
-    window.open(url, "_blank", "noopener,noreferrer");
+    const popup = window.open("about:blank", "_blank");
+    void dockerWebProxyUrl(String(node.project_id), node.node_id).then((url) => {
+      if (popup) popup.location.href = url; else window.open(url, "_blank");
+    }).catch((reason: unknown) => { popup?.close(); setError(reason instanceof Error ? reason.message : "Could not open the HTTP console."); });
   }
 
   if (!node || !supported) return null;

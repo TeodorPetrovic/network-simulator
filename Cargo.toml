@@ -25,6 +25,9 @@ ring = "0.17"
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 zip = { version = "2.4.2", default-features = false, features = ["deflate", "zstd"] }
 tokio-tungstenite = "0.29"
+hyper = { version = "1", features = ["client", "http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
 
 [dev-dependencies]
 http-body-util = "0.1"

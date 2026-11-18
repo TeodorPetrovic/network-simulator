@@ -249,6 +249,27 @@ impl DockerRuntime {
             .map(|host| host.console_port)
     }
 
+    /// Opens a byte stream to `127.0.0.1:port` inside the container (used by the web proxy).
+    pub fn open_container_stream(
+        &self,
+        container_id: &str,
+        port: u16,
+    ) -> Result<ContainerStream, RuntimeError> {
+        self.ensure_managed_container(container_id)?;
+        let mut child = Command::new(&self.binary)
+            .args(["exec", "-i", container_id, "/gns3/bin/busybox", "nc", "127.0.0.1", &port.to_string()])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|error| RuntimeError::Unavailable(format!("Could not start the Docker web bridge: {error}")))?;
+        let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+            return Err(RuntimeError::Failed("Docker web bridge has no streams".to_owned()));
+        };
+        Ok(ContainerStream { _child: child, stdin, stdout })
+    }
+
     pub fn attach_aux_process(&self, container_id: &str) -> Result<Child, RuntimeError> {
         self.ensure_managed_container(container_id)?;
         let command = docker_aux_exec_command(&self.binary, container_id)?;
@@ -421,5 +442,30 @@ impl DockerRuntime {
                 "Could not start the Docker console terminal for container '{container_id}': {error}"
             ))
         })
+    }
+}
+
+/// Duplex stream over a `docker exec nc` child; the child is killed when dropped.
+pub struct ContainerStream {
+    _child: Child,
+    stdin: tokio::process::ChildStdin,
+    stdout: tokio::process::ChildStdout,
+}
+
+impl tokio::io::AsyncRead for ContainerStream {
+    fn poll_read(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &mut tokio::io::ReadBuf<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.stdout).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for ContainerStream {
+    fn poll_write(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &[u8]) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.stdin).poll_write(cx, buf)
+    }
+    fn poll_flush(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.stdin).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.stdin).poll_shutdown(cx)
     }
 }

@@ -1,7 +1,7 @@
 import { useConfirm } from "@/components/confirm-dialog";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Activity } from "lucide-react";
-import { api, dockerHttpConsoleUrl, serverHostname } from "./api";
+import { api, dockerWebProxyUrl, serverHostname } from "./api";
 import { getDesktopPrefs, openInMottyLink, openVncInMotty } from "./api/desktop";
 import { isDesktop } from "./api/server";
 import { popOutWindow } from "./floating";
@@ -187,14 +187,14 @@ function App({ projectId, navigateToProject, showApplianceManager = false, navig
       return;
     }
     if (!auxiliary && node.node_type === "docker" && (consoleType === "http" || consoleType === "https")) {
-      const host = typeof node.console_host === "string" && node.console_host ? node.console_host : serverHostname();
-      const url = dockerHttpConsoleUrl(consoleType, host, Number(node.console) > 0 ? Number(node.console) : Number(node.console_http_port ?? 80), String(node.console_http_path ?? "/"));
-      if (!url) {
-        setNotice("The HTTP console address is invalid. Check its host, port, and path in device settings.");
-        return;
-      }
-      if (isDesktop()) popOutWindow(url, 1000, 700, node.name); else window.open(url, "_blank", "noopener,noreferrer");
-      setNotice("Opened the configured HTTP console. The container port must be reachable from your browser.");
+      const popup = isDesktop() ? null : window.open("about:blank", "_blank");
+      void dockerWebProxyUrl(projectId, node.node_id).then((url) => {
+        if (isDesktop()) popOutWindow(url, 1000, 700, node.name); else if (popup) popup.location.href = url; else window.open(url, "_blank");
+        setNotice("Opened the HTTP console through the simulator.");
+      }).catch((reason: unknown) => {
+        popup?.close();
+        setNotice(reason instanceof Error ? reason.message : "Could not open the HTTP console.");
+      });
       return;
     }
     if (isDesktop() && getDesktopPrefs().console === "motty" && !auxiliary && consoleType === "telnet") {

@@ -438,6 +438,11 @@ pub const ROUTE_RULES_EXTRA: &[RouteRule] = rules![
         RouteClass::Privilege("Node.Console")
     ),
     (
+        "POST",
+        "/compute/projects/{project_id}/docker/nodes/{node_id}/web_session",
+        RouteClass::Privilege("Node.Console")
+    ),
+    (
         "GET",
         "/compute/projects/{project_id}/qemu/nodes/{node_id}/vnc/ws",
         RouteClass::Privilege("Node.Console")

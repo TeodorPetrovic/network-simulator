@@ -141,6 +141,7 @@ pub struct AppState {
     idle_stop_minutes: Option<u64>,
     auto_close_delay: Duration,
     web_wireshark: Arc<crate::web_wireshark::WebWiresharkManager>,
+    web_sessions: web_proxy::WebSessions,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -366,6 +367,13 @@ fn router_with_client_dir(state: AppState, client_dir: &FsPath) -> Router {
             "/v3/compute/projects/{project_id}/docker/nodes/{node_id}/vnc/ws",
             get(consoles::docker_vnc),
         )
+        .route(
+            "/v3/compute/projects/{project_id}/docker/nodes/{node_id}/web_session",
+            post(web_proxy::create_web_session),
+        )
+        .route("/proxy/{token}", any(web_proxy::proxy_root))
+        .route("/proxy/{token}/", any(web_proxy::proxy_root))
+        .route("/proxy/{token}/{*rest}", any(web_proxy::proxy_path))
         .route("/v3/mcp", get(mcp::mcp_get).post(mcp::mcp_post).delete(mcp::mcp_delete))
         .route("/v3/copilot/llm-configs", get(copilot::list_configs).post(copilot::create_config))
         .route("/v3/copilot/llm-configs/{config_id}", put(copilot::update_config).delete(copilot::delete_config))
@@ -472,6 +480,7 @@ pub(crate) mod templates;
 mod topology;
 mod topology_listing;
 mod vpcs_node;
+mod web_proxy;
 use consoles::parse_docker_resize_control;
 use dynamips_node::dynamips_options_from_template;
 use link_capture::{

@@ -46,6 +46,7 @@ impl super::AppState {
             idle_stop_minutes: configured_idle_stop_minutes(),
             auto_close_delay: configured_auto_close_delay(),
             web_wireshark: Arc::new(crate::web_wireshark::WebWiresharkManager::default()),
+            web_sessions: Default::default(),
         }
     }
 
@@ -95,6 +96,7 @@ impl super::AppState {
             idle_stop_minutes: configured_idle_stop_minutes(),
             auto_close_delay: configured_auto_close_delay(),
             web_wireshark: Arc::new(crate::web_wireshark::WebWiresharkManager::default()),
+            web_sessions: Default::default(),
         }
     }
 

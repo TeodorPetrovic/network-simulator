@@ -7,7 +7,7 @@ import { computesApi } from "./computes";
 import { appliancesApi } from "./appliances";
 import { systemApi } from "./system";
 import { copilotApi } from "./copilot";
-import { getAuthToken } from "./client";
+import { getAuthToken, request } from "./client";
 import { serverBase } from "./server";
 
 export const api = { ...authApi, ...systemApi, ...templatesApi, ...appliancesApi, ...projectsApi, ...computesApi, ...nodesApi, ...linksApi, ...copilotApi };
@@ -32,6 +32,11 @@ export function dockerAuxConsoleUrl(projectId: string, nodeId: string): Promise<
 export function dockerHttpConsoleUrl(protocol: "http" | "https", host: string, port: number, path: string): string | null {
   if (!host.trim() || !Number.isInteger(port) || port < 1 || port > 65_535) return null;
   try { const url = new URL(`${protocol}://${host}`); url.port = String(port); url.pathname = path.startsWith("/") ? path : `/${path}`; return url.toString(); } catch { return null; }
+}
+/** Same-port reverse proxy link for a Docker HTTP console; works from any browser that can reach the simulator. */
+export async function dockerWebProxyUrl(projectId: string, nodeId: string): Promise<string> {
+  const result = await request<{ url: string }>(`/compute/projects/${projectId}/docker/nodes/${nodeId}/web_session`, { method: "POST" });
+  return new URL(result.url, serverBase()).toString();
 }
 export function symbolRawUrl(symbolId: string): string { return `/v3/symbols/${encodeURIComponent(symbolId)}/raw`; }
 export function vpcsConsoleUrl(projectId: string, nodeId: string): Promise<string> { return withSocketTicket(`/v3/compute/projects/${projectId}/vpcs/nodes/${nodeId}/console/ws`); }
