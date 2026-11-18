@@ -1,6 +1,6 @@
-<h2>Vežba 7, Zadatak – VLAN trunk kroz patch portove i ruter na štapu</h2>
+<h2>Vežba 7, Zadatak – VLAN trunk i ruter na štapu</h2>
 
-<p>Firma ima dva odeljenja u dva VLAN-a: VPC1 je u VLAN-u 10 (podmreža <code>10.10.10.0/24</code>), a VPC2 u VLAN-u 20 (podmreža <code>10.10.20.0/24</code>). Oba VPC-a su priključena na Open vSwitch SW1, ali na dva različita bridge-a: VPC1 na <code>br0</code>, a VPC2 na <code>br2</code>. Bridge-eve <code>br0</code> i <code>br2</code> povezuje par patch portova koji radi kao <strong>trunk</strong>: kroz njega prelaze okviri oba VLAN-a, sa svojim oznakama. Na <code>br2</code> je jednim trunk kablom priključen drugi Open vSwitch (SW2), koji radi kao <strong>ruter na štapu</strong>: sav saobraćaj između VLAN-ova ide preko <code>br2</code> do SW2 i vraća se istim kablom. SW2 to radi isključivo OpenFlow pravilima, bez <code>NORMAL</code> ponašanja, i treba da se ponaša isto kao MikroTik ruter sa VLAN podinterfejsima, prikazan na slici kao referentni model (MikroTik se u topologiji ne pravi). Bridge-evi se podešavaju komandom <code>ovs-vsctl</code>, a pravila komandom <code>ovs-ofctl</code>, u konzoli Docker uređaja SW1 i SW2.</p>
+<p>Firma ima dva odeljenja u dva VLAN-a: VPC1 je u VLAN-u 10, a VPC2 u VLAN-u 20, raspoređeni kao na slici. Saobraćaj između VLAN-ova rutira MikroTik ruter priključen na mrežu jednim kablom.</p>
 
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 360" width="1100" height="360" style="max-width:100%;height:auto" font-family="DejaVu Sans, sans-serif" font-size="12">
   <!-- SW1 -->
@@ -35,82 +35,85 @@
   <text x="165" y="124" text-anchor="middle" font-style="italic" font-size="11">access 10</text>
   <text x="165" y="284" text-anchor="middle" font-style="italic" font-size="11">access 20</text>
   <!-- SW2 -->
-  <rect x="620" y="170" width="190" height="180" rx="6" fill="#fff3cd" stroke="#555" stroke-width="1.5"/>
-  <text x="715" y="196" text-anchor="middle" font-size="14" font-weight="bold">SW2 – Open vSwitch</text>
-  <text x="715" y="250" text-anchor="middle" font-size="11">samo OpenFlow pravila</text>
-  <text x="715" y="268" text-anchor="middle" font-size="11">(bez NORMAL)</text>
-  <text x="715" y="300" text-anchor="middle" font-size="11" font-style="italic">ponaša se kao ruter</text>
-  <text x="715" y="316" text-anchor="middle" font-size="11" font-style="italic">na štapu</text>
-  <!-- MikroTik (referentni model) -->
-  <line x1="810" y1="267" x2="900" y2="267" stroke="#777" stroke-width="2" stroke-dasharray="5,4"/>
-  <text x="855" y="259" text-anchor="middle" fill="#555" font-size="11">ekvivalent</text>
-  <rect x="900" y="170" width="190" height="180" rx="6" fill="#d9ead3" stroke="#555" stroke-width="1.5" stroke-dasharray="7,4"/>
-  <circle cx="995" cy="207" r="20" fill="#ffffff" stroke="#555" stroke-width="1.2"/>
+  <rect x="620" y="200" width="170" height="130" rx="6" fill="#fff3cd" stroke="#555" stroke-width="1.5"/>
+  <text x="705" y="226" text-anchor="middle" font-size="14" font-weight="bold">SW2</text>
+  <text x="705" y="244" text-anchor="middle" font-size="11">Open vSwitch</text>
+  <!-- MikroTik -->
+  <rect x="890" y="200" width="200" height="130" rx="6" fill="#d9ead3" stroke="#555" stroke-width="1.5"/>
+  <circle cx="990" cy="236" r="20" fill="#ffffff" stroke="#555" stroke-width="1.2"/>
   <g stroke="#555" stroke-width="1.6" fill="none">
-    <path d="M983 201 h22 m-5 -4 l5 4 l-5 4"/>
-    <path d="M1007 213 h-22 m5 -4 l-5 4 l5 4"/>
+    <path d="M978 230 h22 m-5 -4 l5 4 l-5 4"/>
+    <path d="M1002 242 h-22 m5 -4 l-5 4 l5 4"/>
   </g>
-  <text x="995" y="247" text-anchor="middle" font-size="14" font-weight="bold">MikroTik</text>
-  <text x="995" y="263" text-anchor="middle" font-size="10" font-style="italic">(referentni model)</text>
-  <text x="995" y="297" text-anchor="middle" font-size="11">vlan10: 10.10.10.1</text>
-  <text x="995" y="315" text-anchor="middle" font-size="11">vlan20: 10.10.20.1</text>
-  <text x="995" y="337" text-anchor="middle" font-size="10">na ether1</text>
-  <!-- trunk -->
+  <text x="990" y="276" text-anchor="middle" font-size="14" font-weight="bold">MikroTik</text>
+  <text x="990" y="298" text-anchor="middle" font-size="11">vlan10: 10.10.10.1</text>
+  <text x="990" y="315" text-anchor="middle" font-size="11">vlan20: 10.10.20.1</text>
+  <!-- trunk SW1-SW2 -->
   <line x1="490" y1="267" x2="620" y2="267" stroke="#aa0000" stroke-width="3"/>
   <text x="494" y="261" fill="#aa0000" font-size="11">eth2</text>
   <text x="616" y="261" text-anchor="end" fill="#aa0000" font-size="11">eth0</text>
   <text x="555" y="286" text-anchor="middle" fill="#aa0000" font-size="11">trunk</text>
   <text x="555" y="300" text-anchor="middle" fill="#aa0000" font-size="11">VLAN 10, 20</text>
+  <!-- trunk SW2-MikroTik -->
+  <line x1="790" y1="267" x2="890" y2="267" stroke="#aa0000" stroke-width="3"/>
+  <text x="794" y="261" fill="#aa0000" font-size="11">eth1</text>
+  <text x="886" y="261" text-anchor="end" fill="#aa0000" font-size="11">ether1</text>
+  <text x="840" y="286" text-anchor="middle" fill="#aa0000" font-size="11">trunk</text>
+  <text x="840" y="300" text-anchor="middle" fill="#aa0000" font-size="11">VLAN 10, 20</text>
 </svg>
 
-<p class="caption">Slika 2. Topologija. Crvene linije nose okvire sa 802.1Q oznakom (trunk); isprekidana linija je patch veza unutar SW1, bez kabla. SW2 je u GNS3 Open vSwitch sa OpenFlow pravilima; MikroTik desno je samo referentni model (isprekidano), nije deo topologije.</p>
-
-<p><strong>Referentni model rutera.</strong> Da je umesto SW2 pravi MikroTik ruter, ceo njegov posao bi opisale četiri komande: dva VLAN podinterfejsa na fizičkom interfejsu <code>ether1</code> (kabl ka SW1) i po jedna IP adresa (gateway) na svakom od njih. SW2 treba OpenFlow pravilima da se ponaša isto kao ovakav ruter:</p>
-
-<pre><code>/interface vlan add name=vlan10 vlan-id=10 interface=ether1
-/interface vlan add name=vlan20 vlan-id=20 interface=ether1
-/ip address add address=10.10.10.1/24 interface=vlan10
-/ip address add address=10.10.20.1/24 interface=vlan20</code></pre>
-
-<p>MikroTik bi zatim sam odgovarao na ARP zahteve za 10.10.10.1 u VLAN-u 10 i za 10.10.20.1 u VLAN-u 20, i rutirao bi pakete između dve direktno povezane podmreže. SW2 sve to mora da uradi pravilima: odgovori na ARP za gateway adresu samo u njenom VLAN-u, i za svaki rutirani paket promeni VLAN oznaku, izvorišnu i odredišnu MAC adresu i TTL, pa ga vrati na kabl sa kog je došao. (MikroTik bi za oba podinterfejsa koristio MAC adresu interfejsa <code>ether1</code>; ovde svaki gateway ima svoju MAC adresu, da bi se u snimku saobraćaja lakše razlikovali.)</p>
-
-<p>Za mrežu smete da koristite isključivo adresni blok <code>10.10.0.0/16</code>.</p>
+<p class="caption">Slika 2. Topologija. Crvene linije nose okvire sa 802.1Q oznakom (trunk); isprekidana linija je patch veza unutar SW1.</p>
 
 <ol>
-<li><strong>Korak –</strong> U GNS3 programu samostalno napravite novi projekat i topologiju sa slike. Potrebna su vam dva Docker uređaja Open vSwitch (SW1 i SW2, slika <code>gns3/openvswitch</code>; SW2 je drugi Open vSwitch sa slike) i dva VPCS uređaja: VPC1 i VPC2. Povežite ih kablovima prema tabeli, a zatim pokrenite sve uređaje.
+<li><strong>Korak –</strong> U GNS3 napravite topologiju sa slike: dva Open vSwitch uređaja (SW1 i SW2, Docker slika <code>gns3/openvswitch</code>), dva VPCS uređaja (VPC1 i VPC2) i MikroTik ruter. Povežite ih prema tabeli.
 
-<table>
-<tr><th>Uređaj i port</th><th>Povezuje se sa</th><th>Vrsta veze</th></tr>
-<tr><td>SW1 eth0 (<code>br0</code>)</td><td>VPC1 Ethernet0</td><td>access, VLAN 10</td></tr>
-<tr><td>SW1 eth1 (<code>br2</code>)</td><td>VPC2 Ethernet0</td><td>access, VLAN 20</td></tr>
-<tr><td>SW1 eth2 (<code>br2</code>)</td><td>SW2 eth0</td><td>trunk, VLAN 10 i 20</td></tr>
+<table style="break-inside:avoid">
+<tr><th>Uređaj i port</th><th>Povezuje se sa</th></tr>
+<tr><td>SW1 eth0</td><td>VPC1 Ethernet0</td></tr>
+<tr><td>SW1 eth1</td><td>VPC2 Ethernet0</td></tr>
+<tr><td>SW1 eth2</td><td>SW2 eth0</td></tr>
+<tr><td>SW2 eth1</td><td>MikroTik ether1</td></tr>
 </table>
 </li>
 
-<li><strong>Korak –</strong> U konzoli VPC1 i VPC2 komandom <code>ip</code> podesite IP adresu, masku i podrazumevani izlaz (default gateway) prema tabeli. Zatim komandom <code>show</code> pročitajte MAC adresu svakog VPC-a i upišite je u tabelu. MAC adresu VPC-u dodeljuje GNS3 (počinje sa <code>00:50:79:66:68</code>) i ne može se proizvoljno menjati, a trebaće vam: SW2 nema ARP tabelu, pa pravila za rutiranje moraju da sadrže MAC adrese VPC-ova. Gateway adrese ne pripadaju nijednom VPC-u: odgovaraće im SW2 pravilima, sa MAC adresama iz druge tabele.
+<li><strong>Korak –</strong> Podesite IP adrese i podrazumevane izlaze na VPC-ovima.
 
-<table>
-<tr><th>Device</th><th>VLAN</th><th>IP Address</th><th>Default gateway</th><th>MAC adresa (iz <code>show</code>)</th></tr>
-<tr><td>VPC1</td><td>10</td><td>10.10.10.11 / 24</td><td>10.10.10.1</td><td></td></tr>
-<tr><td>VPC2</td><td>20</td><td>10.10.20.12 / 24</td><td>10.10.20.1</td><td></td></tr>
-</table>
-
-<table>
-<tr><th>Gateway (SW2)</th><th>MikroTik ekvivalent</th><th>IP adresa</th><th>MAC adresa ("ruter")</th></tr>
-<tr><td>VLAN 10</td><td><code>vlan10</code></td><td>10.10.10.1</td><td>02:00:00:00:10:01</td></tr>
-<tr><td>VLAN 20</td><td><code>vlan20</code></td><td>10.10.20.1</td><td>02:00:00:00:20:01</td></tr>
+<table style="break-inside:avoid">
+<tr><th>Device</th><th>VLAN</th><th>IP Address</th><th>Gateway</th></tr>
+<tr><td>VPC1</td><td>10</td><td>10.10.10.11 / 24</td><td>10.10.10.1</td></tr>
+<tr><td>VPC2</td><td>20</td><td>10.10.20.12 / 24</td><td>10.10.20.1</td></tr>
 </table>
 </li>
 
-<li><strong>Korak –</strong> Otvorite konzolu na SW1 i komandom <code>ovs-vsctl show</code> utvrdite u kom bridge-u su portovi eth0, eth1 i eth2. Port eth0 ostaje u <code>br0</code>, a portove eth1 i eth2 prebacite u <code>br2</code>. Zatim podesite VLAN uloge portova: eth0 je access port u VLAN-u 10, eth1 je access port u VLAN-u 20, a eth2 je trunk port kroz koji smeju da prođu samo VLAN-ovi 10 i 20. Proverite podešavanja komandom <code>ovs-vsctl show</code>. Pingujte sa VPC1 na VPC2 (<code>ping 10.10.20.12</code>) i objasnite poruku koju VPCS ispisuje.</li>
+<li><strong>Korak –</strong> Na SW1 port eth0 ostavite u bridge-u <code>br0</code>, a portove eth1 i eth2 prebacite u bridge <code>br2</code>. Port eth0 je access port VLAN-a 10, eth1 access port VLAN-a 20, a eth2 trunk za VLAN-ove 10 i 20. Povežite <code>br0</code> i <code>br2</code> parom patch portova <code>br0-br2</code> i <code>br2-br0</code>, koji su trunk za VLAN-ove 10 i 20.</li>
 
-<li><strong>Korak –</strong> Povežite <code>br0</code> i <code>br2</code> na SW1 parom patch portova: port <code>br0-br2</code> u bridge-u <code>br0</code> i port <code>br2-br0</code> u bridge-u <code>br2</code>, jedan drugom kao par (<em>peer</em>). Oba patch porta treba da budu trunk portovi za VLAN-ove 10 i 20. U GNS3 pokrenite snimanje saobraćaja (Wireshark) na kablu SW1 eth2 – SW2 eth0 i na kablu SW1 eth0 – VPC1, pa pingujte sa VPC1 na VPC2, a zatim sa VPC2 na VPC1. Ping i dalje ne uspeva. Zapišite koje okvire vidite na trunk kablu i sa kojom VLAN oznakom, i da li na kablu ka VPC1 postoji ijedan okvir sa VLAN oznakom ili ijedan okvir iz VLAN-a 20. Objasnite kojim putem je ARP zahtev sa VPC1 stigao do kabla ka SW2.</li>
+<li><strong>Korak –</strong> Na MikroTik ruteru, na interfejsu ether1, napravite VLAN podinterfejse <code>vlan10</code> i <code>vlan20</code> i dodelite im adrese iz tabele, tako da ruter rutira saobraćaj između VLAN-ova.
 
-<li><strong>Korak –</strong> Otvorite konzolu na SW2 i utvrdite u kom bridge-u je port eth0. Taj bridge će biti ruter: pogledajte njegova pravila, obrišite pravilo <code>NORMAL</code> i proverite da u bridge-u nema nijednog pravila. Port eth0 na SW2 ostavite bez VLAN podešavanja: pravila će sama proveravati i menjati VLAN oznake.</li>
+<table style="break-inside:avoid">
+<tr><th>Interfejs</th><th>VLAN</th><th>IP Address</th></tr>
+<tr><td>vlan10</td><td>10</td><td>10.10.10.1 / 24</td></tr>
+<tr><td>vlan20</td><td>20</td><td>10.10.20.1 / 24</td></tr>
+</table>
 
-<li><strong>Korak –</strong> Napišite dva ARP-responder pravila na SW2, po jedno za svaki gateway iz druge tabele iz koraka 2 (ekvivalent IP adrese na MikroTik podinterfejsu). Pravilo za 10.10.10.1 sme da odgovori samo na ARP zahtev koji je stigao u VLAN-u 10, a pravilo za 10.10.20.1 samo na zahtev iz VLAN-a 20. Odgovor se vraća na port sa kog je zahtev stigao. Na oba VPC-a pingujte svoj gateway (ping neće uspeti, jer SW2 odgovara samo na ARP, ali poruka će biti drugačija nego u koraku 3) i komandom <code>show arp</code> proverite koju MAC adresu je VPC naučio za gateway.</li>
+<p>Primer komandi za VLAN podinterfejs na MikroTik ruteru (VLAN 5, adresa 192.168.5.1/24):</p>
+<table style="break-inside:avoid">
+<tr><th>Komanda</th><th>Šta radi</th></tr>
+<tr><td><code>/interface vlan add name=vlan5 vlan-id=5 interface=ether1</code></td><td>pravi podinterfejs</td></tr>
+<tr><td><code>/ip address add address=192.168.5.1/24 interface=vlan5</code></td><td>dodeljuje mu IP adresu</td></tr>
+<tr><td><code>/interface vlan set [find name=vlan5] vlan-id=6</code></td><td>menja mu VLAN</td></tr>
+<tr><td><code>/interface vlan print</code>, <code>/ip address print</code></td><td>prikazuje podinterfejse i adrese</td></tr>
+<tr><td><code>/ip address remove [find interface=vlan5]</code></td><td>briše njegovu IP adresu</td></tr>
+<tr><td><code>/interface vlan remove [find name=vlan5]</code></td><td>briše podinterfejs</td></tr>
+</table>
+</li>
 
-<li><strong>Korak –</strong> Napišite pravila za rutiranje na SW2, sa nižim prioritetom od ARP-responder pravila: jedno za pakete iz VLAN-a 10 ka podmreži <code>10.10.20.0/24</code> i jedno za pakete iz VLAN-a 20 ka podmreži <code>10.10.10.0/24</code>. Svako pravilo mora da (a) promeni VLAN oznaku u VLAN odredišne podmreže, (b) postavi izvorišnu MAC adresu na MAC adresu gateway-a odredišnog VLAN-a, (c) postavi odredišnu MAC adresu na MAC adresu odredišnog VPC-a (iz vaše tabele u koraku 2), (d) smanji TTL za jedan i (e) vrati paket na isti port sa kog je stigao. Portove u pravilima navodite imenima (npr. <code>in_port=eth0</code>), a ne brojevima. Pingujte sa VPC1 na VPC2 i sa VPC2 na VPC1 i zapišite vrednost <code>ttl</code> u odgovoru. Na kraju na VPC1 pokrenite komandu <code>trace 10.10.20.12 -P 1</code> (putanja do VPC2), pa objasnite koliko skokova vidite i zašto u prvom skoku nema adrese.</li>
+<li><strong>Korak –</strong> Na SW2 obrišite podrazumevano pravilo <code>NORMAL</code> i podesite isključivo OpenFlow pravila koja prosleđuju okvire VLAN-a 10 i 20 između portova eth0 i eth1, u oba smera, sa nepromenjenom VLAN oznakom. Svi ostali okviri se odbacuju.</li>
 
-<li><strong>Korak –</strong> Dokažite da saobraćaj između VLAN-ova zaista ide preko SW2. Ponovo snimite saobraćaj na kablu SW1 eth2 – SW2 eth0 i na kablovima ka VPC1 i VPC2 dok pingujete sa VPC1 na VPC2 (<code>ping 10.10.20.12 -c 3</code>). Za jedan ICMP echo request zapišite sa kojom VLAN oznakom, izvorišnom i odredišnom MAC adresom i TTL-om se pojavljuje na svakom od ovih kablova. Na SW2 pogledajte brojače pravila (<code>ovs-ofctl --names dump-flows</code>) i brojače porta eth0 (<code>ovs-ofctl --names dump-ports</code>) pre i posle pinga, i objasnite zašto isti port eth0 i prima i šalje sav rutirani saobraćaj.</li>
+<li><strong>Korak –</strong> Proverite sledeće:
+<ul>
+<li>Da li VPC1 i VPC2 mogu da ping-uju svoj podrazumevani izlaz?</li>
+<li>Da li VPC1 može da ping-uje VPC2, i VPC2 da ping-uje VPC1?</li>
+<li>Na kojim kablovima okviri imaju VLAN oznaku (snimanje saobraćaja u GNS3)?</li>
+</ul>
+</li>
 </ol>

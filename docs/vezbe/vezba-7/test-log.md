@@ -1,32 +1,31 @@
 # Vežba 7 – test log (za održavanje, nije deo vežbe)
 
-Testirano na pravim uređajima: `gns3/openvswitch` (OVS 2.17.12, bridge-evi br0..br3 sa `datapath_type=netdev`)
-kao SW1 i SW2 (SW2 je na slici MikroTik), i pravi `vpcs` 0.8.5 iz simulatora
-(`~/.local/share/network-simulator/bin/vpcs`, isti binarni fajl i iste opcije kao u `src/vpcs/runtime_impl.rs`:
-`-p <konzola> -m <mac> -i 1 -F -R -s <lport> -c <rport> -t 127.0.0.1`) kao VPC1 i VPC2.
-Imena kontejnera i mreža imaju prefiks `v7_`.
+**Važno: MikroTik nije testiran.** MikroTik slika nije dostupna, pa je ruter u testu EMULIRAN Linux kontejnerom
+`v7_router` (alpine + iproute2): VLAN podinterfejsi `eth0.10` (10.10.10.1/24) i `eth0.20` (10.10.20.1/24) na jednom
+kablu, `net.ipv4.ip_forward=1`. RouterOS komande iz Koraka 4 rešenja (`/interface vlan add ...`, `/ip address add ...`)
+i primer komandi u zadatku (VLAN 5) **nisu izvršene ni proverene**. Izlazi pingova ka gateway-u (`ttl=64`) u rešenju
+potiču od Linux rutera. Sve ostalo (SW1, SW2, VPC1, VPC2) testirano je na pravim uređajima.
+
+Uređaji: `gns3/openvswitch` (OVS 2.17, bridge-evi br0..br3 sa `datapath_type=netdev`) kao SW1 i SW2, pravi `vpcs`
+0.8.5 iz simulatora (`-p <konzola> -m <mac> -i 1 -F -R -s <lport> -c <rport> -t 127.0.0.1`, preko `ubridge`-a na eth0
+kontejnera) kao VPC1 i VPC2. Bez DHCP-a (sve adrese statičke). Imena kontejnera i mreža imaju prefiks `v7_`.
 
 ## Harness
 
-- `src/test-setup.sh` – mreže `v7_n1` (SW1 eth0 – VPC1), `v7_n2` (SW1 eth1 – VPC2), `v7_n3` (SW1 eth2 – SW2 eth0).
-  SW1 se pokreće sa `--entrypoint sleep` na n1, pa se n2 i n3 povezuju jedan po jedan (Docker broji ethN po redosledu
-  povezivanja), zatim se `/etc/openvswitch/init.sh` pokreće ručno (stavlja sve ethN u br0, kao GNS3 pri startu).
-  Docker IP adrese se brišu (`ip addr flush`).
-- VPC: kontejner `v7_vpcN` (alpine, `--privileged`, IPv6 isključen) je samo "kabl". U njemu rade `vpcs` u UDP modu
-  i `ubridge` iz simulatora (`source_udp = 20001:127.0.0.1:20000`, `destination_linux_raw = eth0`) – isti put kao u
-  GNS3: VPCS UDP tunel -> ubridge -> Ethernet. glibc biblioteke hosta su montirane read-only (binarni fajlovi su
-  dinamički linkovani). Startup skripta `set pcname VPCN`. MAC adresa VPCS-a je `00:50:79:66:68:XX`, XX = `-m`
-  (simulator: poslednji bajt UUID-a čvora); bira se sa `V7_M1`/`V7_M2` (podrazumevano 28 i 167 = `1c`/`a7`, kao u rešenju).
-- `src/run-test.py` – čita `<pre data-dev="...">` blokove iz `task/resenje.frag.html` i izvršava ih tačno kako su
-  zapisani, redom: sw1/sw2 kroz `docker exec v7_swN bash -c` (komande prelomljene sa `\` šalju se kao jedna komanda
-  sa prelomom), vpc1/vpc2 kroz telnet konzolu VPCS-a (`nc 127.0.0.1 5000` u kontejneru, čeka se prompt `VPCN> `).
-  Posle `show` u Koraku 2 harness čita stvarne MAC adrese VPC-ova; ako se razlikuju od primera u rešenju, menja ih u
-  kasnijim komandama (isto što student radi sa svojim MAC adresama). Tokom Koraka 4 i 8 tcpdump (`v7-tcpdump:local`
-  = alpine + tcpdump) snima u mrežnom namespace-u SW2 eth0 (trunk kabl), VPC1 i VPC2 – ekvivalent Wireshark snimanja
-  na kablu u GNS3. Posle svakog koraka automatske provere (PASS/FAIL).
-- Dodatne negativne provere samo u harness-u (nisu u vežbi): VPC2 privremeno dobija `ip 10.10.10.99/24 10.10.10.1`
-  i pinguje 10.10.10.1 (ARP za gateway VLAN-a 10 iz VLAN-a 20) -> `host (10.10.10.1) not reachable`; isto VPC1 sa
-  10.10.20.98 -> 10.10.20.1; zatim se adrese vraćaju. Ping VPC1 -> VPC2 bez pravila za rutiranje -> `timeout`.
+- `src/test-setup.sh` – mreže (kablovi) `v7_n1` (SW1 eth0 – VPC1), `v7_n2` (SW1 eth1 – VPC2), `v7_n3`
+  (SW1 eth2 – SW2 eth0), `v7_n4` (SW2 eth1 – ruter eth0 = MikroTik ether1). Kontejneri se povezuju jedan po jedan
+  (Docker broji ethN po redosledu), `/etc/openvswitch/init.sh` se pokreće ručno (sve ethN u br0, kao GNS3).
+- `src/run-test.py` – izvršava `<pre data-dev="...">` blokove iz `task/resenje.frag.html` tačno kako su zapisani:
+  sw1/sw2 kroz `docker exec`, vpc1/vpc2 kroz telnet konzolu VPCS-a (konzola ostaje otvorena do kraja – zatvaranje
+  konzole resetuje VPCS i briše IP adresu). Blok `mikrotik` se NE izvršava: umesto njega se na `v7_router` izvršava
+  Linux ekvivalent (`ROUTER_EMU`). Tokom Koraka 6 tcpdump (`v7-tcpdump:local`, deli netns) snima kablove SW1–SW2
+  (SW2 eth0), SW2–ruter (SW2 eth1), VPC1 i VPC2.
+- Harness-only provere (nisu u vežbi): `show` na VPC-ovima (MAC za proveru snimaka); negativni test VLAN 30:
+  kontejner `v7_inj` deli netns sa SW1 i pravi `eth2.30` (10.10.30.2/24) direktno na kablu ka SW2, ruter dobija
+  `eth0.30` (10.10.30.1/24); ping u oba smera mora da padne, okviri VLAN 30 moraju da stignu do SW2 (eth0 odnosno
+  eth1) a da se ne pojave na drugom portu, i brojač pravila `priority=0 actions=drop` mora da raste.
+- Samo-provera harness-a: `V7_LEAK30=1` dodaje na SW2 pravilo koje propušta VLAN 30 – tada 5 NEG provera pada
+  (25/30), što potvrđuje da negativni test zaista hvata curenje.
 - `src/test-teardown.sh` – briše samo `v7_*` kontejnere i mreže, po tačnom imenu.
 
 Pokretanje (u `src/`):
@@ -36,96 +35,58 @@ Pokretanje (u `src/`):
 
 ## Rezultat
 
-Četiri pokretanja od čistog stanja, svako 35/35 PASS:
+Tri pokretanja od čistog stanja nad konačnim fragmentom, svako 30/30 PASS:
 
-| run | MAC VPC1 / VPC2 | SW2 eth0 rx / tx u Koraku 8 |
-|-----|-----------------|-----------------------------|
-| 1 | `00:50:79:66:68:1c` / `00:50:79:66:68:a7` (verbatim, kao u rešenju) | +6 / +6 |
-| 2 | `00:50:79:66:68:15` / `00:50:79:66:68:b3` (zamena MAC adresa) | +8 / +6 |
-| 3 | `00:50:79:66:68:c0` / `00:50:79:66:68:aa` (zamena MAC adresa) | +7 / +6 |
-| 4 | `00:50:79:66:68:1c` / `00:50:79:66:68:a7` (konačni fragment, izlaz ispod) | +7 / +6 |
+| run | MAC VPC1 / VPC2 | rezultat |
+|-----|-----------------|----------|
+| 1 | `00:50:79:66:68:1c` / `00:50:79:66:68:a7` | 30/30 PASS (pun izlaz ispod) |
+| 2 | `00:50:79:66:68:15` / `00:50:79:66:68:b3` | 30/30 PASS |
+| 3 | `00:50:79:66:68:c0` / `00:50:79:66:68:aa` | 30/30 PASS |
 
-Ishodi identični; razlikuju se samo vremena i `rx` porta eth0 na SW2 (okviri koje SW2 primi i odbaci; `tx` uvek +6).
+Ishodi identični; razlikuju se samo vremena i MAC adrese.
 
-Provereno:
-- `show` na VPCS-u prikazuje IP/masku, gateway i MAC; VPCS MAC se ne zadaje, čita se iz `show`;
-- bez rutera ping ne radi: VPCS ispisuje `host (10.10.10.1) not reachable` (ARP za gateway bez odgovora, ICMP se ne šalje);
-- ARP zahtev VPC1 prolazi br0 -> patch (trunk) -> br2 -> eth2 i na trunk kablu ima oznaku `vlan 10`; VPC2 -> `vlan 20`
-  (VPCS u ARP zahtevu stavlja `ff:ff:ff:ff:ff:ff` kao ciljnu MAC, tcpdump: `who-has 10.10.10.1 (ff:ff:ff:ff:ff:ff) tell ...`);
-- na kablovima ka VPC1/VPC2 nema nijednog 802.1Q okvira, a VPC1 ne vidi ništa iz VLAN-a 20 (i obrnuto);
-- ARP za oba gateway-a odgovara OpenFlow (`show arp`: 02:00:00:00:10:01 i 02:00:00:00:20:01); ping gateway-a daje
-  `timeout` (umesto `not reachable`); zahtev iz pogrešnog VLAN-a bez odgovora;
-- posle pravila za rutiranje ping radi u oba smera sa `ttl=63`;
-- `trace 10.10.20.12 -P 1`: skok 1 `* * *`, skok 2 `10.10.20.12`. OVS `dec_ttl` na paketu sa TTL 1 ne prosleđuje paket
-  (packet-in kontroleru, kog nema) i ne šalje ICMP Time Exceeded, pa adresa gateway-a NE može da se vidi u skoku 1;
-  pravilo za rutiranje ipak broji te pakete (brojač pravila VLAN 10 je za 3 veći od VLAN 20 posle trace-a);
-- na trunk kablu svaki echo request se vidi dvaput (isti ICMP id/seq i IP id): vlan 10 / ttl 64 (VPC1 MAC -> GW10 MAC)
-  ka SW2, pa vlan 20 / ttl 63 (GW20 MAC -> VPC2 MAC) od SW2; odgovori obrnuto; brojači pravila za rutiranje +3 svaki.
+Provereno (SW1/SW2/VPCS stvarno, ruter emuliran):
+- SW1: `tag: 10`, `tag: 20`, `trunks: [10, 20]` na eth2 i oba patch porta, patch par bez greške;
+- SW2 posle `del-flows` (bez NORMAL), sa ruterom već podešenim: VPC1 -> VPC2 ne radi (`host (10.10.10.1) not reachable`);
+- SW2 sa tačno 5 pravila (4 x `in_port`/`dl_vlan` -> `output`, plus `priority=0 actions=drop`), bez NORMAL: ping VPC-ova
+  ka svom gateway-u radi (`ttl=64`), VPC1 <-> VPC2 radi u oba smera sa `ttl=63`; sva 4 pravila za prosleđivanje
+  imaju porast brojača;
+- kabl SW1–SW2 i kabl SW2–ruter: svaki okvir ima 802.1Q oznaku 10 ili 20; echo request VPC1 -> VPC2 se na oba kabla
+  vidi kao vlan 10 / ttl 64 (VPC1 MAC -> MAC rutera) i vlan 20 / ttl 63 (MAC rutera -> VPC2 MAC);
+- kablovi ka VPC1 i VPC2: nijedan 802.1Q okvir; VPC2 prima zahtev od MAC adrese rutera sa ttl 63;
+- VLAN 30 (nije na listi) SW2 odbacuje u oba smera; bez pravila za VLAN 30 ping na VLAN 30 ne radi, a uz `V7_LEAK30=1`
+  radi (provera da test hvata curenje).
 
-Činjenice iz ranijih testova (alpine, koriste se u uvodu, nepromenjene):
-- `output:eth0` za paket koji je ušao na eth0 se tiho odbacuje; `in_port` i `output:in_port` rade isto (`IN_PORT`).
-- `tag=99` ili `trunks=30` na SW2 eth0 ne menja ništa za OpenFlow pravila – VLAN podešavanja porta koristi samo NORMAL.
-- `vlan_tci=0x1000/0x1000`, `vlan_tci=0x0000/0x1000`, `strip_vlan`, `mod_vlan_vid` na neoznačenom okviru – sintaksa prihvaćena.
-- Komanda prelomljena sa `\` unutar dvostrukih navodnika, sa uvlačenjem nastavka sa 2 razmaka, radi u `sh` i `bash`.
-- Patch par između br0 i br2 radi bez greške jer su oba bridge-a `netdev`.
+Nije provereno: RouterOS sintaksa i ponašanje pravog MikroTik-a (Korak 4 rešenja i primer komandi u zadatku).
 
-## Pun izlaz poslednjeg pokretanja (run4, nad konačnim fragmentom)
+## Pun izlaz pokretanja 1
 
 ```
 
-##### Korak 2 – IP adrese, podrazumevani izlaz i MAC adrese VPC-ova
+##### Korak 2 – IP adrese i podrazumevani izlaz na VPC-ovima
 [VPC1> ip 10.10.10.11/24 10.10.10.1
 Checking for duplicate address...
 VPC1 : 10.10.10.11 255.255.255.0 gateway 10.10.10.1
+(rc=0)
+[VPC2> ip 10.10.20.12/24 10.10.20.1
+Checking for duplicate address...
+VPC2 : 10.10.20.12 255.255.255.0 gateway 10.10.20.1
 (rc=0)
 [VPC1> show
 NAME   IP/MASK              GATEWAY           MAC                LPORT  RHOST:PORT
 VPC1   10.10.10.11/24       10.10.10.1        00:50:79:66:68:1c  20000  127.0.0.1:20001
        fe80::250:79ff:fe66:681c/64
 (rc=0)
-[VPC2> ip 10.10.20.12/24 10.10.20.1
-Checking for duplicate address...
-VPC2 : 10.10.20.12 255.255.255.0 gateway 10.10.20.1
-(rc=0)
+CHECK PASS: K2 vpc1: IP and gateway set VPC1   10.10.10.11/24       10.10.10.1        00:50:79:66:68:1c
 [VPC2> show
 NAME   IP/MASK              GATEWAY           MAC                LPORT  RHOST:PORT
 VPC2   10.10.20.12/24       10.10.20.1        00:50:79:66:68:a7  20000  127.0.0.1:20001
        fe80::250:79ff:fe66:68a7/64
 (rc=0)
-CHECK PASS: K2 vpc1 show: IP, gateway, MAC VPC1   10.10.10.11/24       10.10.10.1        00:50:79:66:68:1c
-CHECK PASS: K2 vpc2 show: IP, gateway, MAC VPC2   10.10.20.12/24       10.10.20.1        00:50:79:66:68:a7
-MAC adrese VPC-ova (iz show): {'vpc1': '00:50:79:66:68:1c', 'vpc2': '00:50:79:66:68:a7'} | primer u resenju: {'vpc1': '00:50:79:66:68:1c', 'vpc2': '00:50:79:66:68:a7'}
+CHECK PASS: K2 vpc2: IP and gateway set VPC2   10.10.20.12/24       10.10.20.1        00:50:79:66:68:a7
+MAC: {'router': '86:87:3c:21:3b:17', 'sw1eth2': 'ba:cb:76:42:64:28', 'vpc1': '00:50:79:66:68:1c', 'vpc2': '00:50:79:66:68:a7'}
 
-##### Korak 3 – bridge-evi i VLAN uloge portova na SW1
-[sw1]$ ovs-vsctl show
-d4c98374-9fcc-47a3-9af0-ffb452cec613
-    Bridge br0
-        datapath_type: netdev
-        Port eth2
-            Interface eth2
-        Port eth1
-            Interface eth1
-        Port eth0
-            Interface eth0
-        Port br0
-            Interface br0
-                type: internal
-    Bridge br1
-        datapath_type: netdev
-        Port br1
-            Interface br1
-                type: internal
-    Bridge br3
-        datapath_type: netdev
-        Port br3
-            Interface br3
-                type: internal
-    Bridge br2
-        datapath_type: netdev
-        Port br2
-            Interface br2
-                type: internal
-(rc=0)
+##### Korak 3 – SW1: bridge-evi, access i trunk portovi, patch par
 [sw1]$ ovs-vsctl del-port br0 eth1
 (rc=0)
 [sw1]$ ovs-vsctl del-port br0 eth2
@@ -140,45 +101,6 @@ d4c98374-9fcc-47a3-9af0-ffb452cec613
 (rc=0)
 [sw1]$ ovs-vsctl set port eth2 trunks=10,20
 (rc=0)
-[sw1]$ ovs-vsctl show
-d4c98374-9fcc-47a3-9af0-ffb452cec613
-    Bridge br0
-        datapath_type: netdev
-        Port eth0
-            tag: 10
-            Interface eth0
-        Port br0
-            Interface br0
-                type: internal
-    Bridge br1
-        datapath_type: netdev
-        Port br1
-            Interface br1
-                type: internal
-    Bridge br3
-        datapath_type: netdev
-        Port br3
-            Interface br3
-                type: internal
-    Bridge br2
-        datapath_type: netdev
-        Port br2
-            Interface br2
-                type: internal
-        Port eth2
-            trunks: [10, 20]
-            Interface eth2
-        Port eth1
-            tag: 20
-            Interface eth1
-(rc=0)
-[VPC1> ping 10.10.20.12
-host (10.10.10.1) not reachable
-(rc=0)
-CHECK PASS: K3 VPC1->VPC2 ping fails: gateway not reachable (no router) 
-CHECK PASS: K3 tags/trunks set 
-
-##### Korak 4 – patch portovi kao trunk između br0 i br2
 [sw1]$ ovs-vsctl add-port br0 br0-br2 trunks=10,20 \
   -- set interface br0-br2 type=patch options:peer=br2-br0
 (rc=0)
@@ -186,279 +108,342 @@ CHECK PASS: K3 tags/trunks set
   -- set interface br2-br0 type=patch options:peer=br0-br2
 (rc=0)
 [sw1]$ ovs-vsctl show
-d4c98374-9fcc-47a3-9af0-ffb452cec613
-    Bridge br0
-        datapath_type: netdev
-        Port br0-br2
-            trunks: [10, 20]
-            Interface br0-br2
-                type: patch
-                options: {peer=br2-br0}
-        Port eth0
-            tag: 10
-            Interface eth0
-        Port br0
-            Interface br0
-                type: internal
-    Bridge br1
-        datapath_type: netdev
-        Port br1
-            Interface br1
-                type: internal
+fedd5f9e-2f61-4f8d-8016-d02bfdb9a651
     Bridge br3
         datapath_type: netdev
         Port br3
             Interface br3
                 type: internal
+    Bridge br0
+        datapath_type: netdev
+        Port eth0
+            tag: 10
+            Interface eth0
+        Port br0-br2
+            trunks: [10, 20]
+            Interface br0-br2
+                type: patch
+                options: {peer=br2-br0}
+        Port br0
+            Interface br0
+                type: internal
     Bridge br2
         datapath_type: netdev
-        Port br2
-            Interface br2
-                type: internal
-        Port br2-br0
-            trunks: [10, 20]
-            Interface br2-br0
-                type: patch
-                options: {peer=br0-br2}
         Port eth2
             trunks: [10, 20]
             Interface eth2
         Port eth1
             tag: 20
             Interface eth1
+        Port br2-br0
+            trunks: [10, 20]
+            Interface br2-br0
+                type: patch
+                options: {peer=br0-br2}
+        Port br2
+            Interface br2
+                type: internal
+    Bridge br1
+        datapath_type: netdev
+        Port br1
+            Interface br1
+                type: internal
 (rc=0)
-[VPC1> ping 10.10.20.12
-host (10.10.10.1) not reachable
-(rc=0)
-[VPC2> ping 10.10.10.11
-host (10.10.20.1) not reachable
-(rc=0)
------ capture K4 sw2eth0 (6 frames)
-  12:11:55.944641 00:50:79:66:68:1c > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 68: vlan 10, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.10.1 (ff:ff:ff:ff:ff:ff) tell 10.10.10.11, length 50
-  12:11:56.945830 00:50:79:66:68:1c > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 68: vlan 10, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.10.1 (ff:ff:ff:ff:ff:ff) tell 10.10.10.11, length 50
-  12:11:57.946752 00:50:79:66:68:1c > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 68: vlan 10, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.10.1 (ff:ff:ff:ff:ff:ff) tell 10.10.10.11, length 50
-  12:11:58.948984 00:50:79:66:68:a7 > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 68: vlan 20, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.20.1 (ff:ff:ff:ff:ff:ff) tell 10.10.20.12, length 50
-  12:11:59.949479 00:50:79:66:68:a7 > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 68: vlan 20, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.20.1 (ff:ff:ff:ff:ff:ff) tell 10.10.20.12, length 50
-  12:12:00.949813 00:50:79:66:68:a7 > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 68: vlan 20, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.20.1 (ff:ff:ff:ff:ff:ff) tell 10.10.20.12, length 50
------ capture K4 vpc1 (3 frames)
-  12:11:55.944378 00:50:79:66:68:1c > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 64: Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.10.1 (ff:ff:ff:ff:ff:ff) tell 10.10.10.11, length 50
-  12:11:56.945518 00:50:79:66:68:1c > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 64: Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.10.1 (ff:ff:ff:ff:ff:ff) tell 10.10.10.11, length 50
-  12:11:57.946538 00:50:79:66:68:1c > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 64: Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.10.1 (ff:ff:ff:ff:ff:ff) tell 10.10.10.11, length 50
------ capture K4 vpc2 (3 frames)
-  12:11:58.948538 00:50:79:66:68:a7 > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 64: Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.20.1 (ff:ff:ff:ff:ff:ff) tell 10.10.20.12, length 50
-  12:11:59.948989 00:50:79:66:68:a7 > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 64: Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.20.1 (ff:ff:ff:ff:ff:ff) tell 10.10.20.12, length 50
-  12:12:00.949335 00:50:79:66:68:a7 > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 64: Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.20.1 (ff:ff:ff:ff:ff:ff) tell 10.10.20.12, length 50
-CHECK PASS: K4 patch ports present, no error 
-CHECK PASS: K4 VPC1 ping still fails 
-CHECK PASS: K4 VPC2 ping still fails 
-CHECK PASS: K4 trunk: VPC1 ARP arrives tagged vlan 10 (via patch) 
-CHECK PASS: K4 trunk: VPC2 ARP arrives tagged vlan 20 
-CHECK PASS: K4 VPC1 link: ARP seen untagged 
-CHECK PASS: K4 VPC1 link: no 802.1Q frames 
-CHECK PASS: K4 VPC2 link: no 802.1Q frames 
-CHECK PASS: K4 VPC1 link: nothing from VLAN 20 
-CHECK PASS: K4 VPC2 link: nothing from VLAN 10 
+CHECK PASS: K3 tags/trunks set 
+CHECK PASS: K3 patch ports present, no error 
 
-##### Korak 5 – SW2 bez NORMAL pravila
+##### Korak 4 – MikroTik: VLAN podinterfejsi (nije izvršeno u testu)
+[MikroTik] RouterOS komande NISU izvrsene (nema MikroTik slike):
+    /interface vlan add name=vlan10 vlan-id=10 interface=ether1
+    /interface vlan add name=vlan20 vlan-id=20 interface=ether1
+    /ip address add address=10.10.10.1/24 interface=vlan10
+    /ip address add address=10.10.20.1/24 interface=vlan20
+    /interface vlan print
+    /ip address print
+[MikroTik] EMULACIJA: Linux ruter v7_router izvrsava ekvivalent:
+[router]# ip link add link eth0 name eth0.10 type vlan id 10
+
+(rc=0)
+[router]# ip link add link eth0 name eth0.20 type vlan id 20
+
+(rc=0)
+[router]# ip addr add 10.10.10.1/24 dev eth0.10
+
+(rc=0)
+[router]# ip addr add 10.10.20.1/24 dev eth0.20
+
+(rc=0)
+[router]# ip link set eth0.10 up
+
+(rc=0)
+[router]# ip link set eth0.20 up
+
+(rc=0)
+[router]# sysctl net.ipv4.ip_forward
+net.ipv4.ip_forward = 1
+(rc=0)
+[router]# ip -br addr
+lo               UNKNOWN        127.0.0.1/8 
+eth0@if1120      UP             
+eth0.10@eth0     UP             10.10.10.1/24 
+eth0.20@eth0     UP             10.10.20.1/24
+(rc=0)
+CHECK PASS: K4 (EMULATED router) sub-interfaces 10.10.10.1 / 10.10.20.1 lo               UNKNOWN        127.0.0.1/8 
+eth0@if1120      UP             
+eth0.10@eth0     UP             10.10.10.1/24 
+eth0.20@eth0     UP             10.10.20.1/24 
+
+CHECK PASS: K4 (EMULATED router) ip_forward=1 
+
+##### Korak 5 – SW2: samo OpenFlow pravila
 [sw2]$ ovs-vsctl port-to-br eth0
 br0
 (rc=0)
-[sw2]$ ovs-ofctl dump-flows br0
-NXST_FLOW reply (xid=0x4):
- cookie=0x0, duration=30.658s, table=0, n_packets=42, n_bytes=3088, idle_age=2, priority=0 actions=NORMAL
-(rc=0)
 [sw2]$ ovs-ofctl del-flows br0
 (rc=0)
-[sw2]$ ovs-ofctl dump-flows br0
-NXST_FLOW reply (xid=0x4):
-(rc=0)
-CHECK PASS: K5 NORMAL deleted 
-CHECK PASS: K5 eth0 in br0 
-
-##### Korak 6 – ARP responder za gateway svakog VLAN-a
-[sw2]$ ovs-ofctl add-flow br0 "priority=200,in_port=eth0,dl_vlan=10,arp,arp_op=1,arp_tpa=10.10.10.1,\
-  actions=move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],mod_dl_src:02:00:00:00:10:01,\
-  load:0x2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],\
-  move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x020000001001->NXM_NX_ARP_SHA[],\
-  load:0x0a0a0a01->NXM_OF_ARP_SPA[],in_port"
-(rc=0)
-[sw2]$ ovs-ofctl add-flow br0 "priority=200,in_port=eth0,dl_vlan=20,arp,arp_op=1,arp_tpa=10.10.20.1,\
-  actions=move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],mod_dl_src:02:00:00:00:20:01,\
-  load:0x2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],\
-  move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x020000002001->NXM_NX_ARP_SHA[],\
-  load:0x0a0a1401->NXM_OF_ARP_SPA[],in_port"
-(rc=0)
-[VPC1> ping 10.10.10.1 -c 1
-10.10.10.1 icmp_seq=1 timeout
-(rc=0)
-[VPC1> show arp
-02:00:00:00:10:01  10.10.10.1 expires in 118 seconds
-(rc=0)
-[VPC2> ping 10.10.20.1 -c 1
-10.10.20.1 icmp_seq=1 timeout
-(rc=0)
-[VPC2> show arp
-02:00:00:00:20:01  10.10.20.1 expires in 118 seconds
-(rc=0)
-CHECK PASS: K6 VPC1 gateway ping: ARP ok, ICMP timeout 
-CHECK PASS: K6 VPC2 gateway ping: ARP ok, ICMP timeout 
-CHECK PASS: K6 VPC1 learned GW10 MAC from OpenFlow 
-CHECK PASS: K6 VPC2 learned GW20 MAC from OpenFlow 
-[VPC2> ip 10.10.10.99/24 10.10.10.1
-Checking for duplicate address...
-VPC2 : 10.10.10.99 255.255.255.0 gateway 10.10.10.1
-(rc=0)
-[VPC2> ping 10.10.10.1 -c 1
+[VPC1> ping 10.10.20.12 -c 1
 host (10.10.10.1) not reachable
 (rc=0)
-CHECK PASS: K6 NEG: ARP for 10.10.10.1 asked from VLAN 20 is NOT answered 
-[VPC2> ip 10.10.20.12/24 10.10.20.1
-Checking for duplicate address...
-VPC2 : 10.10.20.12 255.255.255.0 gateway 10.10.20.1
+[sw2]$ ovs-ofctl add-flow br0 "priority=100,in_port=eth0,dl_vlan=10,actions=output:eth1"
 (rc=0)
-[VPC1> ip 10.10.20.98/24 10.10.20.1
-Checking for duplicate address...
-VPC1 : 10.10.20.98 255.255.255.0 gateway 10.10.20.1
+[sw2]$ ovs-ofctl add-flow br0 "priority=100,in_port=eth0,dl_vlan=20,actions=output:eth1"
 (rc=0)
-[VPC1> ping 10.10.20.1 -c 1
-host (10.10.20.1) not reachable
+[sw2]$ ovs-ofctl add-flow br0 "priority=100,in_port=eth1,dl_vlan=10,actions=output:eth0"
 (rc=0)
-CHECK PASS: K6 NEG: ARP for 10.10.20.1 asked from VLAN 10 is NOT answered 
-[VPC1> ip 10.10.10.11/24 10.10.10.1
-Checking for duplicate address...
-VPC1 : 10.10.10.11 255.255.255.0 gateway 10.10.10.1
+[sw2]$ ovs-ofctl add-flow br0 "priority=100,in_port=eth1,dl_vlan=20,actions=output:eth0"
 (rc=0)
-[VPC1> ping 10.10.20.12 -c 2
-10.10.20.12 icmp_seq=1 timeout
-10.10.20.12 icmp_seq=2 timeout
+[sw2]$ ovs-ofctl add-flow br0 "priority=0,actions=drop"
 (rc=0)
-CHECK PASS: K6 NEG: VPC1->VPC2 still fails without routing flows 
+[sw2]$ ovs-ofctl --names --no-stats dump-flows br0
+ priority=100,in_port=eth0,dl_vlan=10 actions=output:eth1
+ priority=100,in_port=eth0,dl_vlan=20 actions=output:eth1
+ priority=100,in_port=eth1,dl_vlan=10 actions=output:eth0
+ priority=100,in_port=eth1,dl_vlan=20 actions=output:eth0
+ priority=0 actions=drop
+(rc=0)
+CHECK PASS: K5 eth0 in br0 
+CHECK PASS: K5 without SW2 flows (no NORMAL): VPC1->VPC2 fails, gateway not reachable host (10.10.10.1) not reachable
+CHECK PASS: K5 exactly 5 flows, no NORMAL 
 
-##### Korak 7 – rutiranje između VLAN-ova
-[sw2]$ ovs-ofctl add-flow br0 "priority=100,in_port=eth0,dl_vlan=10,ip,nw_dst=10.10.20.0/24,\
-  actions=mod_vlan_vid:20,mod_dl_src:02:00:00:00:20:01,mod_dl_dst:00:50:79:66:68:a7,dec_ttl,in_port"
+##### Korak 6 – provera
+[sw2]$ ovs-ofctl --names dump-flows br0
+ cookie=0x0, duration=0.303s, table=0, n_packets=0, n_bytes=0, priority=100,in_port=eth0,dl_vlan=10 actions=output:eth1
+ cookie=0x0, duration=0.243s, table=0, n_packets=0, n_bytes=0, priority=100,in_port=eth0,dl_vlan=20 actions=output:eth1
+ cookie=0x0, duration=0.194s, table=0, n_packets=0, n_bytes=0, priority=100,in_port=eth1,dl_vlan=10 actions=output:eth0
+ cookie=0x0, duration=0.147s, table=0, n_packets=0, n_bytes=0, priority=100,in_port=eth1,dl_vlan=20 actions=output:eth0
+ cookie=0x0, duration=0.101s, table=0, n_packets=0, n_bytes=0, priority=0 actions=drop
 (rc=0)
-[sw2]$ ovs-ofctl add-flow br0 "priority=100,in_port=eth0,dl_vlan=20,ip,nw_dst=10.10.10.0/24,\
-  actions=mod_vlan_vid:10,mod_dl_src:02:00:00:00:10:01,mod_dl_dst:00:50:79:66:68:1c,dec_ttl,in_port"
+[VPC1> ping 10.10.10.1 -c 2
+84 bytes from 10.10.10.1 icmp_seq=1 ttl=64 time=1.121 ms
+84 bytes from 10.10.10.1 icmp_seq=2 ttl=64 time=1.522 ms
 (rc=0)
 [VPC1> ping 10.10.20.12 -c 2
-84 bytes from 10.10.20.12 icmp_seq=1 ttl=63 time=2.569 ms
-84 bytes from 10.10.20.12 icmp_seq=2 ttl=63 time=2.767 ms
+84 bytes from 10.10.20.12 icmp_seq=1 ttl=63 time=5.339 ms
+84 bytes from 10.10.20.12 icmp_seq=2 ttl=63 time=3.073 ms
+(rc=0)
+[VPC2> ping 10.10.20.1 -c 2
+84 bytes from 10.10.20.1 icmp_seq=1 ttl=64 time=1.673 ms
+84 bytes from 10.10.20.1 icmp_seq=2 ttl=64 time=1.463 ms
 (rc=0)
 [VPC2> ping 10.10.10.11 -c 2
-84 bytes from 10.10.10.11 icmp_seq=1 ttl=63 time=2.537 ms
-84 bytes from 10.10.10.11 icmp_seq=2 ttl=63 time=2.813 ms
+84 bytes from 10.10.10.11 icmp_seq=1 ttl=63 time=2.701 ms
+84 bytes from 10.10.10.11 icmp_seq=2 ttl=63 time=2.193 ms
 (rc=0)
-[VPC1> trace 10.10.20.12 -P 1
-trace to 10.10.20.12, 8 hops max (ICMP), press Ctrl+C to stop
- 1     *  *  *
- 2   10.10.20.12   2.980 ms  2.631 ms  2.423 ms
+----- capture K6 sw2eth0 (30 frames)
+  13:07:55.519250 00:50:79:66:68:1c > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 68: vlan 10, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.10.1 (ff:ff:ff:ff:ff:ff) tell 10.10.10.11, length 50
+  13:07:55.519797 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 46: vlan 10, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Reply 10.10.10.1 is-at 86:87:3c:21:3b:17, length 28
+  13:07:55.521849 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41771, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.10.1: ICMP echo request, id 11171, seq 1, length 64
+  13:07:55.522298 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 44115, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.1 > 10.10.10.11: ICMP echo reply, id 11171, seq 1, length 64
+  13:07:56.523909 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41772, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.10.1: ICMP echo request, id 11427, seq 2, length 64
+  13:07:56.524453 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 44501, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.1 > 10.10.10.11: ICMP echo reply, id 11427, seq 2, length 64
+  13:07:57.546890 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41773, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 11683, seq 1, length 64
+  13:07:57.547432 86:87:3c:21:3b:17 > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 46: vlan 20, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.20.12 tell 10.10.20.1, length 28
+  13:07:57.548323 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 46: vlan 20, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Reply 10.10.20.12 is-at 00:50:79:66:68:a7, length 28
+  13:07:57.548790 86:87:3c:21:3b:17 > 00:50:79:66:68:a7, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 41773, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 11683, seq 1, length 64
+  13:07:57.550656 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41773, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 11683, seq 1, length 64
+  13:07:57.551588 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 41773, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 11683, seq 1, length 64
+  13:07:58.553296 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41774, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 11939, seq 2, length 64
+  13:07:58.553828 86:87:3c:21:3b:17 > 00:50:79:66:68:a7, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 41774, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 11939, seq 2, length 64
+  13:07:58.555043 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41774, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 11939, seq 2, length 64
+  13:07:58.555476 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 41774, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 11939, seq 2, length 64
+  13:07:59.563725 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41775, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.20.1: ICMP echo request, id 12195, seq 1, length 64
+  13:07:59.564252 86:87:3c:21:3b:17 > 00:50:79:66:68:a7, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 25886, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.1 > 10.10.20.12: ICMP echo reply, id 12195, seq 1, length 64
+  13:08:00.566692 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41776, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.20.1: ICMP echo request, id 12451, seq 2, length 64
+  13:08:00.567301 86:87:3c:21:3b:17 > 00:50:79:66:68:a7, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 26522, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.1 > 10.10.20.12: ICMP echo reply, id 12451, seq 2, length 64
+  13:08:01.005432 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 46: vlan 10, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.10.11 tell 10.10.10.1, length 28
+  13:08:01.006922 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 46: vlan 10, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Reply 10.10.10.11 is-at 00:50:79:66:68:1c, length 28
+  13:08:01.583804 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41777, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo request, id 12707, seq 1, length 64
+  13:08:01.584301 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 41777, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo request, id 12707, seq 1, length 64
+  13:08:01.585159 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41777, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo reply, id 12707, seq 1, length 64
+  13:08:01.585587 86:87:3c:21:3b:17 > 00:50:79:66:68:a7, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 41777, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo reply, id 12707, seq 1, length 64
+  13:08:02.586852 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41778, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo request, id 12963, seq 2, length 64
+  13:08:02.587355 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 41778, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo request, id 12963, seq 2, length 64
+  13:08:02.587896 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41778, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo reply, id 12963, seq 2, length 64
+  13:08:02.588306 86:87:3c:21:3b:17 > 00:50:79:66:68:a7, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 41778, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo reply, id 12963, seq 2, length 64
+----- capture K6 sw2eth1 (32 frames)
+  13:07:55.519558 00:50:79:66:68:1c > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 68: vlan 10, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.10.1 (ff:ff:ff:ff:ff:ff) tell 10.10.10.11, length 50
+  13:07:55.519589 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 46: vlan 10, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Reply 10.10.10.1 is-at 86:87:3c:21:3b:17, length 28
+  13:07:55.522093 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41771, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.10.1: ICMP echo request, id 11171, seq 1, length 64
+  13:07:55.522126 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 44115, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.1 > 10.10.10.11: ICMP echo reply, id 11171, seq 1, length 64
+  13:07:56.524231 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41772, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.10.1: ICMP echo request, id 11427, seq 2, length 64
+  13:07:56.524276 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 44501, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.1 > 10.10.10.11: ICMP echo reply, id 11427, seq 2, length 64
+  13:07:57.547188 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41773, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 11683, seq 1, length 64
+  13:07:57.547231 86:87:3c:21:3b:17 > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 46: vlan 20, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.20.12 tell 10.10.20.1, length 28
+  13:07:57.548559 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 46: vlan 20, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Reply 10.10.20.12 is-at 00:50:79:66:68:a7, length 28
+  13:07:57.548575 86:87:3c:21:3b:17 > 00:50:79:66:68:a7, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 41773, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 11683, seq 1, length 64
+  13:07:57.551118 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41773, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 11683, seq 1, length 64
+  13:07:57.551144 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 41773, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 11683, seq 1, length 64
+  13:07:58.553610 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41774, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 11939, seq 2, length 64
+  13:07:58.553645 86:87:3c:21:3b:17 > 00:50:79:66:68:a7, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 41774, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 11939, seq 2, length 64
+  13:07:58.555290 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41774, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 11939, seq 2, length 64
+  13:07:58.555304 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 41774, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 11939, seq 2, length 64
+  13:07:59.564021 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41775, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.20.1: ICMP echo request, id 12195, seq 1, length 64
+  13:07:59.564061 86:87:3c:21:3b:17 > 00:50:79:66:68:a7, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 25886, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.1 > 10.10.20.12: ICMP echo reply, id 12195, seq 1, length 64
+  13:08:00.567052 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41776, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.20.1: ICMP echo request, id 12451, seq 2, length 64
+  13:08:00.567092 86:87:3c:21:3b:17 > 00:50:79:66:68:a7, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 26522, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.1 > 10.10.20.12: ICMP echo reply, id 12451, seq 2, length 64
+  13:08:01.005198 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 46: vlan 10, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.10.11 tell 10.10.10.1, length 28
+  13:08:01.005862 8a:6e:e9:39:58:5e > 33:33:00:00:00:02, ethertype 802.1Q (0x8100), length 74: vlan 10, p 0, ethertype IPv6 (0x86dd), (hlim 255, next-header ICMPv6 (58), payload length 16) fe80::886e:e9ff:fe39:585e > ff02::2: [icmp6 sum ok] ICMP6, router solicitation, length 16 | source link-address option (1), length 8 (1): 8a:6e:e9:39:58:5e
+  13:08:01.007315 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 46: vlan 10, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Reply 10.10.10.11 is-at 00:50:79:66:68:1c, length 28
+  13:08:01.584078 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41777, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo request, id 12707, seq 1, length 64
+  13:08:01.584110 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 41777, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo request, id 12707, seq 1, length 64
+  13:08:01.585429 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41777, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo reply, id 12707, seq 1, length 64
+  13:08:01.585444 86:87:3c:21:3b:17 > 00:50:79:66:68:a7, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 41777, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo reply, id 12707, seq 1, length 64
+  13:08:02.031524 42:6e:1c:25:e6:dd > 33:33:00:00:00:02, ethertype 802.1Q (0x8100), length 74: vlan 20, p 0, ethertype IPv6 (0x86dd), (hlim 255, next-header ICMPv6 (58), payload length 16) fe80::6089:17ff:fef5:70b8 > ff02::2: [icmp6 sum ok] ICMP6, router solicitation, length 16 | source link-address option (1), length 8 (1): 42:6e:1c:25:e6:dd
+  13:08:02.587176 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41778, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo request, id 12963, seq 2, length 64
+  13:08:02.587208 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 41778, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo request, id 12963, seq 2, length 64
+  13:08:02.588140 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 41778, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo reply, id 12963, seq 2, length 64
+  13:08:02.588156 86:87:3c:21:3b:17 > 00:50:79:66:68:a7, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 41778, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo reply, id 12963, seq 2, length 64
+----- capture K6 vpc1 (16 frames)
+  13:07:55.518949 00:50:79:66:68:1c > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 64: Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.10.1 (ff:ff:ff:ff:ff:ff) tell 10.10.10.11, length 50
+  13:07:55.520099 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype ARP (0x0806), length 42: Ethernet (len 6), IPv4 (len 4), Reply 10.10.10.1 is-at 86:87:3c:21:3b:17, length 28
+  13:07:55.521645 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 41771, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.10.1: ICMP echo request, id 11171, seq 1, length 64
+  13:07:55.522600 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 44115, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.1 > 10.10.10.11: ICMP echo reply, id 11171, seq 1, length 64
+  13:07:56.523661 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 41772, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.10.1: ICMP echo request, id 11427, seq 2, length 64
+  13:07:56.524766 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 44501, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.1 > 10.10.10.11: ICMP echo reply, id 11427, seq 2, length 64
+  13:07:57.546643 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 41773, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 11683, seq 1, length 64
+  13:07:57.551868 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 63, id 41773, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 11683, seq 1, length 64
+  13:07:58.552982 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 41774, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 11939, seq 2, length 64
+  13:07:58.555732 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 63, id 41774, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 11939, seq 2, length 64
+  13:08:01.005649 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype ARP (0x0806), length 42: Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.10.11 tell 10.10.10.1, length 28
+  13:08:01.006075 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype ARP (0x0806), length 42: Ethernet (len 6), IPv4 (len 4), Reply 10.10.10.11 is-at 00:50:79:66:68:1c, length 28
+  13:08:01.584685 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 63, id 41777, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo request, id 12707, seq 1, length 64
+  13:08:01.584999 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 41777, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo reply, id 12707, seq 1, length 64
+  13:08:02.587548 86:87:3c:21:3b:17 > 00:50:79:66:68:1c, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 63, id 41778, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo request, id 12963, seq 2, length 64
+  13:08:02.587735 00:50:79:66:68:1c > 86:87:3c:21:3b:17, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 41778, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo reply, id 12963, seq 2, length 64
+----- capture K6 vpc2 (14 frames)
+  13:07:57.547782 86:87:3c:21:3b:17 > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 42: Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.20.12 tell 10.10.20.1, length 28
+  13:07:57.547933 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype ARP (0x0806), length 42: Ethernet (len 6), IPv4 (len 4), Reply 10.10.20.12 is-at 00:50:79:66:68:a7, length 28
+  13:07:57.550069 86:87:3c:21:3b:17 > 00:50:79:66:68:a7, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 63, id 41773, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 11683, seq 1, length 64
+  13:07:57.550216 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 41773, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 11683, seq 1, length 64
+  13:07:58.554190 86:87:3c:21:3b:17 > 00:50:79:66:68:a7, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 63, id 41774, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 11939, seq 2, length 64
+  13:07:58.554672 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 41774, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 11939, seq 2, length 64
+  13:07:59.563300 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 41775, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.20.1: ICMP echo request, id 12195, seq 1, length 64
+  13:07:59.564673 86:87:3c:21:3b:17 > 00:50:79:66:68:a7, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 25886, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.1 > 10.10.20.12: ICMP echo reply, id 12195, seq 1, length 64
+  13:08:00.566253 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 41776, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.20.1: ICMP echo request, id 12451, seq 2, length 64
+  13:08:00.567557 86:87:3c:21:3b:17 > 00:50:79:66:68:a7, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 26522, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.1 > 10.10.20.12: ICMP echo reply, id 12451, seq 2, length 64
+  13:08:01.583424 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 41777, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo request, id 12707, seq 1, length 64
+  13:08:01.585855 86:87:3c:21:3b:17 > 00:50:79:66:68:a7, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 63, id 41777, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo reply, id 12707, seq 1, length 64
+  13:08:02.586503 00:50:79:66:68:a7 > 86:87:3c:21:3b:17, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 41778, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo request, id 12963, seq 2, length 64
+  13:08:02.588563 86:87:3c:21:3b:17 > 00:50:79:66:68:a7, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 63, id 41778, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo reply, id 12963, seq 2, length 64
+CHECK PASS: K6 VPC1 -> gateway 10.10.10.1 84 bytes from 10.10.10.1 icmp_seq=1 ttl=64 time=1.121 ms
+84 bytes from 10.10.10.1 icmp_seq=2 ttl=64 time=1.522 ms
+CHECK PASS: K6 VPC1 -> VPC2 ttl=63 84 bytes from 10.10.20.12 icmp_seq=1 ttl=63 time=5.339 ms
+84 bytes from 10.10.20.12 icmp_seq=2 ttl=63 time=3.073 ms
+CHECK PASS: K6 VPC2 -> gateway 10.10.20.1 84 bytes from 10.10.20.1 icmp_seq=1 ttl=64 time=1.673 ms
+84 bytes from 10.10.20.1 icmp_seq=2 ttl=64 time=1.463 ms
+CHECK PASS: K6 VPC2 -> VPC1 ttl=63 84 bytes from 10.10.10.11 icmp_seq=1 ttl=63 time=2.701 ms
+84 bytes from 10.10.10.11 icmp_seq=2 ttl=63 time=2.193 ms
+CHECK PASS: K6 sw2eth0: VPC1->VPC2 request vlan 10 ttl 64 00:50:79:66:68:1c > router 
+CHECK PASS: K6 sw2eth0: VPC1->VPC2 request vlan 20 ttl 63 router > 00:50:79:66:68:a7 
+CHECK PASS: K6 sw2eth0: every frame is 802.1Q tagged (10 or 20) 
+CHECK PASS: K6 sw2eth1: VPC1->VPC2 request vlan 10 ttl 64 00:50:79:66:68:1c > router 
+CHECK PASS: K6 sw2eth1: VPC1->VPC2 request vlan 20 ttl 63 router > 00:50:79:66:68:a7 
+CHECK PASS: K6 sw2eth1: every frame is 802.1Q tagged (10 or 20) 
+CHECK PASS: K6 vpc1 cable: no 802.1Q frames 
+CHECK PASS: K6 vpc2 cable: no 802.1Q frames 
+CHECK PASS: K6 VPC2 cable: request from router MAC ttl 63 
+[sw2]$ ovs-ofctl --names dump-flows br0
+ cookie=0x0, duration=12.007s, table=0, n_packets=9, n_bytes=800, priority=100,in_port=eth0,dl_vlan=10 actions=output:eth1
+ cookie=0x0, duration=11.947s, table=0, n_packets=8, n_bytes=732, priority=100,in_port=eth0,dl_vlan=20 actions=output:eth1
+ cookie=0x0, duration=11.898s, table=0, n_packets=8, n_bytes=704, priority=100,in_port=eth1,dl_vlan=10 actions=output:eth0
+ cookie=0x0, duration=11.851s, table=0, n_packets=7, n_bytes=658, priority=100,in_port=eth1,dl_vlan=20 actions=output:eth0
+ cookie=0x0, duration=11.805s, table=0, n_packets=3, n_bytes=210, priority=0 actions=drop
 (rc=0)
-CHECK PASS: K7 ping works, ttl=63 
-CHECK PASS: K7 ping works, ttl=63 
-CHECK PASS: K7 trace: hop 1 = router (no ICMP time exceeded), hop 2 = VPC2 
+flow deltas K6 {'priority=100,in_port=eth0,dl_vlan=10': 9, 'priority=100,in_port=eth0,dl_vlan=20': 8, 'priority=100,in_port=eth1,dl_vlan=10': 8, 'priority=100,in_port=eth1,dl_vlan=20': 7, 'priority=0': 3}
+CHECK PASS: K6 all four forwarding flows used 
 
-##### Korak 8 – dokaz da saobraćaj ide preko SW2
-[sw2]$ ovs-ofctl --names dump-ports br0 eth0
-OFPST_PORT reply (xid=0x4): 1 ports
-  port  eth0: rx pkts=93, bytes=7258, drop=0, errs=0, frame=0, over=0, crc=0
-           tx pkts=27, bytes=2394, drop=0, errs=0, coll=0
-(rc=0)
+##### NEG: VLAN 30 kroz SW2 (harness-only)
 [sw2]$ ovs-ofctl --names dump-flows br0
- cookie=0x0, duration=35.424s, table=0, n_packets=1, n_bytes=68, priority=200,arp,in_port=eth0,dl_vlan=10,arp_tpa=10.10.10.1,arp_op=1 actions=move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],mod_dl_src:02:00:00:00:10:01,load:0x2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x20000001001->NXM_NX_ARP_SHA[],load:0xa0a0a01->NXM_OF_ARP_SPA[],IN_PORT
- cookie=0x0, duration=35.374s, table=0, n_packets=1, n_bytes=68, priority=200,arp,in_port=eth0,dl_vlan=20,arp_tpa=10.10.20.1,arp_op=1 actions=move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],mod_dl_src:02:00:00:00:20:01,load:0x2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x20000002001->NXM_NX_ARP_SHA[],load:0xa0a1401->NXM_OF_ARP_SPA[],IN_PORT
- cookie=0x0, duration=9.189s, table=0, n_packets=10, n_bytes=1068, priority=100,ip,in_port=eth0,dl_vlan=10,nw_dst=10.10.20.0/24 actions=mod_vlan_vid:20,mod_dl_src:02:00:00:00:20:01,mod_dl_dst:00:50:79:66:68:a7,dec_ttl,IN_PORT
- cookie=0x0, duration=9.138s, table=0, n_packets=7, n_bytes=738, priority=100,ip,in_port=eth0,dl_vlan=20,nw_dst=10.10.10.0/24 actions=mod_vlan_vid:10,mod_dl_src:02:00:00:00:10:01,mod_dl_dst:00:50:79:66:68:1c,dec_ttl,IN_PORT
+ cookie=0x0, duration=12.283s, table=0, n_packets=9, n_bytes=800, priority=100,in_port=eth0,dl_vlan=10 actions=output:eth1
+ cookie=0x0, duration=12.223s, table=0, n_packets=8, n_bytes=732, priority=100,in_port=eth0,dl_vlan=20 actions=output:eth1
+ cookie=0x0, duration=12.174s, table=0, n_packets=8, n_bytes=704, priority=100,in_port=eth1,dl_vlan=10 actions=output:eth0
+ cookie=0x0, duration=12.127s, table=0, n_packets=7, n_bytes=658, priority=100,in_port=eth1,dl_vlan=20 actions=output:eth0
+ cookie=0x0, duration=12.081s, table=0, n_packets=4, n_bytes=304, priority=0 actions=drop
 (rc=0)
-[VPC1> ping 10.10.20.12 -c 3
-84 bytes from 10.10.20.12 icmp_seq=1 ttl=63 time=2.707 ms
-84 bytes from 10.10.20.12 icmp_seq=2 ttl=63 time=2.689 ms
-84 bytes from 10.10.20.12 icmp_seq=3 ttl=63 time=2.424 ms
-(rc=0)
-[sw2]$ ovs-ofctl --names dump-ports br0 eth0
-OFPST_PORT reply (xid=0x4): 1 ports
-  port  eth0: rx pkts=100, bytes=7916, drop=0, errs=0, frame=0, over=0, crc=0
-           tx pkts=33, bytes=3006, drop=0, errs=0, coll=0
-(rc=0)
+PING 10.10.30.1 (10.10.30.1): 56 data bytes
+
+--- 10.10.30.1 ping statistics ---
+3 packets transmitted, 0 packets received, 100% packet loss
+ PING 10.10.30.2 (10.10.30.2): 56 data bytes
+
+--- 10.10.30.2 ping statistics ---
+3 packets transmitted, 0 packets received, 100% packet loss
+
+----- capture NEG30 sw2eth0 (3 frames)
+  13:08:07.417862 ba:cb:76:42:64:28 > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 46: vlan 30, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.30.1 tell 10.10.30.2, length 28
+  13:08:08.429660 ba:cb:76:42:64:28 > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 46: vlan 30, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.30.1 tell 10.10.30.2, length 28
+  13:08:09.453186 ba:cb:76:42:64:28 > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 46: vlan 30, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.30.1 tell 10.10.30.2, length 28
+----- capture NEG30 sw2eth1 (3 frames)
+  13:08:10.462562 86:87:3c:21:3b:17 > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 46: vlan 30, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.30.2 tell 10.10.30.1, length 28
+  13:08:11.501191 86:87:3c:21:3b:17 > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 46: vlan 30, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.30.2 tell 10.10.30.1, length 28
+  13:08:12.525228 86:87:3c:21:3b:17 > ff:ff:ff:ff:ff:ff, ethertype 802.1Q (0x8100), length 46: vlan 30, p 0, ethertype ARP (0x0806), Ethernet (len 6), IPv4 (len 4), Request who-has 10.10.30.2 tell 10.10.30.1, length 28
+----- capture NEG30 vpc1 (0 frames)
+----- capture NEG30 vpc2 (0 frames)
 [sw2]$ ovs-ofctl --names dump-flows br0
- cookie=0x0, duration=38.541s, table=0, n_packets=1, n_bytes=68, priority=200,arp,in_port=eth0,dl_vlan=10,arp_tpa=10.10.10.1,arp_op=1 actions=move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],mod_dl_src:02:00:00:00:10:01,load:0x2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x20000001001->NXM_NX_ARP_SHA[],load:0xa0a0a01->NXM_OF_ARP_SPA[],IN_PORT
- cookie=0x0, duration=38.491s, table=0, n_packets=1, n_bytes=68, priority=200,arp,in_port=eth0,dl_vlan=20,arp_tpa=10.10.20.1,arp_op=1 actions=move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],mod_dl_src:02:00:00:00:20:01,load:0x2->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:0x20000002001->NXM_NX_ARP_SHA[],load:0xa0a1401->NXM_OF_ARP_SPA[],IN_PORT
- cookie=0x0, duration=12.306s, table=0, n_packets=13, n_bytes=1374, priority=100,ip,in_port=eth0,dl_vlan=10,nw_dst=10.10.20.0/24 actions=mod_vlan_vid:20,mod_dl_src:02:00:00:00:20:01,mod_dl_dst:00:50:79:66:68:a7,dec_ttl,IN_PORT
- cookie=0x0, duration=12.255s, table=0, n_packets=10, n_bytes=1044, priority=100,ip,in_port=eth0,dl_vlan=20,nw_dst=10.10.10.0/24 actions=mod_vlan_vid:10,mod_dl_src:02:00:00:00:10:01,mod_dl_dst:00:50:79:66:68:1c,dec_ttl,IN_PORT
+ cookie=0x0, duration=21.938s, table=0, n_packets=9, n_bytes=800, priority=100,in_port=eth0,dl_vlan=10 actions=output:eth1
+ cookie=0x0, duration=21.878s, table=0, n_packets=8, n_bytes=732, priority=100,in_port=eth0,dl_vlan=20 actions=output:eth1
+ cookie=0x0, duration=21.829s, table=0, n_packets=8, n_bytes=704, priority=100,in_port=eth1,dl_vlan=10 actions=output:eth0
+ cookie=0x0, duration=21.782s, table=0, n_packets=7, n_bytes=658, priority=100,in_port=eth1,dl_vlan=20 actions=output:eth0
+ cookie=0x0, duration=21.736s, table=0, n_packets=16, n_bytes=1100, priority=0 actions=drop
 (rc=0)
------ capture K8 sw2eth0 (12 frames)
-  12:12:39.005567 00:50:79:66:68:1c > 02:00:00:00:10:01, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 38455, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 14230, seq 1, length 64
-  12:12:39.005823 02:00:00:00:20:01 > 00:50:79:66:68:a7, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 38455, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 14230, seq 1, length 64
-  12:12:39.007053 00:50:79:66:68:a7 > 02:00:00:00:20:01, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 38455, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 14230, seq 1, length 64
-  12:12:39.007294 02:00:00:00:10:01 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 38455, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 14230, seq 1, length 64
-  12:12:40.008950 00:50:79:66:68:1c > 02:00:00:00:10:01, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 38456, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 14486, seq 2, length 64
-  12:12:40.009248 02:00:00:00:20:01 > 00:50:79:66:68:a7, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 38456, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 14486, seq 2, length 64
-  12:12:40.010343 00:50:79:66:68:a7 > 02:00:00:00:20:01, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 38456, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 14486, seq 2, length 64
-  12:12:40.010712 02:00:00:00:10:01 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 38456, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 14486, seq 2, length 64
-  12:12:41.013428 00:50:79:66:68:1c > 02:00:00:00:10:01, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 38457, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 14742, seq 3, length 64
-  12:12:41.013733 02:00:00:00:20:01 > 00:50:79:66:68:a7, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 38457, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 14742, seq 3, length 64
-  12:12:41.014681 00:50:79:66:68:a7 > 02:00:00:00:20:01, ethertype 802.1Q (0x8100), length 102: vlan 20, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 64, id 38457, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 14742, seq 3, length 64
-  12:12:41.014912 02:00:00:00:10:01 > 00:50:79:66:68:1c, ethertype 802.1Q (0x8100), length 102: vlan 10, p 0, ethertype IPv4 (0x0800), (tos 0x0, ttl 63, id 38457, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 14742, seq 3, length 64
------ capture K8 vpc1 (6 frames)
-  12:12:39.005323 00:50:79:66:68:1c > 02:00:00:00:10:01, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 38455, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 14230, seq 1, length 64
-  12:12:39.007785 02:00:00:00:10:01 > 00:50:79:66:68:1c, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 63, id 38455, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 14230, seq 1, length 64
-  12:12:40.008690 00:50:79:66:68:1c > 02:00:00:00:10:01, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 38456, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 14486, seq 2, length 64
-  12:12:40.011192 02:00:00:00:10:01 > 00:50:79:66:68:1c, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 63, id 38456, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 14486, seq 2, length 64
-  12:12:41.013012 00:50:79:66:68:1c > 02:00:00:00:10:01, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 38457, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 14742, seq 3, length 64
-  12:12:41.015145 02:00:00:00:10:01 > 00:50:79:66:68:1c, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 63, id 38457, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 14742, seq 3, length 64
------ capture K8 vpc2 (6 frames)
-  12:12:39.006102 02:00:00:00:20:01 > 00:50:79:66:68:a7, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 63, id 38455, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 14230, seq 1, length 64
-  12:12:39.006382 00:50:79:66:68:a7 > 02:00:00:00:20:01, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 38455, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 14230, seq 1, length 64
-  12:12:40.009560 02:00:00:00:20:01 > 00:50:79:66:68:a7, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 63, id 38456, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 14486, seq 2, length 64
-  12:12:40.009964 00:50:79:66:68:a7 > 02:00:00:00:20:01, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 38456, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 14486, seq 2, length 64
-  12:12:41.013985 02:00:00:00:20:01 > 00:50:79:66:68:a7, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 63, id 38457, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.10.11 > 10.10.20.12: ICMP echo request, id 14742, seq 3, length 64
-  12:12:41.014286 00:50:79:66:68:a7 > 02:00:00:00:20:01, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 38457, offset 0, flags [none], proto ICMP (1), length 84) | 10.10.20.12 > 10.10.10.11: ICMP echo reply, id 14742, seq 3, length 64
-port eth0 delta rx 7 tx 6 | flow deltas {'priority=200,arp,in_port=eth0,dl_vlan=10,arp_tpa=10.10.10.1,arp_op=1': 0, 'priority=200,arp,in_port=eth0,dl_vlan=20,arp_tpa=10.10.20.1,arp_op=1': 0, 'priority=100,ip,in_port=eth0,dl_vlan=10,nw_dst=10.10.20.0/24': 3, 'priority=100,ip,in_port=eth0,dl_vlan=20,nw_dst=10.10.10.0/24': 3}
-CHECK PASS: K8 eth0 rx and tx both grew by >= 6 rx+7 tx+6
-CHECK PASS: K8 routing flow counters +3 each [3] [3]
-CHECK PASS: K8 ping ok (3 replies ttl=63) 
-CHECK PASS: K8 trunk: every request seen twice: vlan10/ttl64 in, vlan20/ttl63 out 3 requests
-CHECK PASS: K8 trunk: replies vlan20/ttl64 in, vlan10/ttl63 out 
-CHECK PASS: K8 VPC1 link: no 802.1Q 
-CHECK PASS: K8 VPC2 link: no 802.1Q 
-CHECK PASS: K8 VPC2 sees request from GW20 MAC with ttl 63 
-CHECK PASS: K8 VPC1 sends request to GW10 MAC with ttl 64 
+CHECK PASS: NEG VLAN 30 ping SW1 side -> router fails 
+CHECK PASS: NEG VLAN 30 ping router -> SW1 side fails 
+CHECK PASS: NEG VLAN 30 frames from SW1 reach SW2 eth0 (injection works) 
+CHECK PASS: NEG VLAN 30 frames from router reach SW2 eth1 (injection works) 
+CHECK PASS: NEG no VLAN 30 frame forwarded SW1 -> router (none on eth1 from SW1) 
+CHECK PASS: NEG no VLAN 30 frame forwarded router -> SW1 (none on eth0 from router) 
+CHECK PASS: NEG drop flow counter grew [12]
 
 ===== SUMMARY
-PASS K2 vpc1 show: IP, gateway, MAC
-PASS K2 vpc2 show: IP, gateway, MAC
-PASS K3 VPC1->VPC2 ping fails: gateway not reachable (no router)
+PASS K2 vpc1: IP and gateway set
+PASS K2 vpc2: IP and gateway set
 PASS K3 tags/trunks set
-PASS K4 patch ports present, no error
-PASS K4 VPC1 ping still fails
-PASS K4 VPC2 ping still fails
-PASS K4 trunk: VPC1 ARP arrives tagged vlan 10 (via patch)
-PASS K4 trunk: VPC2 ARP arrives tagged vlan 20
-PASS K4 VPC1 link: ARP seen untagged
-PASS K4 VPC1 link: no 802.1Q frames
-PASS K4 VPC2 link: no 802.1Q frames
-PASS K4 VPC1 link: nothing from VLAN 20
-PASS K4 VPC2 link: nothing from VLAN 10
-PASS K5 NORMAL deleted
+PASS K3 patch ports present, no error
+PASS K4 (EMULATED router) sub-interfaces 10.10.10.1 / 10.10.20.1
+PASS K4 (EMULATED router) ip_forward=1
 PASS K5 eth0 in br0
-PASS K6 VPC1 gateway ping: ARP ok, ICMP timeout
-PASS K6 VPC2 gateway ping: ARP ok, ICMP timeout
-PASS K6 VPC1 learned GW10 MAC from OpenFlow
-PASS K6 VPC2 learned GW20 MAC from OpenFlow
-PASS K6 NEG: ARP for 10.10.10.1 asked from VLAN 20 is NOT answered
-PASS K6 NEG: ARP for 10.10.20.1 asked from VLAN 10 is NOT answered
-PASS K6 NEG: VPC1->VPC2 still fails without routing flows
-PASS K7 ping works, ttl=63
-PASS K7 ping works, ttl=63
-PASS K7 trace: hop 1 = router (no ICMP time exceeded), hop 2 = VPC2
-PASS K8 eth0 rx and tx both grew by >= 6
-PASS K8 routing flow counters +3 each
-PASS K8 ping ok (3 replies ttl=63)
-PASS K8 trunk: every request seen twice: vlan10/ttl64 in, vlan20/ttl63 out
-PASS K8 trunk: replies vlan20/ttl64 in, vlan10/ttl63 out
-PASS K8 VPC1 link: no 802.1Q
-PASS K8 VPC2 link: no 802.1Q
-PASS K8 VPC2 sees request from GW20 MAC with ttl 63
-PASS K8 VPC1 sends request to GW10 MAC with ttl 64
-35/35 PASS
+PASS K5 without SW2 flows (no NORMAL): VPC1->VPC2 fails, gateway not reachable
+PASS K5 exactly 5 flows, no NORMAL
+PASS K6 VPC1 -> gateway 10.10.10.1
+PASS K6 VPC1 -> VPC2 ttl=63
+PASS K6 VPC2 -> gateway 10.10.20.1
+PASS K6 VPC2 -> VPC1 ttl=63
+PASS K6 sw2eth0: VPC1->VPC2 request vlan 10 ttl 64 00:50:79:66:68:1c > router
+PASS K6 sw2eth0: VPC1->VPC2 request vlan 20 ttl 63 router > 00:50:79:66:68:a7
+PASS K6 sw2eth0: every frame is 802.1Q tagged (10 or 20)
+PASS K6 sw2eth1: VPC1->VPC2 request vlan 10 ttl 64 00:50:79:66:68:1c > router
+PASS K6 sw2eth1: VPC1->VPC2 request vlan 20 ttl 63 router > 00:50:79:66:68:a7
+PASS K6 sw2eth1: every frame is 802.1Q tagged (10 or 20)
+PASS K6 vpc1 cable: no 802.1Q frames
+PASS K6 vpc2 cable: no 802.1Q frames
+PASS K6 VPC2 cable: request from router MAC ttl 63
+PASS K6 all four forwarding flows used
+PASS NEG VLAN 30 ping SW1 side -> router fails
+PASS NEG VLAN 30 ping router -> SW1 side fails
+PASS NEG VLAN 30 frames from SW1 reach SW2 eth0 (injection works)
+PASS NEG VLAN 30 frames from router reach SW2 eth1 (injection works)
+PASS NEG no VLAN 30 frame forwarded SW1 -> router (none on eth1 from SW1)
+PASS NEG no VLAN 30 frame forwarded router -> SW1 (none on eth0 from router)
+PASS NEG drop flow counter grew
+30/30 PASS
 ```

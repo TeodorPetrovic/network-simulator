@@ -4,20 +4,33 @@
 Pokrece tacno komande iz <pre data-dev="..."> blokova u task/resenje.frag.html, redom:
 sw1/sw2 kroz `docker exec v7_swN bash -c`, a vpc1/vpc2 kroz konzolu pravog VPCS-a
 (vpcs -p 5000 u kontejneru v7_vpcN, kao telnet konzola u GNS3; vidi test-setup.sh).
-MAC adrese VPCS-a zavise od -m (u GNS3/simulatoru od ID-a cvora). Primer u resenju koristi
-00:50:79:66:68:1c i 00:50:79:66:68:a7 (-m 28 i -m 167); ako je setup pokrenut sa drugim -m,
-harness procita stvarne MAC adrese iz `show` (Korak 2) i njima zameni primer u kasnijim komandama
-- isto ono sto student radi kad upise svoje MAC adrese u pravila.
-Za vreme Koraka 4 i 8 snima saobracaj tcpdump-om (kontejner sa tcpdump-om deli mrezni namespace
-sa SW2 / VPC1 / VPC2) - ekvivalent Wireshark snimanja na kablu. Na kraju PASS/FAIL za svaku proveru.
+Konzola VPCS-a ostaje otvorena do kraja: zatvaranje konzole resetuje VPCS (gubi se IP adresa).
+
+MikroTik NIJE dostupan: blok data-dev="mikrotik" (RouterOS) se NE izvrsava. Umesto njega se u
+kontejneru v7_router (Linux, alpine + iproute2, ip_forward=1) izvrsavaju ekvivalentne komande iz
+ROUTER_EMU (VLAN podinterfejsi eth0.10/eth0.20 sa istim adresama). RouterOS sintaksa je neproverena.
+
+Tokom Koraka 6 tcpdump (kontejner sa tcpdump-om deli mrezni namespace) snima kablove
+SW1 eth2-SW2 eth0, SW2 eth1-ruter, VPC1 i VPC2 - ekvivalent Wireshark snimanja u GNS3.
+Na kraju harness-only negativni test: VLAN 30 (podinterfejsi na SW1 eth2 i na ruteru) ne prolazi kroz SW2.
 """
 import html, os, re, select, subprocess, sys, time, pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = (ROOT / 'task' / 'resenje.frag.html').read_text()
-EX = {'vpc1': '00:50:79:66:68:1c', 'vpc2': '00:50:79:66:68:a7'}
-MAC = dict(EX)
-CAPS = {'sw2eth0': ('v7_sw2', 'eth0'), 'vpc1': ('v7_vpc1', 'eth0'), 'vpc2': ('v7_vpc2', 'eth0')}
+MAC = {}
+CAPS = {'sw2eth0': ('v7_sw2', 'eth0'), 'sw2eth1': ('v7_sw2', 'eth1'),
+        'vpc1': ('v7_vpc1', 'eth0'), 'vpc2': ('v7_vpc2', 'eth0')}
+ROUTER_EMU = [
+    'ip link add link eth0 name eth0.10 type vlan id 10',
+    'ip link add link eth0 name eth0.20 type vlan id 20',
+    'ip addr add 10.10.10.1/24 dev eth0.10',
+    'ip addr add 10.10.20.1/24 dev eth0.20',
+    'ip link set eth0.10 up',
+    'ip link set eth0.20 up',
+    'sysctl net.ipv4.ip_forward',
+    'ip -br addr',
+]
 results, outputs = [], {}
 
 
@@ -63,14 +76,7 @@ def sh(cmd):
     return p.returncode, p.stdout + p.stderr
 
 
-def subst(cmd):
-    for k in EX:
-        cmd = cmd.replace(EX[k], MAC[k])
-    return cmd
-
-
 def run(dev, cmd):
-    cmd = subst(cmd)
     if dev.startswith('vpc'):
         if dev not in CON:
             CON[dev] = VCon(f'v7_{dev}')
@@ -122,16 +128,15 @@ def cap_stop(tag):
 
 
 def flows_counts(out):
-    return {m.group(2): int(m.group(1)) for m in re.finditer(r'n_packets=(\d+),.*?(priority=\d+,\S+)', out)}
-
-
-def port_counts(out):
-    rx = re.search(r'rx pkts=(\d+)', out); tx = re.search(r'tx pkts=(\d+)', out)
-    return int(rx.group(1)), int(tx.group(1))
+    return {m.group(2): int(m.group(1)) for m in re.finditer(r'n_packets=(\d+),.*?(priority=\d+\S*)', out)}
 
 
 def has_tag(l):
     return '802.1Q' in l
+
+
+def req(l):
+    return 'ICMP echo request' in l
 
 
 tokens = re.finditer(r'<h3>(.*?)</h3>|<pre data-dev="(\w+)"><code>(.*?)</code></pre>', SRC, re.S)
@@ -142,9 +147,13 @@ for t in tokens:
     else:
         sections[-1][1].append((t.group(2), html.unescape(t.group(3))))
 
+MAC['router'] = sh(['docker', 'exec', 'v7_router', 'cat', '/sys/class/net/eth0/address'])[1].strip()
+MAC['sw1eth2'] = sh(['docker', 'exec', 'v7_sw1', 'cat', '/sys/class/net/eth2/address'])[1].strip()
+
 for title, blocks in sections:
     print(f'\n##### {title}')
-    if title.startswith(('Korak 4', 'Korak 8')):
+    if title.startswith('Korak 6'):
+        f_before = flows_counts(run('sw2', 'ovs-ofctl --names dump-flows br0')[1])
         cap_start()
     sec_out = []
     for dev, code in blocks:
@@ -153,6 +162,16 @@ for title, blocks in sections:
             cur = cur + '\n' + line if cur else line
             if not line.endswith('\\'):
                 cmds.append(cur); cur = ''
+        if dev == 'mikrotik':
+            print('[MikroTik] RouterOS komande NISU izvrsene (nema MikroTik slike):')
+            for c in cmds:
+                print('    ' + c)
+            print('[MikroTik] EMULACIJA: Linux ruter v7_router izvrsava ekvivalent:')
+            for c in ROUTER_EMU:
+                rc, out = sh(['docker', 'exec', 'v7_router', 'sh', '-c', c])
+                print(f'[router]# {c}\n{out.rstrip()}\n(rc={rc})')
+                sec_out.append(('router', c, rc, out))
+            continue
         for c in cmds:
             rc, out = run(dev, c)
             sec_out.append((dev, c, rc, out))
@@ -161,103 +180,89 @@ for title, blocks in sections:
     def outs(pred):
         return [o for d, c, r, o in sec_out if pred(d, c)]
 
-    m1, m2 = MAC['vpc1'], MAC['vpc2']
     if title.startswith('Korak 2'):
         for dev, ip in (('vpc1', '10.10.10.11/24'), ('vpc2', '10.10.20.12/24')):
-            s = outs(lambda d, c, dev=dev: d == dev and c == 'show')[-1]
+            s = run(dev, 'show')[1]   # harness-only: MAC adresa za provere snimaka
             m = re.search(r'^VPC\d\s+(\S+)\s+(\S+)\s+([0-9a-f:]{17})', s, re.M)
-            check(f'K2 {dev} show: IP, gateway, MAC', bool(m) and m.group(1) == ip, m.group(0) if m else s)
+            check(f'K2 {dev}: IP and gateway set', bool(m) and m.group(1) == ip, m.group(0) if m else s)
             if m:
                 MAC[dev] = m.group(3)
-        print('MAC adrese VPC-ova (iz show):', MAC, '| primer u resenju:', EX)
-        m1, m2 = MAC['vpc1'], MAC['vpc2']
+        print('MAC:', MAC)
     if title.startswith('Korak 3'):
-        p = outs(lambda d, c: c.startswith('ping'))[0]
-        check('K3 VPC1->VPC2 ping fails: gateway not reachable (no router)', 'host (10.10.10.1) not reachable' in p)
         s = outs(lambda d, c: c == 'ovs-vsctl show')[-1]
-        check('K3 tags/trunks set', 'tag: 10' in s and 'tag: 20' in s and 'trunks: [10, 20]' in s)
+        check('K3 tags/trunks set', 'tag: 10' in s and 'tag: 20' in s and s.count('trunks: [10, 20]') == 3)
+        check('K3 patch ports present, no error',
+              'peer=br2-br0' in s and 'peer=br0-br2' in s and 'error' not in s.lower())
     if title.startswith('Korak 4'):
-        caps = cap_stop('K4')
-        s = outs(lambda d, c: c == 'ovs-vsctl show')[-1]
-        check('K4 patch ports present, no error', 'peer=br2-br0' in s and 'peer=br0-br2' in s and 'error' not in s.lower())
-        p = outs(lambda d, c: c.startswith('ping'))
-        check('K4 VPC1 ping still fails', 'host (10.10.10.1) not reachable' in p[0])
-        check('K4 VPC2 ping still fails', 'host (10.10.20.1) not reachable' in p[1])
-        t = caps['sw2eth0']
-        check('K4 trunk: VPC1 ARP arrives tagged vlan 10 (via patch)',
-              any('vlan 10' in l and f'{m1} > ff:ff:ff:ff:ff:ff' in l and re.search(r'who-has 10\.10\.10\.1 (\(ff:ff:ff:ff:ff:ff\) )?tell 10\.10\.10\.11', l) for l in t))
-        check('K4 trunk: VPC2 ARP arrives tagged vlan 20',
-              any('vlan 20' in l and f'{m2} > ff:ff:ff:ff:ff:ff' in l and re.search(r'who-has 10\.10\.20\.1 (\(ff:ff:ff:ff:ff:ff\) )?tell 10\.10\.20\.12', l) for l in t))
-        check('K4 VPC1 link: ARP seen untagged', any('who-has 10.10.10.1' in l and not has_tag(l) for l in caps['vpc1']))
-        check('K4 VPC1 link: no 802.1Q frames', not any(has_tag(l) for l in caps['vpc1']))
-        check('K4 VPC2 link: no 802.1Q frames', not any(has_tag(l) for l in caps['vpc2']))
-        check('K4 VPC1 link: nothing from VLAN 20', not any('10.10.20.' in l or m2 in l for l in caps['vpc1']))
-        check('K4 VPC2 link: nothing from VLAN 10', not any('10.10.10.' in l or m1 in l for l in caps['vpc2']))
+        a = outs(lambda d, c: c == 'ip -br addr')[-1]
+        check('K4 (EMULATED router) sub-interfaces 10.10.10.1 / 10.10.20.1',
+              re.search(r'eth0\.10@eth0\s+UP\s+10\.10\.10\.1/24', a) is not None and
+              re.search(r'eth0\.20@eth0\s+UP\s+10\.10\.20\.1/24', a) is not None, a)
+        check('K4 (EMULATED router) ip_forward=1', 'ip_forward = 1' in outs(lambda d, c: 'sysctl' in c)[0])
     if title.startswith('Korak 5'):
-        o = outs(lambda d, c: c == 'ovs-ofctl dump-flows br0')
-        check('K5 NORMAL deleted', 'actions=NORMAL' in o[0] and 'actions=' not in o[-1])
         check('K5 eth0 in br0', outs(lambda d, c: 'port-to-br' in c)[0].strip() == 'br0')
+        p = outs(lambda d, c: c.startswith('ping'))[0]
+        check('K5 without SW2 flows (no NORMAL): VPC1->VPC2 fails, gateway not reachable',
+              'host (10.10.10.1) not reachable' in p and 'bytes from' not in p, p)
+        f = outs(lambda d, c: 'dump-flows' in c)[-1]
+        check('K5 exactly 5 flows, no NORMAL', f.count('actions=') == 5 and 'NORMAL' not in f)
     if title.startswith('Korak 6'):
+        caps = cap_stop('K6')
         p = outs(lambda d, c: c.startswith('ping'))
-        check('K6 VPC1 gateway ping: ARP ok, ICMP timeout', 'timeout' in p[0] and 'not reachable' not in p[0])
-        check('K6 VPC2 gateway ping: ARP ok, ICMP timeout', 'timeout' in p[1] and 'not reachable' not in p[1])
-        n = outs(lambda d, c: c == 'show arp')
-        check('K6 VPC1 learned GW10 MAC from OpenFlow', re.search(r'02:00:00:00:10:01\s+10\.10\.10\.1 ', n[0]) is not None)
-        check('K6 VPC2 learned GW20 MAC from OpenFlow', re.search(r'02:00:00:00:20:01\s+10\.10\.20\.1 ', n[1]) is not None)
-        # harness-only negativni testovi: VPC privremeno dobija adresu iz tudje podmreze i trazi tudji gateway
-        run('vpc2', 'ip 10.10.10.99/24 10.10.10.1')
-        rc, o = run('vpc2', 'ping 10.10.10.1 -c 1')
-        check('K6 NEG: ARP for 10.10.10.1 asked from VLAN 20 is NOT answered', 'host (10.10.10.1) not reachable' in o)
-        run('vpc2', 'ip 10.10.20.12/24 10.10.20.1')
-        run('vpc1', 'ip 10.10.20.98/24 10.10.20.1')
-        rc, o = run('vpc1', 'ping 10.10.20.1 -c 1')
-        check('K6 NEG: ARP for 10.10.20.1 asked from VLAN 10 is NOT answered', 'host (10.10.20.1) not reachable' in o)
-        run('vpc1', 'ip 10.10.10.11/24 10.10.10.1')
-        rc, o = run('vpc1', 'ping 10.10.20.12 -c 2')
-        check('K6 NEG: VPC1->VPC2 still fails without routing flows', 'timeout' in o and 'bytes from' not in o)
-    if title.startswith('Korak 7'):
-        p = outs(lambda d, c: c.startswith('ping'))
-        for x in p:
-            check('K7 ping works, ttl=63', re.search(r'bytes from .* ttl=63', x) is not None
-                  and 'timeout' not in x and 'ttl=64' not in x)
-        tr = outs(lambda d, c: c.startswith('trace'))[0]
-        check('K7 trace: hop 1 = router (no ICMP time exceeded), hop 2 = VPC2',
-              re.search(r'^ 1\s+\*\s+\*\s+\*', tr, re.M) is not None and re.search(r'^ 2\s+10\.10\.20\.12 ', tr, re.M) is not None)
-    if title.startswith('Korak 8'):
-        caps = cap_stop('K8')
-        d = outs(lambda d, c: 'dump-ports' in c)
-        f = outs(lambda d, c: 'dump-flows' in c)
-        (rx0, tx0), (rx1, tx1) = port_counts(d[0]), port_counts(d[1])
-        f0, f1 = flows_counts(f[0]), flows_counts(f[1])
-        delta = {k: f1[k] - f0.get(k, 0) for k in f1}
-        print('port eth0 delta rx', rx1 - rx0, 'tx', tx1 - tx0, '| flow deltas', delta)
-        check('K8 eth0 rx and tx both grew by >= 6', rx1 - rx0 >= 6 and tx1 - tx0 >= 6, f'rx+{rx1-rx0} tx+{tx1-tx0}')
-        r10 = [v for k, v in delta.items() if 'dl_vlan=10,nw_dst=10.10.20.0/24' in k]
-        r20 = [v for k, v in delta.items() if 'dl_vlan=20,nw_dst=10.10.10.0/24' in k]
-        check('K8 routing flow counters +3 each', r10 == [3] and r20 == [3], f'{r10} {r20}')
-        pp = outs(lambda d, c: c.startswith('ping'))[0]
-        check('K8 ping ok (3 replies ttl=63)', len(re.findall(r'bytes from 10\.10\.20\.12 .*ttl=63', pp)) == 3)
-        t = caps['sw2eth0']
-        seqs = {}
-        for l in t:
-            m = re.search(r'ICMP echo request, id (\d+), seq (\d+)', l)
-            if m:
-                seqs.setdefault(m.groups(), []).append(l)
-        ok = len(seqs) == 3 and all(len(v) == 2 and
-                                    'vlan 10' in v[0] and 'ttl 64' in v[0] and f'{m1} > 02:00:00:00:10:01' in v[0] and
-                                    'vlan 20' in v[1] and 'ttl 63' in v[1] and f'02:00:00:00:20:01 > {m2}' in v[1]
-                                    for v in seqs.values())
-        check('K8 trunk: every request seen twice: vlan10/ttl64 in, vlan20/ttl63 out', ok, f'{len(seqs)} requests')
-        rep = [l for l in t if 'echo reply' in l]
-        check('K8 trunk: replies vlan20/ttl64 in, vlan10/ttl63 out',
-              any('vlan 20' in l and 'ttl 64' in l and f'{m2} > 02:00:00:00:20:01' in l for l in rep) and
-              any('vlan 10' in l and 'ttl 63' in l and f'02:00:00:00:10:01 > {m1}' in l for l in rep))
-        check('K8 VPC1 link: no 802.1Q', not any(has_tag(l) for l in caps['vpc1']))
-        check('K8 VPC2 link: no 802.1Q', not any(has_tag(l) for l in caps['vpc2']))
-        check('K8 VPC2 sees request from GW20 MAC with ttl 63',
-              any(f'02:00:00:00:20:01 > {m2}' in l and 'ttl 63' in l and 'echo request' in l for l in caps['vpc2']))
-        check('K8 VPC1 sends request to GW10 MAC with ttl 64',
-              any(f'{m1} > 02:00:00:00:10:01' in l and 'ttl 64' in l and 'echo request' in l for l in caps['vpc1']))
+        check('K6 VPC1 -> gateway 10.10.10.1', len(re.findall(r'bytes from 10\.10\.10\.1 .*ttl=64', p[0])) == 2, p[0])
+        check('K6 VPC1 -> VPC2 ttl=63', len(re.findall(r'bytes from 10\.10\.20\.12 .*ttl=63', p[1])) == 2, p[1])
+        check('K6 VPC2 -> gateway 10.10.20.1', len(re.findall(r'bytes from 10\.10\.20\.1 .*ttl=64', p[2])) == 2, p[2])
+        check('K6 VPC2 -> VPC1 ttl=63', len(re.findall(r'bytes from 10\.10\.10\.11 .*ttl=63', p[3])) == 2, p[3])
+        m1, m2, mr = MAC['vpc1'], MAC['vpc2'], MAC['router']
+        for k in ('sw2eth0', 'sw2eth1'):
+            t = caps[k]
+            check(f'K6 {k}: VPC1->VPC2 request vlan 10 ttl 64 {m1} > router',
+                  any(req(l) and 'vlan 10' in l and 'ttl 64' in l and f'{m1} > {mr}' in l and '> 10.10.20.12' in l for l in t))
+            check(f'K6 {k}: VPC1->VPC2 request vlan 20 ttl 63 router > {m2}',
+                  any(req(l) and 'vlan 20' in l and 'ttl 63' in l and f'{mr} > {m2}' in l and '> 10.10.20.12' in l for l in t))
+            check(f'K6 {k}: every frame is 802.1Q tagged (10 or 20)',
+                  len(t) > 0 and all(has_tag(l) and re.search(r'vlan (10|20),', l) for l in t))
+        for k in ('vpc1', 'vpc2'):
+            check(f'K6 {k} cable: no 802.1Q frames', len(caps[k]) > 0 and not any(has_tag(l) for l in caps[k]))
+        check('K6 VPC2 cable: request from router MAC ttl 63',
+              any(req(l) and f'{mr} > {m2}' in l and 'ttl 63' in l for l in caps['vpc2']))
+        f_after = flows_counts(run('sw2', 'ovs-ofctl --names dump-flows br0')[1])
+        delta = {k: f_after[k] - f_before.get(k, 0) for k in f_after}
+        print('flow deltas K6', delta)
+        check('K6 all four forwarding flows used', all(v > 0 for k, v in delta.items() if 'dl_vlan' in k)
+              and sum(1 for k in delta if 'dl_vlan' in k) == 4)
+
+# ---- harness-only: VLAN 30 (nije u listi) mora da se odbaci na SW2, u oba smera
+print('\n##### NEG: VLAN 30 kroz SW2 (harness-only)')
+subprocess.run(['docker', 'rm', '-f', 'v7_inj'], capture_output=True)
+subprocess.run(['docker', 'run', '-d', '--name', 'v7_inj', '--privileged', '--net', 'container:v7_sw1',
+                'v7-router:local', 'sleep', 'infinity'], capture_output=True, check=True)
+for ctr, ifc, ip in (('v7_inj', 'eth2', '10.10.30.2/24'), ('v7_router', 'eth0', '10.10.30.1/24')):
+    sh(['docker', 'exec', ctr, 'sh', '-c',
+        f'ip link add link {ifc} name {ifc}.30 type vlan id 30 && ip addr add {ip} dev {ifc}.30 && ip link set {ifc}.30 up'])
+if os.environ.get('V7_LEAK30'):  # samo-provera harness-a: propusti VLAN 30, NEG provere moraju da padnu
+    run('sw2', 'ovs-ofctl add-flow br0 "priority=100,dl_vlan=30,actions=NORMAL"')
+f0 = flows_counts(run('sw2', 'ovs-ofctl --names dump-flows br0')[1])
+cap_start()
+rc1, o1 = sh(['docker', 'exec', 'v7_inj', 'ping', '-c', '3', '-W', '1', '10.10.30.1'])
+rc2, o2 = sh(['docker', 'exec', 'v7_router', 'ping', '-c', '3', '-W', '1', '10.10.30.2'])
+print(o1, o2)
+caps = cap_stop('NEG30')
+f1 = flows_counts(run('sw2', 'ovs-ofctl --names dump-flows br0')[1])
+drop = [f1[k] - f0.get(k, 0) for k in f1 if k.startswith('priority=0')]
+ms, mr = MAC['sw1eth2'], MAC['router']
+check('NEG VLAN 30 ping SW1 side -> router fails', rc1 != 0 and ' 0 packets received' in o1)
+check('NEG VLAN 30 ping router -> SW1 side fails', rc2 != 0 and ' 0 packets received' in o2)
+check('NEG VLAN 30 frames from SW1 reach SW2 eth0 (injection works)',
+      any('vlan 30' in l and l.split()[1] == ms for l in caps['sw2eth0']))
+check('NEG VLAN 30 frames from router reach SW2 eth1 (injection works)',
+      any('vlan 30' in l and l.split()[1] == mr for l in caps['sw2eth1']))
+check('NEG no VLAN 30 frame forwarded SW1 -> router (none on eth1 from SW1)',
+      not any('vlan 30' in l and l.split()[1] == ms for l in caps['sw2eth1']))
+check('NEG no VLAN 30 frame forwarded router -> SW1 (none on eth0 from router)',
+      not any('vlan 30' in l and l.split()[1] == mr for l in caps['sw2eth0']))
+check('NEG drop flow counter grew', drop and drop[0] >= 6, str(drop))
+subprocess.run(['docker', 'rm', '-f', 'v7_inj'], capture_output=True)
 
 print('\n===== SUMMARY')
 for n, ok in results:
