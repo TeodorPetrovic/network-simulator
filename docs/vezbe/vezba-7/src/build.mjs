@@ -1,5 +1,5 @@
 // Gradi tri PDF-a Vežbe 7 iz fragmenata. Pokretanje: node build.mjs
-//   ../Vezba-7-zadatak.pdf    uvod + zadatak (bez rešenja)
+//   ../Vezba-7-zadatak.pdf    samo zadatak (bez uvoda i rešenja)
 //   ../Vezba-7-resenje.pdf    zadatak + rešenje
 //   ../Vezba-7-kompletno.pdf  uvod + zadatak + rešenje
 import fs from 'fs';
@@ -28,7 +28,7 @@ function checkPre(html, name) {
 
 const cover = `<div class="cover">
 <h2>Vežba 7 – VLAN-ovi, trunk kroz patch portove i ruter na štapu</h2>
-<p>Ova vežba ima jedan zadatak. Na prvom Open vSwitch-u (SW1) dva bridge-a, <code>br0</code> i <code>br2</code>, povezana su parom patch portova koji radi kao VLAN trunk, a na svakom od njih je po jedan računar u svom VLAN-u. Drugi Open vSwitch (SW2) priključen je jednim trunk kablom na <code>br2</code> i, isključivo OpenFlow pravilima, radi kao ruter na štapu (<em>router on a stick</em>) između dva VLAN-a, isto kao MikroTik ruter sa VLAN podinterfejsima. Pre zadatka sledi kratak uvod u nove pojmove.</p>
+<p>Ova vežba ima jedan zadatak. Na prvom Open vSwitch-u (SW1) dva bridge-a, <code>br0</code> i <code>br2</code>, povezana su parom patch portova koji radi kao VLAN trunk, a na svakom od njih je po jedan VPC u svom VLAN-u. Na <code>br2</code> je jednim trunk kablom priključen MikroTik ruter (SW2) koji radi kao ruter na štapu (<em>router on a stick</em>) između dva VLAN-a; realizovan je drugim Open vSwitch-om koji se, isključivo OpenFlow pravilima, ponaša isto kao MikroTik ruter sa VLAN podinterfejsima. Pre zadatka sledi kratak uvod u nove pojmove.</p>
 <h2 style="font-size:13pt;border:none;margin-top:18px">Šta je novo u ovoj vežbi</h2>
 ${fs.readFileSync(path.join(here, 'intro.frag.html'), 'utf8')}
 </div>`;
@@ -36,14 +36,17 @@ ${fs.readFileSync(path.join(here, 'intro.frag.html'), 'utf8')}
 const task = rd('task/zadatak.frag.html');
 const sol = rd('task/resenje.frag.html');
 const docs = {
-  'Vezba-7-zadatak.pdf': [cover, task],
+  'Vezba-7-zadatak.pdf': [task],
   'Vezba-7-resenje.pdf': [task, sol],
   'Vezba-7-kompletno.pdf': [cover, task, sol],
 };
 
 const browser = await chromium.launch({ executablePath: '/home/teodor/.cache/ms-playwright/chromium-1248/chrome-linux64/chrome' });
 for (const [file, parts] of Object.entries(docs)) {
-  const body = parts.map((p) => (p === cover ? p : `<section class="page">${p}</section>`)).join('\n');
+  let body = parts.map((p) => (p === cover ? p : `<section class="page">${p}</section>`)).join('\n');
+  // slike se numerišu redom u svakom dokumentu (zadatak bez uvoda počinje od Slike 1)
+  let fig = 0;
+  body = body.replace(/(<p class="caption">Slika )\d+\./g, (_, pre) => `${pre}${++fig}.`);
   checkPre(body, file);
   const html = `<!doctype html><html lang="sr"><head><meta charset="utf-8"><title>Vežba 7</title><style>${css}</style></head><body>${body}</body></html>`;
   fs.writeFileSync(path.join(here, 'build.html'), html);

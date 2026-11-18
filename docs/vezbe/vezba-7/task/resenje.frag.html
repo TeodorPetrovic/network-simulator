@@ -1,24 +1,32 @@
 <h2>Vežba 7, Zadatak – Rešenje (komande)</h2>
 
-<p>Sve komande su kucane na pravim Docker uređajima (<code>gns3/openvswitch</code> sa OVS 2.17 i <code>alpine</code>) i proverene u ovom redosledu. SW1 radi kao običan svič (<code>NORMAL</code>) sa VLAN-ovima, a SW2 radi kao ruter na štapu isključivo OpenFlow pravilima. Duže komande su prelomljene znakom <code>\</code> na kraju reda i mogu se nalepiti u konzolu takve kakve su.</p>
+<p>Sve komande su kucane na pravim uređajima (Docker <code>gns3/openvswitch</code> sa OVS 2.17 za SW1 i SW2, VPCS za VPC1 i VPC2) i proverene u ovom redosledu. SW1 radi kao običan svič (<code>NORMAL</code>) sa VLAN-ovima, a SW2 (na slici MikroTik) radi kao ruter na štapu isključivo OpenFlow pravilima. Duže komande su prelomljene znakom <code>\</code> na kraju reda i mogu se nalepiti u konzolu takve kakve su.</p>
 
-<h3>Korak 2 – MAC adrese, IP adrese i podrazumevani izlaz</h3>
+<h3>Korak 2 – IP adrese, podrazumevani izlaz i MAC adrese VPC-ova</h3>
 
-<p><strong>PC1</strong></p>
-<pre data-dev="pc1"><code>ip link set eth0 down
-ip link set eth0 address 02:00:00:00:10:11
-ip link set eth0 up
-ip addr add 10.10.10.11/24 dev eth0
-ip route add default via 10.10.10.1</code></pre>
+<p><strong>VPC1</strong></p>
+<pre data-dev="vpc1"><code>ip 10.10.10.11/24 10.10.10.1
+show</code></pre>
 
-<p><strong>PC2</strong></p>
-<pre data-dev="pc2"><code>ip link set eth0 down
-ip link set eth0 address 02:00:00:00:20:12
-ip link set eth0 up
-ip addr add 10.10.20.12/24 dev eth0
-ip route add default via 10.10.20.1</code></pre>
+<p><strong>VPC2</strong></p>
+<pre data-dev="vpc2"><code>ip 10.10.20.12/24 10.10.20.1
+show</code></pre>
 
-<p>Računari ne znaju ništa o VLAN-ovima: šalju i primaju obične okvire bez oznake. VLAN-u ih dodeljuje port sviča na koji su priključeni.</p>
+<pre class="out"><code>Checking for duplicate address...
+VPC1 : 10.10.10.11 255.255.255.0 gateway 10.10.10.1
+
+NAME   IP/MASK              GATEWAY           MAC                LPORT  RHOST:PORT
+VPC1   10.10.10.11/24       10.10.10.1        00:50:79:66:68:1c  20000  127.0.0.1:20001
+       fe80::250:79ff:fe66:681c/64
+
+Checking for duplicate address...
+VPC2 : 10.10.20.12 255.255.255.0 gateway 10.10.20.1
+
+NAME   IP/MASK              GATEWAY           MAC                LPORT  RHOST:PORT
+VPC2   10.10.20.12/24       10.10.20.1        00:50:79:66:68:a7  20000  127.0.0.1:20001
+       fe80::250:79ff:fe66:68a7/64</code></pre>
+
+<p>U ovom rešenju VPC1 ima MAC adresu <code>00:50:79:66:68:1c</code>, a VPC2 <code>00:50:79:66:68:a7</code>. U vašem projektu poslednji bajt je drugačiji (dodeljuje ga GNS3), pa u pravila iz koraka 7 upisujete MAC adrese iz svoje tabele. VPC-ovi ne znaju ništa o VLAN-ovima: šalju i primaju obične okvire bez oznake. VLAN-u ih dodeljuje port sviča na koji su priključeni.</p>
 
 <h3>Korak 3 – bridge-evi i VLAN uloge portova na SW1</h3>
 
@@ -75,15 +83,12 @@ ovs-vsctl show</code></pre>
 
 <p><code>tag: 10</code> i <code>tag: 20</code> označavaju access portove, a <code>trunks: [10, 20]</code> trunk port koji propušta samo ta dva VLAN-a.</p>
 
-<p><strong>PC1</strong></p>
-<pre data-dev="pc1"><code>ping -c 2 -W 2 10.10.20.12</code></pre>
+<p><strong>VPC1</strong></p>
+<pre data-dev="vpc1"><code>ping 10.10.20.12</code></pre>
 
-<pre class="out"><code>PING 10.10.20.12 (10.10.20.12): 56 data bytes
+<pre class="out"><code>host (10.10.10.1) not reachable</code></pre>
 
---- 10.10.20.12 ping statistics ---
-2 packets transmitted, 0 packets received, 100% packet loss</code></pre>
-
-<p>Ping ne uspeva. PC2 je u drugoj podmreži, pa PC1 paket šalje gateway-u 10.10.10.1 i prvo ARP-om traži njegovu MAC adresu. Tu adresu nema nijedan uređaj (ruter još ne postoji), pa paket nikada ne bude poslat. Osim toga, PC1 i PC2 su sada u različitim bridge-evima koji uopšte nisu povezani, i u različitim VLAN-ovima.</p>
+<p>Ping ne uspeva. VPC2 je u drugoj podmreži, pa VPC1 paket šalje gateway-u 10.10.10.1 i prvo ARP-om traži njegovu MAC adresu. Na ARP zahtev niko ne odgovara (ruter još ne radi), pa VPCS javlja da gateway nije dostupan i ICMP paket uopšte ne šalje. Osim toga, VPC1 i VPC2 su sada u različitim bridge-evima koji uopšte nisu povezani, i u različitim VLAN-ovima.</p>
 
 <h3>Korak 4 – patch portovi kao trunk između br0 i br2</h3>
 
@@ -125,20 +130,20 @@ ovs-vsctl show</code></pre>
                 type: patch
                 options: {peer=br2-br0}</code></pre>
 
-<p><strong>PC1</strong></p>
-<pre data-dev="pc1"><code>ping -c 2 -W 2 10.10.20.12</code></pre>
+<p><strong>VPC1</strong></p>
+<pre data-dev="vpc1"><code>ping 10.10.20.12</code></pre>
 
-<p><strong>PC2</strong></p>
-<pre data-dev="pc2"><code>ping -c 2 -W 2 10.10.10.11</code></pre>
+<p><strong>VPC2</strong></p>
+<pre data-dev="vpc2"><code>ping 10.10.10.11</code></pre>
 
-<p>Oba pinga i dalje ne uspevaju (<code>100% packet loss</code>), jer ruter još ne postoji. Snimak saobraćaja pokazuje (skraćeno):</p>
+<p>Oba pinga i dalje ne uspevaju sa istom porukom kao u koraku 3 (gateway nije dostupan), jer ruter još ne radi. Snimak saobraćaja pokazuje (skraćeno):</p>
 <table>
 <tr><th>Kabl</th><th>Okviri</th></tr>
-<tr><td>SW1 eth2 – SW2 eth0 (trunk)</td><td><code>02:00:00:00:10:11 &gt; ff:ff:ff:ff:ff:ff, 802.1Q vlan 10, ARP who-has 10.10.10.1 tell 10.10.10.11</code><br><code>02:00:00:00:20:12 &gt; ff:ff:ff:ff:ff:ff, 802.1Q vlan 20, ARP who-has 10.10.20.1 tell 10.10.20.12</code></td></tr>
-<tr><td>SW1 eth0 – PC1 eth0</td><td><code>02:00:00:00:10:11 &gt; ff:ff:ff:ff:ff:ff, ARP who-has 10.10.10.1 tell 10.10.10.11</code> (bez oznake); nijedan okvir sa PC2</td></tr>
-<tr><td>SW1 eth1 – PC2 eth0</td><td><code>02:00:00:00:20:12 &gt; ff:ff:ff:ff:ff:ff, ARP who-has 10.10.20.1 tell 10.10.20.12</code> (bez oznake); nijedan okvir sa PC1</td></tr>
+<tr><td>SW1 eth2 – SW2 eth0 (trunk)</td><td><code>00:50:79:66:68:1c &gt; ff:ff:ff:ff:ff:ff, 802.1Q vlan 10, ARP who-has 10.10.10.1 tell 10.10.10.11</code><br><code>00:50:79:66:68:a7 &gt; ff:ff:ff:ff:ff:ff, 802.1Q vlan 20, ARP who-has 10.10.20.1 tell 10.10.20.12</code></td></tr>
+<tr><td>SW1 eth0 – VPC1 Ethernet0</td><td><code>00:50:79:66:68:1c &gt; ff:ff:ff:ff:ff:ff, ARP who-has 10.10.10.1 tell 10.10.10.11</code> (bez oznake); nijedan okvir sa VPC2</td></tr>
+<tr><td>SW1 eth1 – VPC2 Ethernet0</td><td><code>00:50:79:66:68:a7 &gt; ff:ff:ff:ff:ff:ff, ARP who-has 10.10.20.1 tell 10.10.20.12</code> (bez oznake); nijedan okvir sa VPC1</td></tr>
 </table>
-<p>ARP zahtev sa PC1 je ušao bez oznake na eth0 (access, VLAN 10), u <code>br0</code> je pripao VLAN-u 10, kao broadcast je poslat na sve portove VLAN-a 10, pa i na patch port <code>br0-br2</code> (trunk). Patch par ga je preneo u <code>br2</code> i dalje u VLAN-u 10, a <code>br2</code> ga je poslao na trunk eth2, sa oznakom <code>vlan 10</code>. Na eth1 (access, VLAN 20) ga nije poslao. Isto tako, ARP zahtev sa PC2 (VLAN 20) izlazi na trunk sa oznakom <code>vlan 20</code>, prelazi i u <code>br0</code>, ali tamo nema nijednog porta u VLAN-u 20, pa ne stiže do PC1. Na kablovima ka računarima nema nijednog okvira sa VLAN oznakom: access port oznaku uklanja pre slanja.</p>
+<p>ARP zahtev sa VPC1 je ušao bez oznake na eth0 (access, VLAN 10), u <code>br0</code> je pripao VLAN-u 10, kao broadcast je poslat na sve portove VLAN-a 10, pa i na patch port <code>br0-br2</code> (trunk). Patch par ga je preneo u <code>br2</code> i dalje u VLAN-u 10, a <code>br2</code> ga je poslao na trunk eth2, sa oznakom <code>vlan 10</code>. Na eth1 (access, VLAN 20) ga nije poslao. Isto tako, ARP zahtev sa VPC2 (VLAN 20) izlazi na trunk sa oznakom <code>vlan 20</code>, prelazi i u <code>br0</code>, ali tamo nema nijednog porta u VLAN-u 20, pa ne stiže do VPC1. Na kablovima ka VPC-ovima nema nijednog okvira sa VLAN oznakom: access port oznaku uklanja pre slanja.</p>
 
 <h3>Korak 5 – SW2 bez NORMAL pravila</h3>
 
@@ -150,7 +155,7 @@ ovs-ofctl dump-flows br0</code></pre>
 
 <pre class="out"><code>br0
 NXST_FLOW reply (xid=0x4):
- cookie=0x0, duration=14.122s, table=0, n_packets=23, n_bytes=1642, idle_age=0, priority=0 actions=NORMAL
+ cookie=0x0, duration=30.658s, table=0, n_packets=46, n_bytes=3472, idle_age=1, priority=0 actions=NORMAL
 NXST_FLOW reply (xid=0x4):</code></pre>
 
 <p>Port eth0 je u <code>br0</code>. Posle <code>del-flows</code> bridge nema nijedno pravilo i odbacuje sve okvire. Port eth0 nema ni <code>tag</code> ni <code>trunks</code>, pa je trunk za sve VLAN-ove, a pravila će videti VLAN oznaku svakog okvira tačno onakvu kakva je stigla sa SW1.</p>
@@ -171,49 +176,54 @@ ovs-ofctl add-flow br0 "priority=200,in_port=eth0,dl_vlan=20,arp,arp_op=1,arp_tp
 
 <p>Pravilo je ARP responder iz Vežbe 6 sa jednim dodatnim uslovom: <code>dl_vlan=10</code> (odnosno <code>dl_vlan=20</code>). To je OpenFlow ekvivalent IP adrese na MikroTik podinterfejsu <code>vlan10</code>: adresa 10.10.10.1 postoji samo u VLAN-u 10. Akcije ne diraju VLAN oznaku, pa odgovor izlazi kroz <code>in_port</code> sa istom oznakom sa kojom je zahtev ušao. Adrese u <code>load</code> akcijama su heksadecimalne: <code>0x0a0a0a01</code> = 10.10.10.1, <code>0x0a0a1401</code> = 10.10.20.1 (20 = 0x14), a <code>0x020000001001</code> i <code>0x020000002001</code> su MAC adrese gateway-a bez dvotačaka.</p>
 
-<p><strong>PC1</strong></p>
-<pre data-dev="pc1"><code>ping -c 1 -W 1 10.10.10.1
-ip neigh show 10.10.10.1</code></pre>
+<p><strong>VPC1</strong></p>
+<pre data-dev="vpc1"><code>ping 10.10.10.1 -c 1
+show arp</code></pre>
 
-<p><strong>PC2</strong></p>
-<pre data-dev="pc2"><code>ping -c 1 -W 1 10.10.20.1
-ip neigh show 10.10.20.1</code></pre>
+<p><strong>VPC2</strong></p>
+<pre data-dev="vpc2"><code>ping 10.10.20.1 -c 1
+show arp</code></pre>
 
-<pre class="out"><code>PING 10.10.10.1 (10.10.10.1): 56 data bytes
-1 packets transmitted, 0 packets received, 100% packet loss
-10.10.10.1 dev eth0 lladdr 02:00:00:00:10:01 ref 1 used 0/0/0 probes 4 REACHABLE
+<pre class="out"><code>10.10.10.1 icmp_seq=1 timeout
+02:00:00:00:10:01  10.10.10.1 expires in 118 seconds
 
-PING 10.10.20.1 (10.10.20.1): 56 data bytes
-1 packets transmitted, 0 packets received, 100% packet loss
-10.10.20.1 dev eth0 lladdr 02:00:00:00:20:01 ref 1 used 0/0/0 probes 4 REACHABLE</code></pre>
+10.10.20.1 icmp_seq=1 timeout
+02:00:00:00:20:01  10.10.20.1 expires in 118 seconds</code></pre>
 
-<p>Ping na gateway ne uspeva (nema pravila koje odgovara na ICMP), ali su računari naučili MAC adrese gateway-a: PC1 <code>02:00:00:00:10:01</code> za 10.10.10.1, a PC2 <code>02:00:00:00:20:01</code> za 10.10.20.1. ARP zahtev sa PC1 je do SW2 stigao sa oznakom <code>vlan 10</code>, poklopio je prvo pravilo, a odgovor se istim putem vratio do PC1. Zahtev za 10.10.10.1 koji bi stigao u VLAN-u 20 ne bi poklopio nijedno pravilo i ostao bi bez odgovora.</p>
+<p>Ping na gateway ne uspeva (<code>timeout</code>: nema pravila koje odgovara na ICMP), ali poruka više nije <code>host not reachable</code>: VPC-ovi su naučili MAC adrese gateway-a, VPC1 <code>02:00:00:00:10:01</code> za 10.10.10.1, a VPC2 <code>02:00:00:00:20:01</code> za 10.10.20.1. ARP zahtev sa VPC1 je do SW2 stigao sa oznakom <code>vlan 10</code>, poklopio je prvo pravilo, a odgovor se istim putem vratio do VPC1. Zahtev za 10.10.10.1 koji bi stigao u VLAN-u 20 ne bi poklopio nijedno pravilo i ostao bi bez odgovora.</p>
 
 <h3>Korak 7 – rutiranje između VLAN-ova</h3>
 
 <p><strong>SW2</strong></p>
 <pre data-dev="sw2"><code>ovs-ofctl add-flow br0 "priority=100,in_port=eth0,dl_vlan=10,ip,nw_dst=10.10.20.0/24,\
-  actions=mod_vlan_vid:20,mod_dl_src:02:00:00:00:20:01,mod_dl_dst:02:00:00:00:20:12,dec_ttl,in_port"
+  actions=mod_vlan_vid:20,mod_dl_src:02:00:00:00:20:01,mod_dl_dst:00:50:79:66:68:a7,dec_ttl,in_port"
 ovs-ofctl add-flow br0 "priority=100,in_port=eth0,dl_vlan=20,ip,nw_dst=10.10.10.0/24,\
-  actions=mod_vlan_vid:10,mod_dl_src:02:00:00:00:10:01,mod_dl_dst:02:00:00:00:10:11,dec_ttl,in_port"</code></pre>
+  actions=mod_vlan_vid:10,mod_dl_src:02:00:00:00:10:01,mod_dl_dst:00:50:79:66:68:1c,dec_ttl,in_port"</code></pre>
 
-<p>Paket iz VLAN-a 10 ka 10.10.20.0/24: <code>mod_vlan_vid:20</code> ga prebacuje u VLAN 20 (to je prelaz sa podinterfejsa <code>vlan10</code> na <code>vlan20</code>), <code>mod_dl_src</code> postavlja MAC adresu gateway-a VLAN-a 20, <code>mod_dl_dst</code> MAC adresu PC2, <code>dec_ttl</code> smanjuje TTL, a <code>in_port</code> ga vraća na eth0, jedini kabl. Akcija <code>output:eth0</code> ovde ne bi radila: paket je ušao na eth0, a OpenFlow na ulazni port šalje samo akcijom <code>in_port</code>; sa <code>output:eth0</code> se paket tiho odbacuje. Drugo pravilo je isto u suprotnom smeru.</p>
+<p>Paket iz VLAN-a 10 ka 10.10.20.0/24: <code>mod_vlan_vid:20</code> ga prebacuje u VLAN 20 (to je prelaz sa podinterfejsa <code>vlan10</code> na <code>vlan20</code>), <code>mod_dl_src</code> postavlja MAC adresu gateway-a VLAN-a 20, <code>mod_dl_dst</code> MAC adresu VPC2 (iz <code>show</code> u koraku 2; VPCS prima samo okvire upućene njegovoj MAC adresi), <code>dec_ttl</code> smanjuje TTL, a <code>in_port</code> ga vraća na eth0, jedini kabl. Akcija <code>output:eth0</code> ovde ne bi radila: paket je ušao na eth0, a OpenFlow na ulazni port šalje samo akcijom <code>in_port</code>; sa <code>output:eth0</code> se paket tiho odbacuje. Drugo pravilo je isto u suprotnom smeru.</p>
 
-<p><strong>PC1</strong></p>
-<pre data-dev="pc1"><code>ping -c 2 -W 2 10.10.20.12</code></pre>
+<p><strong>VPC1</strong></p>
+<pre data-dev="vpc1"><code>ping 10.10.20.12 -c 2</code></pre>
 
-<p><strong>PC2</strong></p>
-<pre data-dev="pc2"><code>ping -c 2 -W 2 10.10.10.11</code></pre>
+<p><strong>VPC2</strong></p>
+<pre data-dev="vpc2"><code>ping 10.10.10.11 -c 2</code></pre>
 
-<pre class="out"><code>64 bytes from 10.10.20.12: seq=0 ttl=63 time=2.115 ms
-64 bytes from 10.10.20.12: seq=1 ttl=63 time=1.703 ms
-2 packets transmitted, 2 packets received, 0% packet loss
+<pre class="out"><code>84 bytes from 10.10.20.12 icmp_seq=1 ttl=63 time=2.480 ms
+84 bytes from 10.10.20.12 icmp_seq=2 ttl=63 time=4.040 ms
 
-64 bytes from 10.10.10.11: seq=0 ttl=63 time=1.749 ms
-64 bytes from 10.10.10.11: seq=1 ttl=63 time=2.125 ms
-2 packets transmitted, 2 packets received, 0% packet loss</code></pre>
+84 bytes from 10.10.10.11 icmp_seq=1 ttl=63 time=2.181 ms
+84 bytes from 10.10.10.11 icmp_seq=2 ttl=63 time=2.476 ms</code></pre>
 
 <p>Oba pinga uspevaju, a u odgovoru je <code>ttl=63</code>: odgovor kreće sa TTL 64 i jednom prolazi kroz pravilo sa <code>dec_ttl</code> na SW2. SW1 TTL ne menja, jer je svič.</p>
+
+<p><strong>VPC1</strong></p>
+<pre data-dev="vpc1"><code>trace 10.10.20.12 -P 1</code></pre>
+
+<pre class="out"><code>trace to 10.10.20.12, 8 hops max (ICMP), press Ctrl+C to stop
+ 1     *  *  *
+ 2   10.10.20.12   2.405 ms  2.353 ms  1.650 ms</code></pre>
+
+<p>Između VPC1 i VPC2 je tačno jedan ruter: VPC2 odgovara tek na paket koji je krenuo sa TTL 2 (drugi skok). Prvi skok je SW2: paket sa TTL 1 poklapa pravilo za rutiranje, ali <code>dec_ttl</code> ne sme da spusti TTL na 0, pa OVS paket ne prosleđuje i prekida izvršavanje akcija. OpenFlow pravilima se ne šalje ICMP poruka <em>Time Exceeded</em>, zato je u prvom redu <code>* * *</code>. Pravi MikroTik bi tu poslao ICMP <em>Time Exceeded</em>, pa bi u prvom redu stajala adresa njegovog gateway-a, 10.10.10.1.</p>
 
 <h3>Korak 8 – dokaz da saobraćaj ide preko SW2</h3>
 
@@ -221,30 +231,30 @@ ovs-ofctl add-flow br0 "priority=100,in_port=eth0,dl_vlan=20,ip,nw_dst=10.10.10.
 <pre data-dev="sw2"><code>ovs-ofctl --names dump-ports br0 eth0
 ovs-ofctl --names dump-flows br0</code></pre>
 
-<p><strong>PC1</strong></p>
-<pre data-dev="pc1"><code>ping -c 3 -W 2 10.10.20.12</code></pre>
+<p><strong>VPC1</strong></p>
+<pre data-dev="vpc1"><code>ping 10.10.20.12 -c 3</code></pre>
 
 <p><strong>SW2</strong></p>
 <pre data-dev="sw2"><code>ovs-ofctl --names dump-ports br0 eth0
 ovs-ofctl --names dump-flows br0</code></pre>
 
 <p>Brojači posle pinga (skraćeno; tačne vrednosti zavise od toga šta je sve poslato):</p>
-<pre class="out"><code>  port  eth0: rx pkts=50, bytes=3748, ...                            (pre pinga)
-           tx pkts=21, bytes=1690, ...
-  port  eth0: rx pkts=57, bytes=4406, ...                            (posle pinga)
-           tx pkts=27, bytes=2302, ...
+<pre class="out"><code>  port  eth0: rx pkts=95, bytes=7418, ...                            (pre pinga)
+           tx pkts=27, bytes=2394, ...
+  port  eth0: rx pkts=101, bytes=8006, ...                           (posle pinga)
+           tx pkts=33, bytes=3006, ...
 
-n_packets=4, ... priority=100,ip,in_port=eth0,dl_vlan=10,nw_dst=10.10.20.0/24 ...   (pre pinga)
-n_packets=4, ... priority=100,ip,in_port=eth0,dl_vlan=20,nw_dst=10.10.10.0/24 ...
-n_packets=7, ... priority=100,ip,in_port=eth0,dl_vlan=10,nw_dst=10.10.20.0/24 ...   (posle pinga)
-n_packets=7, ... priority=100,ip,in_port=eth0,dl_vlan=20,nw_dst=10.10.10.0/24 ...</code></pre>
+n_packets=10, ... priority=100,ip,in_port=eth0,dl_vlan=10,nw_dst=10.10.20.0/24 ...  (pre pinga)
+n_packets=7, ... priority=100,ip,in_port=eth0,dl_vlan=20,nw_dst=10.10.10.0/24 ...
+n_packets=13, ... priority=100,ip,in_port=eth0,dl_vlan=10,nw_dst=10.10.20.0/24 ...  (posle pinga)
+n_packets=10, ... priority=100,ip,in_port=eth0,dl_vlan=20,nw_dst=10.10.10.0/24 ...</code></pre>
 
-<p>Tri ping zahteva i tri odgovora povećala su brojač svakog od dva pravila za rutiranje za 3 (zahtevi idu iz VLAN-a 10, odgovori iz VLAN-a 20). Brojač slanja porta eth0 (<code>tx</code>) porastao je za 6, a brojač prijema (<code>rx</code>) za isto toliko ili nešto više, jer se na prijemu broje i okviri koje SW2 odbacuje (npr. IPv6 poruke računara): svaki rutirani paket ulazi na eth0 i izlazi na eth0. Snimak jednog ICMP echo request-a na sva tri kabla (trunk je kabl SW1 eth2 – SW2 eth0; MAC adrese su PC1, gateway VLAN-a 10, gateway VLAN-a 20 i PC2):</p>
+<p>Tri ping zahteva i tri odgovora povećala su brojač svakog od dva pravila za rutiranje za 3 (zahtevi idu iz VLAN-a 10, odgovori iz VLAN-a 20). Prvo pravilo je i pre pinga imalo 3 paketa više od drugog: to su paketi komande <code>trace</code> sa TTL 1, koji su poklopili pravilo, ali nisu prosleđeni. Brojač slanja porta eth0 (<code>tx</code>) porastao je za 6, a brojač prijema (<code>rx</code>) za isto toliko ili nešto više, jer se na prijemu broje i okviri koje SW2 odbacuje: svaki rutirani paket ulazi na eth0 i izlazi na eth0. Snimak jednog ICMP echo request-a na sva tri kabla (trunk je kabl SW1 eth2 – SW2 eth0; MAC adrese su VPC1, gateway VLAN-a 10, gateway VLAN-a 20 i VPC2):</p>
 <table>
 <tr><th>Kabl</th><th>VLAN oznaka</th><th>Izvorišna MAC</th><th>Odredišna MAC</th><th>TTL</th></tr>
-<tr><td>PC1 – SW1 eth0</td><td>nema</td><td><code>02:00:00:00:10:11</code></td><td><code>02:00:00:00:10:01</code></td><td>64</td></tr>
-<tr><td>trunk, ka SW2</td><td>10</td><td><code>02:00:00:00:10:11</code></td><td><code>02:00:00:00:10:01</code></td><td>64</td></tr>
-<tr><td>trunk, od SW2</td><td>20</td><td><code>02:00:00:00:20:01</code></td><td><code>02:00:00:00:20:12</code></td><td>63</td></tr>
-<tr><td>SW1 eth1 – PC2</td><td>nema</td><td><code>02:00:00:00:20:01</code></td><td><code>02:00:00:00:20:12</code></td><td>63</td></tr>
+<tr><td>VPC1 – SW1 eth0</td><td>nema</td><td><code>00:50:79:66:68:1c</code></td><td><code>02:00:00:00:10:01</code></td><td>64</td></tr>
+<tr><td>trunk, ka SW2</td><td>10</td><td><code>00:50:79:66:68:1c</code></td><td><code>02:00:00:00:10:01</code></td><td>64</td></tr>
+<tr><td>trunk, od SW2</td><td>20</td><td><code>02:00:00:00:20:01</code></td><td><code>00:50:79:66:68:a7</code></td><td>63</td></tr>
+<tr><td>SW1 eth1 – VPC2</td><td>nema</td><td><code>02:00:00:00:20:01</code></td><td><code>00:50:79:66:68:a7</code></td><td>63</td></tr>
 </table>
-<p>Isti paket (isti IP <code>id</code>) se na trunk kablu pojavljuje dva puta: prvo ka SW2 u VLAN-u 10, adresiran na gateway, sa TTL 64, a zatim od SW2 nazad u VLAN-u 20, sa MAC adresama gateway-a i PC2 i sa TTL 63. To je ruter na štapu: SW2 ima samo jedan kabl, pa i prima i šalje sav saobraćaj između VLAN-ova kroz isti port eth0, a VLAN oznaka određuje kom VLAN-u paket pripada. Na kablovima ka PC1 i PC2 okviri nemaju VLAN oznaku: oznake postoje samo na trunk kablu i na patch vezi unutar SW1.</p>
+<p>Isti paket (isti ICMP <code>seq</code>) se na trunk kablu pojavljuje dva puta: prvo ka SW2 u VLAN-u 10, adresiran na gateway, sa TTL 64, a zatim od SW2 nazad u VLAN-u 20, sa MAC adresama gateway-a i VPC2 i sa TTL 63. To je ruter na štapu: SW2 ima samo jedan kabl, pa i prima i šalje sav saobraćaj između VLAN-ova kroz isti port eth0, a VLAN oznaka određuje kom VLAN-u paket pripada. Na kablovima ka VPC1 i VPC2 okviri nemaju VLAN oznaku: oznake postoje samo na trunk kablu i na patch vezi unutar SW1.</p>
