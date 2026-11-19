@@ -6,7 +6,7 @@ impl VpcsRuntime {
             binary: crate::image_paths::runtime_binary("NETWORK_SIMULATOR_VPCS", "vpcs"),
             state_dir: std::env::var_os("NETWORK_SIMULATOR_VPCS_STATE")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("data/vpcs")),
+                .unwrap_or_else(|| crate::image_paths::instance_data_directory().join("vpcs")),
             processes: Arc::new(Mutex::new(HashMap::new())),
             active_ports: Arc::new(RwLock::new(HashMap::new())),
             bridge_ports: Arc::new(RwLock::new(HashMap::new())),

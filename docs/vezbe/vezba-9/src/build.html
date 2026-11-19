@@ -128,7 +128,7 @@ RUN apk add --no-cache net-snmp net-snmp-tools rsyslog logger busybox-extras</co
 <p>Veb interfejs Nagios-a koristi se kroz HTTP konzolu simulatora: konzola čvora NAGIOS je tipa <code>http</code> (port 80 u kontejneru, putanja <code>/nagios/</code>, korisnik <code>nagiosadmin</code>, lozinka <code>nagios</code>), a komande se kucaju u pomoćnoj (<em>auxiliary</em>) telnet konzoli istog čvora.</p>
 </li>
 
-<li><strong>Korak –</strong> Podesite IP adrese prema tabeli: na Docker čvorovima kroz <em>Edit network configuration</em> (pre pokretanja), na VPC1 u konzoli, a na R1 i SONiC na navedenom interfejsu. Na SERVER1 i SERVER2 pokrenite veb server (BusyBox <code>httpd</code>) iz direktorijuma <code>/var/www</code>, sa stranicom <code>index.html</code> koja sadrži ime servera, i SNMP agenta <code>snmpd</code> sa zajednicom (<em>community</em>) <code>lab9</code> samo za čitanje, dozvoljenom samo iz podmreže 10.9.0.0/24, lokacijom <code>Laboratorija 9</code> i kontaktom <code>admin@lab9.local</code>.
+<li><strong>Korak –</strong> Podesite IP adrese prema tabeli: na Docker čvorovima kroz <em>Edit network configuration</em> (pre pokretanja), na VPC1 u konzoli, a na R1 i SONiC na navedenom interfejsu (MikroTik admin bez lozinke, pri prvoj prijavi RouterOS traži novu lozinku, preskače se sa Ctrl-C; SONiC admin / YourPaSsWoRd; na upravljačkom portu SONiC-a pored adrese treba zadati i gateway, to je R1). Na SERVER1 i SERVER2 pokrenite veb server (BusyBox <code>httpd</code>) iz direktorijuma <code>/var/www</code>, sa stranicom <code>index.html</code> koja sadrži ime servera, i SNMP agenta <code>snmpd</code> sa zajednicom (<em>community</em>) <code>lab9</code> samo za čitanje, dozvoljenom samo iz podmreže 10.9.0.0/24, lokacijom <code>Laboratorija 9</code> i kontaktom <code>admin@lab9.local</code>.
 
 <table style="break-inside:avoid">
 <tr><th>Uređaj</th><th>Interfejs</th><th>IP adresa</th><th>Uređaj</th><th>Interfejs</th><th>IP adresa</th></tr>
@@ -195,7 +195,7 @@ input(type="imtcp" port="10514" ruleset="primer")</code></pre>
 </section>
 <section class="page"><h2>Vežba 9, Zadatak – Rešenje (komande)</h2>
 
-<p>Komande za NAGIOS, SYSLOG, SERVER1, SERVER2 i VPC1 su izvršene u ovom redosledu na pravim kontejnerima (<code>jasonrivers/nagios</code> sa Nagios Core 4.5.12, <code>vezba9-linux</code>, VPCS) povezanim preko Open vSwitch-a, a prikazani izlazi potiču iz tog testa. <strong>Komande za R1 (MikroTik) i SONiC nisu izvršene</strong> (ti uređaji nisu bili dostupni), pa su u izlazima testa R1 i SONiC u stanju DOWN. Blokovi se mogu nalepiti u konzolu takvi kakvi su.</p>
+<p>Komande za NAGIOS, SYSLOG, SERVER1, SERVER2 i VPC1 su izvršene u ovom redosledu na pravim kontejnerima (<code>jasonrivers/nagios</code> sa Nagios Core 4.5.12, <code>vezba9-linux</code>, VPCS) povezanim preko Open vSwitch-a, a prikazani izlazi potiču iz tog testa. Komande za <strong>R1 (MikroTik CHR 7.23.8) i SONiC (SONiC-VS, master)</strong> izvršene su zasebno u simulatoru na pravim QEMU uređajima (u istoj topologiji sa Open vSwitch-om); njihovi izlazi nisu prikazani, a u izlazima Docker testa ispod R1 i SONiC su zato u stanju DOWN. Blokovi se mogu nalepiti u konzolu takvi kakvi su.</p>
 
 <h3>Korak 2 – IP adrese, veb server i SNMP agent</h3>
 
@@ -233,12 +233,13 @@ ps</code></pre>
 
 <p><code>rocommunity lab9 10.9.0.0/24</code> dozvoljava samo čitanje i samo zahteve iz te podmreže; <code>agentAddress udp:161</code> otvara agenta na svim interfejsima (podrazumevano sluša samo 127.0.0.1). BusyBox <code>httpd</code> i <code>snmpd</code> rade u pozadini.</p>
 
-<p><strong>R1</strong> (nije izvršeno)</p>
+<p><strong>R1</strong> (RouterOS)</p>
 <pre data-dev="mikrotik"><code>/system identity set name=R1
 /ip address add address=10.9.0.1/24 interface=ether1</code></pre>
 
-<p><strong>SONiC</strong> (nije izvršeno)</p>
-<pre data-dev="sonic"><code>sudo config interface ip add eth0 10.9.0.2/24</code></pre>
+<p><strong>SONiC</strong></p>
+<pre data-dev="sonic"><code>sudo config interface ip add eth0 10.9.0.2/24 10.9.0.1</code></pre>
+<p>Treći argument je podrazumevani gateway (adresa R1); bez njega SONiC upiše adresu u konfiguraciju, ali je ne primeni na eth0. Provera: <code>show management_interface address</code>.</p>
 
 <h3>Korak 3 – hostovi, grupe hostova i servis HTTP</h3>
 
@@ -323,7 +324,7 @@ curl -s "$S?query=hostlist" | jq -c .data.hostlist</code></pre>
 
 <pre class="out"><code>{"R1":4,"SERVER1":2,"SERVER2":2,"SONiC":4,"SYSLOG":2,"VPC1":2,"localhost":2}</code></pre>
 
-<p>Kod stanja hosta: 1 = PENDING (još nije proveren), 2 = UP, 4 = DOWN. <code>localhost</code> je sam NAGIOS iz podrazumevane konfiguracije slike. R1 i SONiC su u testu DOWN jer ih nije bilo u mreži; u laboratoriji sa Vežbom 8 su UP.</p>
+<p>Kod stanja hosta: 1 = PENDING (još nije proveren), 2 = UP, 4 = DOWN. <code>localhost</code> je sam NAGIOS iz podrazumevane konfiguracije slike. R1 i SONiC su u Docker testu DOWN jer ih nije bilo u mreži; u simulatoru sa pravim uređajima su svi hostovi UP.</p>
 
 <h3>Korak 4 – komanda, servis SNMP uptime i kontakt</h3>
 
@@ -411,11 +412,11 @@ cat /var/log/mreza/SERVER1.log</code></pre>
 <pre class="out"><code>SERVER1.log
 2026-11-19T18:47:28.936019+00:00 SERVER1 proba Poruka sa SERVER1</code></pre>
 
-<p><strong>R1</strong> (nije izvršeno)</p>
+<p><strong>R1</strong> (RouterOS)</p>
 <pre data-dev="mikrotik"><code>/system logging action add name=nadzor target=remote remote=10.9.0.20 remote-port=514
 /system logging add topics=info action=nadzor</code></pre>
 
-<p><strong>SONiC</strong> (nije izvršeno)</p>
+<p><strong>SONiC</strong></p>
 <pre data-dev="sonic"><code>sudo config syslog add 10.9.0.20</code></pre>
 
 <h3>Korak 6 – SNMP upiti</h3>
@@ -437,11 +438,11 @@ Timeout: No Response from 10.9.0.31.</code></pre>
 
 <p>Agent ne odgovara na zahtev sa zajednicom koja nije podešena, pa <code>snmpget</code> posle ponovljenih pokušaja javlja <code>Timeout</code> (isto bi se desilo za zahtev sa adrese van 10.9.0.0/24).</p>
 
-<p><strong>R1</strong> (nije izvršeno)</p>
+<p><strong>R1</strong> (RouterOS)</p>
 <pre data-dev="mikrotik"><code>/snmp community add name=lab9 addresses=10.9.0.0/24 read-access=yes write-access=no
 /snmp set enabled=yes location="Laboratorija 9" contact=admin@lab9.local</code></pre>
 
-<p><strong>SONiC</strong> (nije izvršeno)</p>
+<p><strong>SONiC</strong></p>
 <pre data-dev="sonic"><code>sudo config snmp community add lab9 RO</code></pre>
 
 <h3>Korak 7 – ispad servera SERVER2</h3>

@@ -49,7 +49,14 @@ impl UbridgeRuntime {
     pub fn new() -> Self {
         let state_dir = std::env::var_os("NETWORK_SIMULATOR_UBRIDGE_STATE")
             .map(PathBuf::from)
-            .unwrap_or_else(|| crate::image_paths::application_data_directory().join("run"));
+            .unwrap_or_else(|| {
+                if std::env::var_os("NETWORK_SIMULATOR_DB").is_some() {
+                    crate::image_paths::instance_data_directory().join("run")
+                } else {
+                    crate::image_paths::application_data_directory().join("run")
+                }
+            });
+        let state_dir = crate::image_paths::short_socket_dir(state_dir);
         Self {
             binary: crate::image_paths::runtime_binary_prefer_path(
                 "NETWORK_SIMULATOR_UBRIDGE",

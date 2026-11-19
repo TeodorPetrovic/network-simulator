@@ -148,7 +148,7 @@ impl DynamipsRuntime {
             image_dir: crate::image_paths::dynamips_images(),
             state_dir: std::env::var_os("NETWORK_SIMULATOR_DYNAMIPS_STATE")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("data/dynamips")),
+                .unwrap_or_else(|| crate::image_paths::instance_data_directory().join("dynamips")),
             routers: Arc::new(Mutex::new(HashMap::new())),
             bindings: Arc::new(Mutex::new(HashMap::new())),
             operation_lock: Arc::new(Mutex::new(())),

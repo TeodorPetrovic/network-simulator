@@ -416,7 +416,7 @@ impl DockerRuntime {
         container_id: &str,
     ) -> Result<(), RuntimeError> {
         let result = match self
-            .command(["rm", "--force", container_id], DOCKER_TIMEOUT)
+            .command(["rm", "--force", "--volumes", container_id], DOCKER_TIMEOUT)
             .await
         {
             Ok(_) => Ok(()),

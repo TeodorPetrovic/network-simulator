@@ -15,7 +15,10 @@ konzole simulatora (WebSocket), a Nagios je otvaran kroz HTTP konzolu simulatora
 | 08, 09 | Korak 7: SERVER2 DOWN, HTTP i SNMP uptime CRITICAL |
 | 10 | Obaveštenja: `dezurni` / `notify-host-by-syslog` |
 
-Rezultat: svi koraci 2–7 prošli. SERVER2 prelazi u HARD DOWN za ~97 s. SONiC je u testu `docker-sonic-vs`
-(ne SONiC-VS VM): `config interface ip add`, `config syslog add` upisuju u ConfigDB, ali IP na eth0 je ručno
-primenjen (`ip addr add`) jer u kontejneru nema servisa koji ga primenjuje; SNMP uptime za SONiC je zato CRITICAL.
+Rezultat: svi koraci 2–7 prošli. SERVER2 prelazi u HARD DOWN za ~97 s.
+
+SONiC u ovom prolazu bio je `docker-sonic-vs`; zato je naknadno ista SONiC komanda proverena na pravom SONiC-VS VM-u
+(vidi Vežbu 8). Nalaz: `config interface ip add eth0 10.9.0.2/24` bez gateway-a upiše adresu u ConfigDB, ali je
+ne primeni na eth0; sa `... 10.9.0.2/24 10.9.0.1` adresa se primenjuje (`show management_interface address`).
+Zadatak i rešenje su ispravljeni. `config syslog add` i `config snmp community add lab9 RO` rade na VM-u.
 `localhost` HTTP WARNING (401) potiče iz podrazumevane konfiguracije Nagios slike.
