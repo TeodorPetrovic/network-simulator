@@ -1,0 +1,35 @@
+<h3>1. MikroTik RouterOS i CHR</h3>
+<p>RouterOS je operativni sistem MikroTik rutera. CHR (<em>Cloud Hosted Router</em>) je njegova verzija za virtuelne mašine i u GNS3 radi kao QEMU uređaj; bez licence radi neograničeno, samo sa brzinom ograničenom na 1 Mbit/s po interfejsu, što je za laboratoriju dovoljno. Interfejsi se zovu <code>ether1</code>, <code>ether2</code>, ... po redosledu adaptera. Podrazumevano CHR ima samo DHCP klijent na ether1, a pri prvoj prijavi (<code>admin</code>, prazna lozinka) traži novu lozinku.</p>
+<p>Komandna linija je podeljena na menije (<code>/ip address</code>, <code>/interface vlan</code>, ...). U svakom meniju iste komande rade isto: <code>add</code> dodaje stavku, <code>set</code> menja, <code>remove</code> briše, <code>print</code> prikazuje, a <code>[find uslov]</code> bira stavke po nekom svojstvu (npr. <code>[find name=vlan5]</code>). Taster Tab dopunjava imena komandi i parametara. Svaka izmena se primenjuje i trajno čuva odmah, nema posebne komande za čuvanje; <code>/system backup save</code> i <code>/export</code> služe za kopiju konfiguracije van rutera.</p>
+
+<h3>2. Kako se podešavaju neke od opcija na MikroTik-u</h3>
+<p>Primeri u tabeli koriste druge vrednosti nego zadatak (VLAN 5, mreža 192.168.5.0/24, interfejs ether4).</p>
+<table>
+<tr><th style="width:17%">Opcija</th><th>Primer</th></tr>
+<tr><td>ime uređaja</td><td><code>/system identity set name=R9</code></td></tr>
+<tr><td>korisnik</td><td><code>/user add name=pera group=write password=Pera123</code>; grupe <code>full</code> (sve), <code>write</code> (bez upravljanja korisnicima), <code>read</code> (samo čitanje)</td></tr>
+<tr><td>IP adresa</td><td><code>/ip address add address=192.168.5.1/24 interface=ether4</code></td></tr>
+<tr><td>VLAN podinterfejs</td><td><code>/interface vlan add name=vlan5 vlan-id=5 interface=ether4</code></td></tr>
+<tr><td>DHCP klijent</td><td><code>/ip dhcp-client add interface=ether4</code> (dobija adresu, DNS i podrazumevanu rutu)</td></tr>
+<tr><td>DHCP server</td><td><code>/ip pool add name=p5 ranges=192.168.5.50-192.168.5.60</code><br><code>/ip dhcp-server add name=d5 interface=vlan5 address-pool=p5</code><br><code>/ip dhcp-server network add address=192.168.5.0/24 gateway=192.168.5.1</code></td></tr>
+<tr><td>NAT</td><td><code>/ip firewall nat add chain=srcnat out-interface=ether4 action=masquerade</code></td></tr>
+<tr><td>firewall filter</td><td><code>/ip firewall filter add chain=input src-address=192.168.5.0/24 protocol=icmp action=drop</code></td></tr>
+<tr><td>SNMP</td><td><code>/snmp set enabled=yes location="Lab 2"</code>, <code>/snmp community add name=mon5 addresses=192.168.5.0/24</code></td></tr>
+<tr><td>slanje loga</td><td><code>/system logging action add name=srv5 target=remote remote=192.168.5.200</code><br><code>/system logging add topics=critical action=srv5</code></td></tr>
+<tr><td>backup, export</td><td><code>/system backup save name=kopija</code>, <code>/export file=kopija</code>, <code>/file print</code></td></tr>
+</table>
+<p>Firewall filter ima tri lanca: <code>input</code> za pakete upućene samom ruteru, <code>forward</code> za pakete koje ruter prosleđuje i <code>output</code> za pakete koje ruter šalje. Pravila se proveravaju redom i prvo pravilo koje se poklopi odlučuje; paket koji ne poklopi nijedno pravilo se propušta. <code>masquerade</code> u lancu <code>srcnat</code> zamenjuje izvorišnu adresu paketa adresom izlaznog interfejsa. Uslov sa <code>!</code> je negacija: <code>in-interface=!vlan5</code> znači "nije došao sa vlan5".</p>
+
+<h3>3. SONiC</h3>
+<p>SONiC (<em>Software for Open Networking in the Cloud</em>) je mrežni operativni sistem otvorenog koda zasnovan na Debian Linux-u. Svaka funkcija (LLDP, SNMP, BGP, upravljanje portovima) radi u svom Docker kontejneru, a sva konfiguracija se nalazi u Redis bazi (CONFIG_DB). U GNS3 se koristi SONiC-VS, virtuelni svič bez pravog hardvera. Prijava je preko konzole kao na Linux-u; komande <code>config ...</code> (uz <code>sudo</code>) menjaju CONFIG_DB, a <code>show ...</code> prikazuju stanje. Izmene važe odmah, ali se posle restarta gube ako se ne sačuvaju komandom <code>sudo config save -y</code>, koja ih upisuje u <code>/etc/sonic/config_db.json</code>.</p>
+<p>Portovi se zovu <code>Ethernet0</code>, <code>Ethernet4</code>, <code>Ethernet8</code>, ...: brojevi rastu za 4 jer se port od 40 Gbit/s može podeliti na četiri porta od 10 Gbit/s (npr. Ethernet0 do Ethernet3). Početna konfiguracija SONiC-VS-a pravi rutiranu mrežu: svaki port ima svoju IP adresu (10.0.0.0/31, 10.0.0.2/31, ...) i nijedan nije u VLAN-u.</p>
+<table>
+<tr><th style="width:30%">Pojam u SONiC-u</th><th>Značenje</th></tr>
+<tr><td>član VLAN-a, <code>tagged</code></td><td>port šalje i prima okvire tog VLAN-a sa 802.1Q oznakom (trunk); port može biti označen član više VLAN-ova</td></tr>
+<tr><td>član VLAN-a, <code>untagged</code> (<code>-u</code>)</td><td>okviri tog VLAN-a idu kroz port bez oznake (access); port može biti neoznačen član samo jednog VLAN-a</td></tr>
+<tr><td>interfejs <code>VlanN</code></td><td>L3 interfejs sviča u VLAN-u N (kao SVI na Cisco svičevima); dobija adresu sa <code>config interface ip add</code></td></tr>
+<tr><td>rutirani port</td><td>port sa sopstvenom IP adresom; ne može biti član VLAN-a dok se adresa ne ukloni</td></tr>
+</table>
+
+<h3>4. LLDP i SNMP</h3>
+<p>LLDP (<em>Link Layer Discovery Protocol</em>, IEEE 802.1AB) je protokol kojim uređaj svakih 30 sekundi na svakom portu objavljuje svoje ime, ime porta i upravljačku adresu. Okviri se ne prosleđuju dalje, pa svaki uređaj vidi samo direktno povezane susede. Na SONiC-u je LLDP uključen podrazumevano (<code>show lldp table</code>), a MikroTik pored LLDP-a šalje i svoje MNDP i CDP objave (<code>/ip neighbor print</code>). SNMP (<em>Simple Network Management Protocol</em>) omogućava serveru za nadzor da čita stanje uređaja (ime, interfejse, brojače saobraćaja). U verziji 2c pristup se kontroliše community stringom, koji je u stvari lozinka koja putuje nešifrovano, pa se pristup dodatno ograničava na upravljačku mrežu. Syslog (UDP port 514) šalje poruke iz loga uređaja na centralni server. SNMP i syslog server se dodaju u Vežbi 9.</p>

@@ -1,0 +1,8 @@
+#!/bin/sh
+# docker-sonic-vs nema docker; "docker exec [-i] lldp CMD" (show lldp table) se izvršava lokalno, ostalo ništa ne radi
+[ "$1" = exec ] || exit 0
+shift
+while [ "${1#-}" != "$1" ]; do shift; done
+[ "$1" = lldp ] || exit 0
+shift
+exec "$@"

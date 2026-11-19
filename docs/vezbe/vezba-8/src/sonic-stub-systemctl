@@ -1,0 +1,3 @@
+#!/bin/sh
+# docker-sonic-vs nema systemd
+exit 0

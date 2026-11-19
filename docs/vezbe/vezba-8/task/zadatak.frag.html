@@ -1,0 +1,168 @@
+<h2>Vežba 8, Zadatak – MikroTik ruter i SONiC svičevi</h2>
+
+<p>Firma ima dve organizacione jedinice: Prodaju u VLAN-u 10 i Razvoj u VLAN-u 20. Računar prodaje (VPC1) priključen je na svič SW1, a računar razvoja (VPC2) na svič SW2; oba sviča su SONiC i povezana su međusobno. MikroTik ruter R1 rutira saobraćaj između VLAN-ova, dodeljuje adrese Prodaji i povezuje firmu na internet. Upravljačke adrese uređaja su u VLAN-u 99, u koji će se u Vežbi 9 priključiti server za nadzor.</p>
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 450" width="1060" height="450" style="max-width:100%;height:auto" font-family="DejaVu Sans, sans-serif" font-size="12">
+  <!-- NAT -->
+  <ellipse cx="550" cy="32" rx="90" ry="24" fill="#ffffff" stroke="#555" stroke-width="1.2"/>
+  <text x="550" y="37" text-anchor="middle" font-weight="bold">NAT (internet)</text>
+  <line x1="550" y1="56" x2="550" y2="80" stroke="#555" stroke-width="2"/>
+  <text x="556" y="75" fill="#aa0000" font-size="11">ether1</text>
+  <!-- R1 -->
+  <rect x="440" y="80" width="220" height="130" rx="6" fill="#d9ead3" stroke="#555" stroke-width="1.5"/>
+  <circle cx="550" cy="105" r="18" fill="#ffffff" stroke="#555" stroke-width="1.2"/>
+  <g stroke="#555" stroke-width="1.6" fill="none">
+    <path d="M539 100 h20 m-5 -4 l5 4 l-5 4"/>
+    <path d="M561 110 h-20 m5 -4 l-5 4 l5 4"/>
+  </g>
+  <text x="550" y="143" text-anchor="middle" font-size="14" font-weight="bold">R1 – MikroTik</text>
+  <text x="550" y="161" text-anchor="middle" font-size="11">vlan10: 10.10.10.1</text>
+  <text x="550" y="177" text-anchor="middle" font-size="11">vlan99: 10.10.99.1</text>
+  <text x="550" y="193" text-anchor="middle" font-size="11">ether3: 10.10.20.1</text>
+  <!-- SW1 -->
+  <rect x="110" y="250" width="240" height="85" rx="6" fill="#fff3cd" stroke="#555" stroke-width="1.5"/>
+  <text x="230" y="282" text-anchor="middle" font-size="14" font-weight="bold">SW1 – SONiC</text>
+  <text x="230" y="302" text-anchor="middle" font-size="11">Vlan99: 10.10.99.2</text>
+  <!-- SW2 -->
+  <rect x="690" y="250" width="240" height="85" rx="6" fill="#fff3cd" stroke="#555" stroke-width="1.5"/>
+  <text x="810" y="282" text-anchor="middle" font-size="14" font-weight="bold">SW2 – SONiC</text>
+  <text x="810" y="302" text-anchor="middle" font-size="11">Vlan99: 10.10.99.3</text>
+  <!-- R1 ether2 - SW1 Ethernet0 (trunk) -->
+  <line x1="440" y1="195" x2="290" y2="250" stroke="#aa0000" stroke-width="3"/>
+  <text x="434" y="190" text-anchor="end" fill="#aa0000" font-size="11">ether2</text>
+  <text x="282" y="244" text-anchor="end" fill="#aa0000" font-size="11">Ethernet0</text>
+  <text x="352" y="210" text-anchor="end" fill="#aa0000" font-size="11">trunk</text>
+  <text x="352" y="224" text-anchor="end" fill="#aa0000" font-size="11">VLAN 10, 99</text>
+  <!-- R1 ether3 - SW2 Ethernet0 (access 20) -->
+  <line x1="660" y1="195" x2="750" y2="250" stroke="#555" stroke-width="2"/>
+  <text x="666" y="190" fill="#aa0000" font-size="11">ether3</text>
+  <text x="758" y="244" fill="#aa0000" font-size="11">Ethernet0</text>
+  <text x="716" y="214" font-style="italic" font-size="11">access 20</text>
+  <!-- SW1 Ethernet4 - SW2 Ethernet4 (trunk) -->
+  <line x1="350" y1="292" x2="690" y2="292" stroke="#aa0000" stroke-width="3"/>
+  <text x="354" y="286" fill="#aa0000" font-size="11">Ethernet4</text>
+  <text x="686" y="286" text-anchor="end" fill="#aa0000" font-size="11">Ethernet4</text>
+  <text x="520" y="311" text-anchor="middle" fill="#aa0000" font-size="11">trunk</text>
+  <text x="520" y="325" text-anchor="middle" fill="#aa0000" font-size="11">VLAN 10, 20, 99</text>
+  <!-- VPC1 -->
+  <line x1="230" y1="335" x2="230" y2="380" stroke="#555" stroke-width="2"/>
+  <text x="236" y="352" fill="#aa0000" font-size="11">Ethernet8</text>
+  <text x="236" y="376" fill="#aa0000" font-size="11">e0</text>
+  <text x="224" y="364" text-anchor="end" font-style="italic" font-size="11">access 10</text>
+  <rect x="170" y="380" width="120" height="60" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="230" y="401" text-anchor="middle" font-weight="bold">VPC1</text>
+  <text x="230" y="417" text-anchor="middle">DHCP</text>
+  <text x="230" y="432" text-anchor="middle" font-size="11">VLAN 10</text>
+  <!-- VPC2 -->
+  <line x1="810" y1="335" x2="810" y2="380" stroke="#555" stroke-width="2"/>
+  <text x="816" y="352" fill="#aa0000" font-size="11">Ethernet8</text>
+  <text x="816" y="376" fill="#aa0000" font-size="11">e0</text>
+  <text x="804" y="364" text-anchor="end" font-style="italic" font-size="11">access 20</text>
+  <rect x="750" y="380" width="120" height="60" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="810" y="401" text-anchor="middle" font-weight="bold">VPC2</text>
+  <text x="810" y="417" text-anchor="middle">10.10.20.12</text>
+  <text x="810" y="432" text-anchor="middle" font-size="11">VLAN 20</text>
+  <!-- server za nadzor (Vežba 9) -->
+  <line x1="915" y1="335" x2="960" y2="380" stroke="#555" stroke-width="2" stroke-dasharray="6,4"/>
+  <text x="944" y="352" fill="#aa0000" font-size="11">Ethernet12</text>
+  <text x="926" y="372" text-anchor="end" font-style="italic" font-size="11">access 99</text>
+  <rect x="920" y="380" width="135" height="60" rx="4" fill="#ffffff" stroke="#555" stroke-width="1.2" stroke-dasharray="6,4"/>
+  <text x="987" y="400" text-anchor="middle" font-size="11" font-weight="bold">server za nadzor</text>
+  <text x="987" y="416" text-anchor="middle" font-size="11">10.10.99.10</text>
+  <text x="987" y="431" text-anchor="middle" font-size="11">(Vežba 9)</text>
+</svg>
+
+<p class="caption">Slika 1. Topologija. Crvene linije su trunk kablovi (okviri sa 802.1Q oznakom); server za nadzor se priključuje u Vežbi 9.</p>
+
+<ol>
+<li><strong>Korak –</strong> U GNS3 napravite topologiju sa slike: MikroTik ruter R1 (RouterOS CHR), dva SONiC sviča SW1 i SW2 (SONiC-VS), dva VPCS uređaja i NAT čvor. Povežite ih prema tabeli. Na SONiC-u je prvi adapter (eth0) upravljački port, a Ethernet0, Ethernet4, Ethernet8 i Ethernet12 su drugi, treći, četvrti i peti adapter. Prijava: MikroTik <code>admin</code> bez lozinke, SONiC <code>admin</code> / <code>YourPaSsWoRd</code>.
+
+<table style="break-inside:avoid">
+<tr><th>Uređaj i port</th><th>Povezuje se sa</th><th>Uređaj i port</th><th>Povezuje se sa</th></tr>
+<tr><td>R1 ether1</td><td>NAT</td><td>SW1 Ethernet4</td><td>SW2 Ethernet4</td></tr>
+<tr><td>R1 ether2</td><td>SW1 Ethernet0</td><td>SW1 Ethernet8</td><td>VPC1 Ethernet0</td></tr>
+<tr><td>R1 ether3</td><td>SW2 Ethernet0</td><td>SW2 Ethernet8</td><td>VPC2 Ethernet0</td></tr>
+</table>
+</li>
+
+<li><strong>Korak –</strong> Adresni plan i VLAN-ovi na portovima svičeva su dati u tabelama.
+
+<table style="break-inside:avoid">
+<tr><th>Uređaj</th><th>Interfejs</th><th>VLAN</th><th>IP adresa</th><th>Gateway</th></tr>
+<tr><td>R1</td><td>ether1</td><td>–</td><td>DHCP od NAT čvora</td><td>od NAT čvora</td></tr>
+<tr><td>R1</td><td>vlan10 (na ether2)</td><td>10</td><td>10.10.10.1 / 24</td><td>–</td></tr>
+<tr><td>R1</td><td>ether3</td><td>20</td><td>10.10.20.1 / 24</td><td>–</td></tr>
+<tr><td>R1</td><td>vlan99 (na ether2)</td><td>99</td><td>10.10.99.1 / 24</td><td>–</td></tr>
+<tr><td>SW1</td><td>Vlan99</td><td>99</td><td>10.10.99.2 / 24</td><td>–</td></tr>
+<tr><td>SW2</td><td>Vlan99</td><td>99</td><td>10.10.99.3 / 24</td><td>–</td></tr>
+<tr><td>VPC1</td><td>Ethernet0</td><td>10</td><td>DHCP, 10.10.10.100 – 10.10.10.199</td><td>10.10.10.1</td></tr>
+<tr><td>VPC2</td><td>Ethernet0</td><td>20</td><td>10.10.20.12 / 24</td><td>10.10.20.1</td></tr>
+</table>
+
+<table style="break-inside:avoid">
+<tr><th>Port</th><th>SW1</th><th>SW2</th></tr>
+<tr><td>Ethernet0</td><td>trunk, VLAN 10 i 99 (ka R1)</td><td>access, VLAN 20 (ka R1)</td></tr>
+<tr><td>Ethernet4</td><td>trunk, VLAN 10, 20 i 99</td><td>trunk, VLAN 10, 20 i 99</td></tr>
+<tr><td>Ethernet8</td><td>access, VLAN 10 (VPC1)</td><td>access, VLAN 20 (VPC2)</td></tr>
+<tr><td>Ethernet12</td><td>–</td><td>access, VLAN 99 (server za nadzor)</td></tr>
+</table>
+</li>
+
+<li><strong>Korak –</strong> Na SW1 i SW2 podesite ime sviča (<code>SW1</code>, <code>SW2</code>), VLAN-ove 10, 20 i 99, portove prema tabeli i adresu interfejsa <code>Vlan99</code>. Početna konfiguracija SONiC-VS-a dodeljuje IP adrese portovima, a port sa IP adresom ne može biti član VLAN-a. Uključite SNMP sa community-jem <code>lab8</code> samo za čitanje i sačuvajte konfiguraciju.
+
+<p>Primer komandi na SONiC-u (VLAN 30, port Ethernet16, adresa 192.168.30.2/24):</p>
+<table style="break-inside:avoid">
+<tr><th style="width:66%">Komanda</th><th>Šta radi</th></tr>
+<tr><td><code>sudo config vlan add 30</code></td><td>pravi VLAN 30</td></tr>
+<tr><td><code>sudo config vlan member add 30 Ethernet16</code></td><td>dodaje port u VLAN sa oznakom (trunk)</td></tr>
+<tr><td><code>sudo config vlan member add -u 30 Ethernet16</code></td><td>dodaje port u VLAN bez oznake (access)</td></tr>
+<tr><td><code>sudo config interface ip add Vlan30 192.168.30.2/24</code></td><td>dodeljuje adresu VLAN interfejsu</td></tr>
+<tr><td><code>sudo config interface ip remove Ethernet16 10.0.0.16/31</code></td><td>uklanja adresu sa porta</td></tr>
+<tr><td><code>sudo config vlan member del 30 Ethernet16</code></td><td>briše port iz VLAN-a</td></tr>
+<tr><td><code>sudo config vlan del 30</code></td><td>briše VLAN</td></tr>
+<tr><td><code>show vlan brief</code>, <code>show ip interfaces</code></td><td>prikazuje VLAN-ove i adrese</td></tr>
+</table>
+</li>
+
+<li><strong>Korak –</strong> Na R1 podesite ime <code>R1</code> i lozinku <code>Vezba8admin</code> za korisnika <code>admin</code> (RouterOS je traži pri prvoj prijavi) i napravite korisnika <code>tehnicar</code> sa lozinkom <code>Tehnicar8</code> koji sme samo da čita konfiguraciju. Napravite VLAN podinterfejse <code>vlan10</code> i <code>vlan99</code> na ether2 i dodelite adrese prema tabeli. Proverite da ether1 adresu dobija DHCP-om.
+
+<p>Primer komandi za VLAN podinterfejs na MikroTik-u (VLAN 5 na ether4, adresa 192.168.5.1/24):</p>
+<table style="break-inside:avoid">
+<tr><th style="width:66%">Komanda</th><th>Šta radi</th></tr>
+<tr><td><code>/interface vlan add name=vlan5 vlan-id=5 interface=ether4</code></td><td>pravi podinterfejs</td></tr>
+<tr><td><code>/ip address add address=192.168.5.1/24 interface=vlan5</code></td><td>dodeljuje mu IP adresu</td></tr>
+<tr><td><code>/ip address remove [find interface=vlan5]</code></td><td>briše njegovu IP adresu</td></tr>
+<tr><td><code>/interface vlan remove [find name=vlan5]</code></td><td>briše podinterfejs</td></tr>
+</table>
+</li>
+
+<li><strong>Korak –</strong> Na R1 podesite:
+<ul>
+<li>DHCP server za VLAN 10: opseg 10.10.10.100 – 10.10.10.199, gateway 10.10.10.1, DNS 1.1.1.1;</li>
+<li>NAT: adrese iz firme se pri izlasku na internet (ether1) zamenjuju adresom interfejsa ether1;</li>
+<li>firewall: saobraćaj koji ruter prosleđuje ka mreži 10.10.99.0/24 dozvoljen je samo ako dolazi iz VLAN-a 99;</li>
+<li>SNMP: uključen, community <code>public</code> preimenovan u <code>lab8</code> i dozvoljen samo iz 10.10.99.0/24, lokacija <code>Server sala</code>, kontakt <code>admin@firma.rs</code>;</li>
+<li>slanje sistemskog loga (teme <code>info</code>, <code>warning</code> i <code>error</code>) na syslog server 10.10.99.10, UDP port 514;</li>
+<li>na kraju sačuvajte konfiguraciju kao <code>R1-v8.backup</code> i izvezite je kao tekst u <code>R1-v8.rsc</code>.</li>
+</ul>
+
+<table style="break-inside:avoid">
+<tr><th style="width:47%">Meni na MikroTik-u</th><th>Šta se u njemu podešava</th></tr>
+<tr><td><code>/system identity</code>, <code>/user</code></td><td>ime uređaja; korisnici i grupe (<code>full</code>, <code>write</code>, <code>read</code>)</td></tr>
+<tr><td><code>/ip dhcp-client</code>, <code>/ip pool</code>, <code>/ip dhcp-server</code>, <code>/ip dhcp-server network</code></td><td>DHCP klijent; opseg adresa; DHCP server na interfejsu; gateway i DNS koje server deli</td></tr>
+<tr><td><code>/ip firewall nat</code>, <code>/ip firewall filter</code></td><td>prevođenje adresa (<code>chain=srcnat</code>); filtriranje (<code>chain=input</code> ka ruteru, <code>chain=forward</code> kroz ruter)</td></tr>
+<tr><td><code>/snmp</code>, <code>/snmp community</code></td><td>uključivanje SNMP-a, lokacija i kontakt; community i adrese sa kojih je dozvoljen</td></tr>
+<tr><td><code>/system logging action</code>, <code>/system logging</code></td><td>odredište loga (<code>target=remote</code>); koje teme idu na koje odredište</td></tr>
+<tr><td><code>/system backup save</code>, <code>/export file=</code>, <code>/file print</code></td><td>binarna rezervna kopija; konfiguracija kao skripta; spisak fajlova</td></tr>
+</table>
+</li>
+
+<li><strong>Korak –</strong> VPC1 neka adresu dobije DHCP-om, a VPC2 podesite prema tabeli. Proverite sledeće:
+<ul>
+<li>Koju adresu i gateway VPC1 dobija od R1?</li>
+<li>Da li VPC1 i VPC2 mogu da ping-uju jedan drugog, i da li VPC1 može da ping-uje 8.8.8.8?</li>
+<li>Da li VPC1 može da ping-uje adresu 10.10.99.1, a da li adresu 10.10.99.2? Zašto?</li>
+<li>Koje susede R1 vidi na ether2 i ether3 (<code>/ip neighbor print</code>), a koje SW1 na svojim portovima (<code>show lldp table</code>)?</li>
+</ul>
+</li>
+</ol>

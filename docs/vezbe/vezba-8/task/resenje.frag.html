@@ -1,0 +1,216 @@
+<h2>Vežba 8, Zadatak – Rešenje (komande)</h2>
+
+<h3>Korak 3 – SONiC: ime, VLAN-ovi, portovi, SNMP</h3>
+
+<p>Početna konfiguracija SONiC-VS-a je rutirana (t1): svaki port ima svoju adresu iz 10.0.0.0/24.</p>
+
+<p><strong>SW1</strong></p>
+<pre data-dev="sw1"><code>show ip interfaces</code></pre>
+
+<pre class="out"><code>Interface    Master    IPv4 address/mask    Admin/Oper    BGP Neighbor    Neighbor IP
+-----------  --------  -------------------  ------------  --------------  -------------
+Ethernet0              10.0.0.0/31          up/up         ARISTA01T2      10.0.0.1
+Ethernet4              10.0.0.2/31          up/up         ARISTA01T0      10.0.0.3
+Ethernet8              10.0.0.4/31          up/up         ARISTA01T0      10.0.0.5
+Loopback0              10.1.0.1/32          up/up         N/A             N/A
+lo                     127.0.0.1/8          up/up         N/A             N/A</code></pre>
+
+<p>Adrese se uklanjaju samo sa portova koji ulaze u VLAN-ove, a zatim se prave VLAN-ovi i članovi. Bez <code>-u</code> port je član sa oznakom (trunk), a sa <code>-u</code> bez oznake (access).</p>
+
+<pre data-dev="sw1"><code>sudo config hostname SW1
+sudo config interface ip remove Ethernet0 10.0.0.0/31
+sudo config interface ip remove Ethernet4 10.0.0.2/31
+sudo config interface ip remove Ethernet8 10.0.0.4/31
+sudo config vlan add 10
+sudo config vlan add 20
+sudo config vlan add 99
+sudo config vlan member add 10 Ethernet0
+sudo config vlan member add 99 Ethernet0
+sudo config vlan member add 10 Ethernet4
+sudo config vlan member add 20 Ethernet4
+sudo config vlan member add 99 Ethernet4
+sudo config vlan member add -u 10 Ethernet8
+sudo config interface ip add Vlan99 10.10.99.2/24
+sudo config snmp community add lab8 RO
+sudo config save -y</code></pre>
+
+<p><strong>SW2</strong></p>
+<pre data-dev="sw2"><code>sudo config hostname SW2
+sudo config interface ip remove Ethernet0 10.0.0.0/31
+sudo config interface ip remove Ethernet4 10.0.0.2/31
+sudo config interface ip remove Ethernet8 10.0.0.4/31
+sudo config interface ip remove Ethernet12 10.0.0.6/31
+sudo config vlan add 10
+sudo config vlan add 20
+sudo config vlan add 99
+sudo config vlan member add -u 20 Ethernet0
+sudo config vlan member add 10 Ethernet4
+sudo config vlan member add 20 Ethernet4
+sudo config vlan member add 99 Ethernet4
+sudo config vlan member add -u 20 Ethernet8
+sudo config vlan member add -u 99 Ethernet12
+sudo config interface ip add Vlan99 10.10.99.3/24
+sudo config snmp community add lab8 RO
+sudo config save -y</code></pre>
+
+<p><strong>SW2</strong></p>
+<pre data-dev="sw2"><code>show vlan brief</code></pre>
+
+<pre class="out"><code>+-----------+---------------+------------+----------------+-------------+--------------------------+
+|   VLAN ID | IP Address    | Ports      | Port Tagging   | Proxy ARP   | Static Anycast Gateway   |
++===========+===============+============+================+=============+==========================+
+|        10 |               | Ethernet4  | tagged         | disabled    | disabled                 |
++-----------+---------------+------------+----------------+-------------+--------------------------+
+|        20 |               | Ethernet0  | untagged       | disabled    | disabled                 |
+|           |               | Ethernet4  | tagged         |             |                          |
+|           |               | Ethernet8  | untagged       |             |                          |
++-----------+---------------+------------+----------------+-------------+--------------------------+
+|        99 | 10.10.99.3/24 | Ethernet4  | tagged         | disabled    | disabled                 |
+|           |               | Ethernet12 | untagged       |             |                          |
++-----------+---------------+------------+----------------+-------------+--------------------------+</code></pre>
+
+<p>Novo ime se vidi u promptu posle ponovne prijave. <code>config save -y</code> upisuje trenutnu konfiguraciju u <code>/etc/sonic/config_db.json</code>, koja se učitava pri pokretanju; bez toga se izmene gube posle restarta.</p>
+
+<h3>Korak 4 – R1: ime, korisnici, VLAN podinterfejsi, adrese</h3>
+
+<p>Pri prvoj prijavi (<code>admin</code>, prazna lozinka) RouterOS pita za licencu (<code>n</code>) i traži novu lozinku dva puta: <code>Vezba8admin</code>.</p>
+
+<p><strong>R1</strong></p>
+<pre data-dev="r1"><code>/system identity set name=R1
+/user add name=tehnicar group=read password=Tehnicar8
+/interface vlan add name=vlan10 vlan-id=10 interface=ether2
+/interface vlan add name=vlan99 vlan-id=99 interface=ether2
+/ip address add address=10.10.10.1/24 interface=vlan10
+/ip address add address=10.10.20.1/24 interface=ether3
+/ip address add address=10.10.99.1/24 interface=vlan99
+/ip address print
+/ip dhcp-client print</code></pre>
+
+<pre class="out"><code>Flags: D - DYNAMIC
+Columns: ADDRESS, NETWORK, INTERFACE
+#   ADDRESS             NETWORK        INTERFACE
+0 D 192.168.122.175/24  192.168.122.0  ether1
+1   10.10.10.1/24       10.10.10.0     vlan10
+2   10.10.20.1/24       10.10.20.0     ether3
+3   10.10.99.1/24       10.10.99.0     vlan99
+
+Columns: INTERFACE, USE-PEER-DNS, ADD-DEFAULT-ROUTE, STATUS, ADDRESS
+# INTERFACE  USE-PEER-DNS  ADD-DEFAULT-ROUTE  STATUS  ADDRESS
+0 ether1     yes           yes                bound   192.168.122.175/24</code></pre>
+
+<p>CHR već ima DHCP klijent na ether1 (podrazumevana konfiguracija), pa ether1 dobija adresu od NAT čvora (<code>D</code> = dinamička) i podrazumevanu rutu. Grupa <code>read</code> može da gleda, ali ne i da menja konfiguraciju. ether3 je običan (neoznačen) port u VLAN-u 20, jer je SW2 Ethernet0 access port.</p>
+
+<h3>Korak 5 – R1: DHCP, NAT, firewall, SNMP, log, backup</h3>
+
+<p><strong>R1</strong></p>
+<pre data-dev="r1"><code>/ip pool add name=pool10 ranges=10.10.10.100-10.10.10.199
+/ip dhcp-server add name=dhcp10 interface=vlan10 address-pool=pool10
+/ip dhcp-server network add address=10.10.10.0/24 gateway=10.10.10.1 dns-server=1.1.1.1
+/ip firewall nat add chain=srcnat out-interface=ether1 action=masquerade
+/ip firewall filter add chain=forward in-interface=!vlan99 dst-address=10.10.99.0/24 action=drop
+/snmp community set [find default=yes] name=lab8 addresses=10.10.99.0/24
+/snmp set enabled=yes location="Server sala" contact=admin@firma.rs
+/system logging action add name=nadzor target=remote remote=10.10.99.10
+/system logging add topics=info action=nadzor
+/system logging add topics=warning action=nadzor
+/system logging add topics=error action=nadzor
+/system backup save name=R1-v8
+/export file=R1-v8</code></pre>
+
+<p><code>masquerade</code> menja izvorišnu adresu paketa koji izlaze kroz ether1 adresom ether1, koju je R1 dobio DHCP-om. Filter u lancu <code>forward</code> odbacuje samo pakete koji prolaze kroz ruter ka 10.10.99.0/24, a nisu došli sa vlan99; paketi upućeni samom ruteru (10.10.99.1) idu kroz lanac <code>input</code> i nisu pogođeni. Provera:</p>
+
+<pre data-dev="r1"><code>/ip firewall nat print
+/ip firewall filter print
+/snmp community print
+/system logging print where action=nadzor
+/file print</code></pre>
+
+<pre class="out"><code>Flags: X - disabled, I - invalid; D - dynamic
+ 0    chain=srcnat action=masquerade out-interface=ether1
+
+Flags: X - disabled, I - invalid; D - dynamic
+ 0    chain=forward action=drop dst-address=10.10.99.0/24 in-interface=!vlan99
+
+Flags: * - DEFAULT
+Columns: NAME, ADDRESSES, SECURITY, READ-ACCESS, WRITE-ACCESS
+#   NAME  ADDRESSES      SECURITY  READ-ACCESS  WRITE-ACCESS
+0 * lab8  10.10.99.0/24  none      yes          no
+
+Columns: TOPICS, ACTION
+# TOPICS   ACTION
+0 info     nadzor
+1 warning  nadzor
+2 error    nadzor
+
+ # NAME                              TYPE             SIZE LAST-MODIFIED
+ 0 R1-v8.backup                      backup        19.7KiB 2026-11-19 18:56:18
+ 1 skins                             directory             2026-11-19 18:55:51
+ 2 R1-v8.rsc                         script           1433 2026-11-19 18:56:18</code></pre>
+
+<p><code>R1-v8.backup</code> je binarna kopija (vraća se sa <code>/system backup load</code> na istom uređaju), a <code>R1-v8.rsc</code> je skripta sa komandama koje se mogu pročitati ili izvršiti na drugom ruteru (<code>/import file-name=R1-v8.rsc</code>).</p>
+
+<h3>Korak 6 – VPC-ovi i provera</h3>
+
+<p><strong>VPC1</strong></p>
+<pre data-dev="vpc1"><code>ip dhcp</code></pre>
+
+<pre class="out"><code>DORA IP 10.10.10.199/24 GW 10.10.10.1</code></pre>
+
+<p><strong>VPC2</strong></p>
+<pre data-dev="vpc2"><code>ip 10.10.20.12/24 10.10.20.1</code></pre>
+
+<pre class="out"><code>Checking for duplicate address...
+VPC2 : 10.10.20.12 255.255.255.0 gateway 10.10.20.1</code></pre>
+
+<p>VPC1 dobija adresu sa vrha opsega (MikroTik dodeljuje adrese od kraja opsega) i gateway 10.10.10.1.</p>
+
+<p><strong>VPC1</strong></p>
+<pre data-dev="vpc1"><code>ping 10.10.20.12 -c 2
+ping 8.8.8.8 -c 2
+ping 10.10.99.1 -c 2
+ping 10.10.99.2 -c 2</code></pre>
+
+<pre class="out"><code>84 bytes from 10.10.20.12 icmp_seq=1 ttl=63 time=1.611 ms
+84 bytes from 10.10.20.12 icmp_seq=2 ttl=63 time=0.972 ms
+
+84 bytes from 8.8.8.8 icmp_seq=1 ttl=63 time=0.886 ms
+84 bytes from 8.8.8.8 icmp_seq=2 ttl=63 time=0.931 ms
+
+84 bytes from 10.10.99.1 icmp_seq=1 ttl=64 time=0.738 ms
+84 bytes from 10.10.99.1 icmp_seq=2 ttl=64 time=0.520 ms
+
+10.10.99.2 icmp_seq=1 timeout
+10.10.99.2 icmp_seq=2 timeout</code></pre>
+
+<p><strong>VPC2</strong></p>
+<pre data-dev="vpc2"><code>ping 10.10.10.199 -c 2</code></pre>
+
+<pre class="out"><code>84 bytes from 10.10.10.199 icmp_seq=1 ttl=63 time=2.561 ms
+84 bytes from 10.10.10.199 icmp_seq=2 ttl=63 time=1.234 ms</code></pre>
+
+<p>VPC1 i VPC2 se vide preko R1 (<code>ttl=63</code>), a 8.8.8.8 je dostupan kroz NAT. Adresa 10.10.99.1 odgovara jer je to sam ruter (lanac <code>input</code>), a 10.10.99.2 (SW1) ne odgovara jer paket ka njoj R1 prosleđuje iz vlan10 i firewall ga odbacuje.</p>
+
+<p><strong>R1</strong></p>
+<pre data-dev="r1"><code>/ip neighbor print</code></pre>
+
+<pre class="out"><code>Columns: INTERFACE, ADDRESS, MAC-ADDRESS, IDENTITY
+#  INTERFACE  ADDRESS   MAC-ADDRESS        IDENTITY
+0  ether2     10.1.0.1  22:B2:B9:0A:07:BE  SW1
+1  ether3     10.1.0.1  22:11:BA:86:5F:8B  SW2</code></pre>
+
+<p><strong>SW1</strong></p>
+<pre data-dev="sw1"><code>show lldp table</code></pre>
+
+<pre class="out"><code>Capability codes: (R) Router, (B) Bridge, (O) Other
+LocalPort    RemoteDevice    RemotePortID    Capability    RemotePortDescr
+-----------  --------------  --------------  ------------  -----------------
+Ethernet0    R1              ether2          R             ether2
+Ethernet0    R1              vlan10          R             vlan10
+Ethernet0    R1              vlan99          R             vlan99
+Ethernet4    SW2             fortyGigE0/4    BR            Ethernet4
+--------------------------------------------------
+Total entries displayed:  4</code></pre>
+
+<p>R1 vidi SW1 na ether2 i SW2 na ether3; kao adresu suseda prikazuje upravljačku adresu koju SONiC objavljuje (ovde Loopback0 iz početne konfiguracije, 10.1.0.1 na oba sviča). SW1 vidi R1 na Ethernet0 tri puta, jer R1 šalje LLDP i sa podinterfejsa vlan10 i vlan99 (okviri sa VLAN oznakom), a na Ethernet4 vidi SW2.</p>
+
+<p class="note">Komande su izvršene na MikroTik CHR 7.16.2 i na Docker verziji SONiC-VS-a (docker-sonic-vs, SONiC master), a ne u GNS3 sa SONiC-VS virtuelnom mašinom, pa se MAC adrese, adresa na ether1 i verzija u izlazima mogu razlikovati.</p>
