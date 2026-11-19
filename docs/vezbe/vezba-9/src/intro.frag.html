@@ -1,0 +1,17 @@
+<h3>1. Nagios Core</h3>
+<p>Nagios periodično pokreće male programe za proveru (<em>plugin</em>-ove, npr. <code>check_ping</code>, <code>check_http</code>, <code>check_snmp</code>) i po njihovom izlaznom kodu određuje stanje: 0 = OK, 1 = WARNING, 2 = CRITICAL, 3 = UNKNOWN. Host je UP ili DOWN. Šta se proverava opisuje se objektima u <code>.cfg</code> fajlovima:</p>
+<table>
+<tr><th style="width:22%">Objekat</th><th>Šta opisuje</th></tr>
+<tr><td><code>host</code></td><td>uređaj sa adresom i komandom za proveru dostupnosti</td></tr>
+<tr><td><code>hostgroup</code></td><td>grupa hostova; servis definisan za grupu važi za svakog njenog člana</td></tr>
+<tr><td><code>service</code></td><td>jedna provera na hostu (HTTP, SNMP, disk...)</td></tr>
+<tr><td><code>command</code></td><td>komandna linija plugin-a ili obaveštenja, sa makroima (<code>$HOSTADDRESS$</code>, <code>$ARG1$</code>...)</td></tr>
+<tr><td><code>contact</code>, <code>contactgroup</code></td><td>ko prima obaveštenja, kada i kojom komandom</td></tr>
+</table>
+<p>Šablon je objekat sa <code>register 0</code> čije vrednosti drugi objekti nasleđuju direktivom <code>use</code>. Neuspešna provera prvo daje SOFT stanje i ponavlja se svakih <code>retry_interval</code> minuta; tek posle <code>max_check_attempts</code> neuspešnih provera stanje postaje HARD i tada se šalje obaveštenje.</p>
+
+<h3>2. Syslog</h3>
+<p>Syslog je standardni način slanja poruka o događajima: svaka poruka ima izvor (<em>facility</em>, npr. <code>kern</code>, <code>auth</code>, <code>local0</code>), ozbiljnost (<em>severity</em>, od <code>emerg</code> do <code>debug</code>), vreme, ime hosta, oznaku programa i tekst. Mrežni uređaji i serveri šalju poruke centralnom serveru, najčešće preko UDP porta 514. <code>rsyslog</code> konfiguraciju opisuje modulima (<code>imudp</code> za prijem), ulazima (<code>input</code>), skupovima pravila (<code>ruleset</code>), akcijama (<code>omfile</code> upisuje u fajl) i šablonima (<code>template</code>) za format ili ime fajla.</p>
+
+<h3>3. SNMP</h3>
+<p>SNMP (<em>Simple Network Management Protocol</em>) omogućava nadzornoj stanici (<em>manager</em>) da čita podatke sa agenta na uređaju (UDP port 161). Podaci su organizovani u stablo; svaki podatak ima OID, npr. <code>1.3.6.1.2.1.1.3.0</code> je <code>sysUpTime.0</code>. MIB fajlovi daju imena OID-ovima: <code>SNMPv2-MIB</code> opisuje sistem (<code>sysName</code>, <code>sysLocation</code>, <code>sysContact</code>), a <code>IF-MIB</code> interfejse (<code>ifDescr</code>, <code>ifOperStatus</code>). <code>snmpget</code> čita zadate OID-ove, a <code>snmpwalk</code> ceo podstablo. U verziji v2c pristup štiti samo ime zajednice (<em>community</em>), koje se šalje nešifrovano, pa se agent ograničava i na dozvoljene adrese i na čitanje.</p>

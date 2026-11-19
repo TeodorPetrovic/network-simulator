@@ -1,0 +1,142 @@
+<h2>Vežba 9, Zadatak – Nadzor mreže: Nagios, syslog i SNMP</h2>
+
+<p>Mreža laboratorije ima dva veb servera, jedan VPC i dva mrežna uređaja iz Vežbe 8 (MikroTik ruter R1 i SONiC svič). Treba postaviti nadzorni server NAGIOS (Nagios Core), koji proverava dostupnost uređaja i njihovih servisa, i centralni syslog server SYSLOG, koji prima poruke sa svih uređaja. Sve je u jednoj podmreži 10.9.0.0/24, povezanoj jednim svičem SW1.</p>
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 340" width="1000" height="340" style="max-width:100%;height:auto" font-family="DejaVu Sans, sans-serif" font-size="12">
+  <!-- kablovi -->
+  <g stroke="#555" stroke-width="2">
+    <line x1="115" y1="78" x2="430" y2="160"/>
+    <line x1="305" y1="78" x2="470" y2="160"/>
+    <line x1="695" y1="78" x2="530" y2="160"/>
+    <line x1="885" y1="78" x2="570" y2="160"/>
+    <line x1="205" y1="262" x2="440" y2="215"/>
+    <line x1="500" y1="262" x2="500" y2="215"/>
+    <line x1="795" y1="262" x2="560" y2="215"/>
+  </g>
+  <!-- SW1 -->
+  <rect x="400" y="160" width="200" height="55" rx="6" fill="#fff3cd" stroke="#555" stroke-width="1.5"/>
+  <text x="500" y="184" text-anchor="middle" font-size="14" font-weight="bold">SW1</text>
+  <text x="500" y="202" text-anchor="middle" font-size="11">Open vSwitch</text>
+  <!-- oznake portova SW1 -->
+  <g fill="#aa0000" font-size="11">
+    <text x="392" y="150">eth0</text>
+    <text x="446" y="140">eth1</text>
+    <text x="528" y="140">eth2</text>
+    <text x="580" y="150">eth3</text>
+    <text x="372" y="236">eth4</text>
+    <text x="506" y="240">eth5</text>
+    <text x="598" y="236">eth6</text>
+  </g>
+  <!-- gornji red -->
+  <rect x="40" y="20" width="150" height="58" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="115" y="42" text-anchor="middle" font-weight="bold">NAGIOS</text>
+  <text x="115" y="60" text-anchor="middle">10.9.0.10</text>
+  <text x="115" y="73" text-anchor="middle" font-size="10">Nagios Core</text>
+  <rect x="230" y="20" width="150" height="58" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="305" y="42" text-anchor="middle" font-weight="bold">SYSLOG</text>
+  <text x="305" y="60" text-anchor="middle">10.9.0.20</text>
+  <text x="305" y="73" text-anchor="middle" font-size="10">rsyslog</text>
+  <rect x="620" y="20" width="150" height="58" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="695" y="42" text-anchor="middle" font-weight="bold">SERVER1</text>
+  <text x="695" y="60" text-anchor="middle">10.9.0.31</text>
+  <text x="695" y="73" text-anchor="middle" font-size="10">httpd, snmpd</text>
+  <rect x="810" y="20" width="150" height="58" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="885" y="42" text-anchor="middle" font-weight="bold">SERVER2</text>
+  <text x="885" y="60" text-anchor="middle">10.9.0.32</text>
+  <text x="885" y="73" text-anchor="middle" font-size="10">httpd, snmpd</text>
+  <!-- donji red -->
+  <rect x="130" y="262" width="150" height="58" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="205" y="286" text-anchor="middle" font-weight="bold">VPC1</text>
+  <text x="205" y="304" text-anchor="middle">10.9.0.50</text>
+  <rect x="425" y="262" width="150" height="58" rx="4" fill="#d9ead3" stroke="#555" stroke-width="1.2"/>
+  <text x="500" y="282" text-anchor="middle" font-weight="bold">R1 (MikroTik)</text>
+  <text x="500" y="299" text-anchor="middle">10.9.0.1</text>
+  <text x="500" y="313" text-anchor="middle" font-size="10" fill="#aa0000">ether1</text>
+  <rect x="720" y="262" width="150" height="58" rx="4" fill="#fff3cd" stroke="#555" stroke-width="1.2"/>
+  <text x="795" y="282" text-anchor="middle" font-weight="bold">SONiC</text>
+  <text x="795" y="299" text-anchor="middle">10.9.0.2</text>
+  <text x="795" y="313" text-anchor="middle" font-size="10" fill="#aa0000">eth0 (upravljački)</text>
+</svg>
+
+<p class="caption">Slika 1. Topologija. Svi uređaji su u podmreži 10.9.0.0/24; R1 i SONiC su uređaji iz Vežbe 8.</p>
+
+<ol>
+<li><strong>Korak –</strong> U GNS3 napravite topologiju sa slike i povežite uređaje prema tabeli. SW1 je Open vSwitch (<code>gns3/openvswitch</code>, podrazumevana konfiguracija: svi portovi u <code>br0</code>), NAGIOS je Docker slika <code>jasonrivers/nagios</code>, a SYSLOG, SERVER1 i SERVER2 su Docker slika <code>vezba9-linux</code>, koja se jednom napravi na GNS3 mašini (<code>docker build -t vezba9-linux .</code>) iz sledećeg fajla <code>Dockerfile</code>:
+<pre data-file="Dockerfile"><code>FROM alpine:3.21
+RUN apk add --no-cache net-snmp net-snmp-tools rsyslog logger busybox-extras</code></pre>
+
+<table style="break-inside:avoid">
+<tr><th>Uređaj i port</th><th>Povezuje se sa</th><th>Uređaj i port</th><th>Povezuje se sa</th></tr>
+<tr><td>SW1 eth0</td><td>NAGIOS eth0</td><td>SW1 eth4</td><td>VPC1 Ethernet0</td></tr>
+<tr><td>SW1 eth1</td><td>SYSLOG eth0</td><td>SW1 eth5</td><td>R1 ether1</td></tr>
+<tr><td>SW1 eth2</td><td>SERVER1 eth0</td><td>SW1 eth6</td><td>SONiC eth0 (upravljački)</td></tr>
+<tr><td>SW1 eth3</td><td>SERVER2 eth0</td><td></td><td></td></tr>
+</table>
+
+<p>Veb interfejs Nagios-a koristi se kroz HTTP konzolu simulatora: konzola čvora NAGIOS je tipa <code>http</code> (port 80 u kontejneru, putanja <code>/nagios/</code>, korisnik <code>nagiosadmin</code>, lozinka <code>nagios</code>), a komande se kucaju u pomoćnoj (<em>auxiliary</em>) telnet konzoli istog čvora.</p>
+</li>
+
+<li><strong>Korak –</strong> Podesite IP adrese prema tabeli: na Docker čvorovima kroz <em>Edit network configuration</em> (pre pokretanja), na VPC1 u konzoli, a na R1 i SONiC na navedenom interfejsu. Na SERVER1 i SERVER2 pokrenite veb server (BusyBox <code>httpd</code>) iz direktorijuma <code>/var/www</code>, sa stranicom <code>index.html</code> koja sadrži ime servera, i SNMP agenta <code>snmpd</code> sa zajednicom (<em>community</em>) <code>lab9</code> samo za čitanje, dozvoljenom samo iz podmreže 10.9.0.0/24, lokacijom <code>Laboratorija 9</code> i kontaktom <code>admin@lab9.local</code>.
+
+<table style="break-inside:avoid">
+<tr><th>Uređaj</th><th>Interfejs</th><th>IP adresa</th><th>Uređaj</th><th>Interfejs</th><th>IP adresa</th></tr>
+<tr><td>NAGIOS</td><td>eth0</td><td>10.9.0.10 / 24</td><td>VPC1</td><td>Ethernet0</td><td>10.9.0.50 / 24</td></tr>
+<tr><td>SYSLOG</td><td>eth0</td><td>10.9.0.20 / 24</td><td>R1</td><td>ether1</td><td>10.9.0.1 / 24</td></tr>
+<tr><td>SERVER1</td><td>eth0</td><td>10.9.0.31 / 24</td><td>SONiC</td><td>eth0</td><td>10.9.0.2 / 24</td></tr>
+<tr><td>SERVER2</td><td>eth0</td><td>10.9.0.32 / 24</td><td></td><td></td><td></td></tr>
+</table>
+</li>
+
+<li><strong>Korak –</strong> Na NAGIOS-u u fajlu <code>/opt/nagios/etc/conf.d/lab9.cfg</code> (Nagios učitava sve <code>.cfg</code> fajlove iz tog direktorijuma) napravite šablon hosta <code>lab9-host</code>: provera komandom <code>check-host-alive</code> (ping) svakog minuta, ponovna provera posle minuta, stanje je konačno (HARD) posle 2 neuspešne provere, obaveštenja grupi kontakata <code>admins</code> za DOWN, UNREACHABLE i oporavak. Pomoću šablona definišite hostove za sve uređaje iz tabele osim NAGIOS-a (ime hosta = ime uređaja), grupu hostova <code>serveri</code> (SERVER1, SERVER2) i <code>mrezni-uredjaji</code> (R1, SONiC) i servis <code>HTTP</code> (komanda <code>check_http</code>) za grupu <code>serveri</code>. Proverite konfiguraciju (<code>nagios -v</code>), učitajte je ponovo (<code>sv reload nagios</code>) i u veb interfejsu (<em>Hosts</em>) proverite da su svi uređaji UP.
+
+<p>Primer sintakse (drugi host i druga grupa):</p>
+<pre><code>define host {
+    use         lab9-host
+    host_name   WEB9
+    address     192.168.50.9
+}
+define hostgroup {
+    hostgroup_name  baze
+    members         DB1,DB2
+}
+define service {
+    use                  generic-service
+    hostgroup_name       baze
+    service_description  MySQL
+    check_command        check_tcp!3306
+}</code></pre>
+<p>Šablon je <code>define host</code> sa <code>name</code> umesto <code>host_name</code> i sa <code>register 0</code>; host ga koristi direktivom <code>use</code>. Argumenti komande pišu se iza znaka <code>!</code>.</p>
+</li>
+
+<li><strong>Korak –</strong> U fajlu <code>/opt/nagios/etc/conf.d/nadzor.cfg</code> napravite komandu <code>check_snmp_lab9</code>, koja pokreće <code>check_snmp</code> (SNMP v2c) sa zajednicom i OID-om kao argumentima, i servis <code>SNMP uptime</code> za obe grupe hostova, koji čita <code>sysUpTime</code> (OID <code>1.3.6.1.2.1.1.3.0</code>) sa zajednicom <code>lab9</code>. Napravite i kontakt <code>dezurni</code> u grupi <code>admins</code>, čija se obaveštenja o hostovima i servisima, umesto e-poštom, šalju kao syslog poruke serveru SYSLOG (UDP 514, oznaka <code>nagios</code>), komandama <code>notify-host-by-syslog</code> i <code>notify-service-by-syslog</code>. Učitajte konfiguraciju i proverite da je servis <code>SNMP uptime</code> na serverima OK.
+
+<p>Primer sintakse komande sa argumentima (u komandi su <code>$ARG1$</code>, <code>$ARG2$</code>; u servisu <code>naziv!arg1!arg2</code>):</p>
+<pre><code>define command {
+    command_name  check_port_timeout
+    command_line  $USER1$/check_tcp -H $HOSTADDRESS$ -p $ARG1$ -t $ARG2$
+}</code></pre>
+<p>Kontakt dobija komande za obaveštenja direktivama <code>host_notification_commands</code> i <code>service_notification_commands</code>, a u grupu se dodaje direktivom <code>contactgroups</code>. U komandi za obaveštenje koriste se makroi <code>$NOTIFICATIONTYPE$</code>, <code>$HOSTNAME$</code>, <code>$HOSTSTATE$</code>, <code>$SERVICEDESC$</code> i <code>$SERVICESTATE$</code>.</p>
+</li>
+
+<li><strong>Korak –</strong> Na SYSLOG-u podesite <code>rsyslog</code> (fajl <code>/etc/rsyslog.d/mreza.conf</code>) tako da prima poruke preko UDP porta 514 i da poruke svakog hosta upisuje u poseban fajl <code>/var/log/mreza/&lt;ime hosta&gt;.log</code>, pa pokrenite <code>rsyslogd</code>. Sa SERVER1 pošaljite poruku komandom <code>logger</code> i pronađite je na SYSLOG-u. Podesite R1 i SONiC da svoje poruke šalju SYSLOG-u.
+
+<p>Primer sintakse (prijem preko TCP porta 10514 u jedan fajl):</p>
+<pre><code>module(load="imtcp")
+ruleset(name="primer") {
+  action(type="omfile" file="/var/log/primer.log")
+}
+input(type="imtcp" port="10514" ruleset="primer")</code></pre>
+<p>Za ime fajla koje zavisi od poruke koristi se <code>template</code> (npr. sa svojstvom <code>%HOSTNAME%</code>) i u akciji <code>dynaFile</code> umesto <code>file</code>. Opcije komande <code>logger</code>: <code>-n</code> server, <code>-P</code> port, <code>-d</code> UDP, <code>-t</code> oznaka.</p>
+</li>
+
+<li><strong>Korak –</strong> Sa NAGIOS-a komandom <code>snmpget</code> pročitajte <code>sysName</code>, <code>sysLocation</code> i <code>sysUpTime</code> sa SERVER1, a komandom <code>snmpwalk</code> imena i stanja interfejsa (<code>ifDescr</code>, <code>ifOperStatus</code>) sa SERVER2. Ponovite <code>snmpget</code> sa zajednicom <code>public</code>. Na R1 i SONiC uključite SNMP sa zajednicom <code>lab9</code> samo za čitanje. U slici NAGIOS-a MIB modul navedite opcijom <code>-m</code> (npr. <code>-m IF-MIB</code>), inače SNMP alati ispisuju upozorenja o MIB fajlovima koji nedostaju.</li>
+
+<li><strong>Korak –</strong> Zaustavite čvor SERVER2 i pratite ga u veb interfejsu (<em>Hosts</em>, <em>Services</em>). Proverite sledeće:
+<ul>
+<li>U kom stanju su host SERVER2 i njegovi servisi <code>HTTP</code> i <code>SNMP uptime</code>, i posle koliko provera stanje hosta postaje HARD?</li>
+<li>Koje obaveštenje je stiglo na SYSLOG i u kom fajlu se nalazi?</li>
+<li>Zašto za servise SERVER2 nije poslato obaveštenje?</li>
+<li>Šta vraća <code>snmpget</code> sa zajednicom <code>public</code> iz Koraka 6?</li>
+</ul>
+</li>
+</ol>

@@ -1,0 +1,472 @@
+<!doctype html><html lang="sr"><head><meta charset="utf-8"><title>Vežba 9</title><style>@page { size: Letter; margin: 0.7in; }
+html { font-family: "DejaVu Sans", sans-serif; }
+body { font-size: 10.5pt; line-height: 1.45; color: #111; text-align: justify; margin: 0; }
+h2 { font-size: 17pt; color: #1f4e79; border-bottom: 2.5px solid #1f4e79; padding-bottom: 6px; margin: 0 0 14px; text-align: left; break-after: avoid; }
+h3 { font-size: 11pt; color: #1f4e79; margin: 16px 0 6px; text-align: left; break-after: avoid; }
+h4 { font-size: 10.5pt; color: #1f4e79; margin: 14px 0 5px; text-align: left; break-after: avoid; }
+p { margin: 0 0 9px; orphans: 3; widows: 3; }
+p.caption { text-align: center; font-size: 8.5pt; color: #555; margin-top: 2px; }
+.page { break-before: page; }
+.page:first-child { break-before: auto; }
+.cover { break-after: page; }
+code { font-family: "DejaVu Sans Mono", monospace; font-size: 0.85em; background: #f3f3f3; padding: 0 2px; border-radius: 2px; }
+pre { font-family: "DejaVu Sans Mono", monospace; font-size: 7.5pt; line-height: 1.35; background: #f3f3f3; border: 1px solid #ddd; padding: 6px 9px; margin: 0 0 10px; white-space: pre; text-align: left; break-inside: avoid; overflow: hidden; }
+pre code { background: none; padding: 0; font-size: inherit; }
+pre.out { background: #fafafa; }
+table { border-collapse: collapse; width: 100%; margin: 8px 0 12px; font-size: 9.5pt; text-align: left; break-inside: auto; }
+tr { break-inside: avoid; }
+th { background: #dce6f1; text-align: left; }
+th, td { border: 1px solid #c5d0dc; padding: 4px 8px; }
+td code { font-size: 0.8em; }
+.note { background: #fff8e1; border-left: 4px solid #e0b000; border: 1px solid #f0e0a0; border-left: 4px solid #e0b000; padding: 7px 11px; margin: 8px 0 12px; font-size: 9.5pt; break-inside: avoid; }
+svg { display: block; margin: 10px auto 4px; max-width: 100%; height: auto; break-inside: avoid; }
+ol { padding-left: 30px; margin: 0 0 10px; }
+li { margin-bottom: 9px; }
+li > table { margin-top: 8px; }
+ul { margin: 0 0 9px; padding-left: 20px; }
+p:has(+ pre), p:has(+ table), p:has(+ svg) { break-after: avoid; }
+tr:first-child:has(th) { break-after: avoid; }
+p > code, li > code { white-space: nowrap; }
+</style></head><body><div class="cover">
+<h2>Vežba 9 – Nadzor mreže: Nagios, syslog i SNMP</h2>
+<p>Ova vežba ima jedan zadatak. U laboratoriji u GNS3 postavljaju se servisi za upravljanje i nadzor mreže: Nagios Core, koji proverava dostupnost uređaja i servisa i šalje obaveštenja, centralni syslog server (rsyslog), koji prikuplja poruke sa svih uređaja, i SNMP agenti na nadgledanim serverima. Nagios se koristi kroz veb interfejs. Pre zadatka sledi kratak uvod u ova tri servisa.</p>
+<h2 style="font-size:13pt;border:none;margin-top:18px">Šta je novo u ovoj vežbi</h2>
+<h3>1. Nagios Core</h3>
+<p>Nagios periodično pokreće male programe za proveru (<em>plugin</em>-ove, npr. <code>check_ping</code>, <code>check_http</code>, <code>check_snmp</code>) i po njihovom izlaznom kodu određuje stanje: 0 = OK, 1 = WARNING, 2 = CRITICAL, 3 = UNKNOWN. Host je UP ili DOWN. Šta se proverava opisuje se objektima u <code>.cfg</code> fajlovima:</p>
+<table>
+<tr><th style="width:22%">Objekat</th><th>Šta opisuje</th></tr>
+<tr><td><code>host</code></td><td>uređaj sa adresom i komandom za proveru dostupnosti</td></tr>
+<tr><td><code>hostgroup</code></td><td>grupa hostova; servis definisan za grupu važi za svakog njenog člana</td></tr>
+<tr><td><code>service</code></td><td>jedna provera na hostu (HTTP, SNMP, disk...)</td></tr>
+<tr><td><code>command</code></td><td>komandna linija plugin-a ili obaveštenja, sa makroima (<code>$HOSTADDRESS$</code>, <code>$ARG1$</code>...)</td></tr>
+<tr><td><code>contact</code>, <code>contactgroup</code></td><td>ko prima obaveštenja, kada i kojom komandom</td></tr>
+</table>
+<p>Šablon je objekat sa <code>register 0</code> čije vrednosti drugi objekti nasleđuju direktivom <code>use</code>. Neuspešna provera prvo daje SOFT stanje i ponavlja se svakih <code>retry_interval</code> minuta; tek posle <code>max_check_attempts</code> neuspešnih provera stanje postaje HARD i tada se šalje obaveštenje.</p>
+
+<h3>2. Syslog</h3>
+<p>Syslog je standardni način slanja poruka o događajima: svaka poruka ima izvor (<em>facility</em>, npr. <code>kern</code>, <code>auth</code>, <code>local0</code>), ozbiljnost (<em>severity</em>, od <code>emerg</code> do <code>debug</code>), vreme, ime hosta, oznaku programa i tekst. Mrežni uređaji i serveri šalju poruke centralnom serveru, najčešće preko UDP porta 514. <code>rsyslog</code> konfiguraciju opisuje modulima (<code>imudp</code> za prijem), ulazima (<code>input</code>), skupovima pravila (<code>ruleset</code>), akcijama (<code>omfile</code> upisuje u fajl) i šablonima (<code>template</code>) za format ili ime fajla.</p>
+
+<h3>3. SNMP</h3>
+<p>SNMP (<em>Simple Network Management Protocol</em>) omogućava nadzornoj stanici (<em>manager</em>) da čita podatke sa agenta na uređaju (UDP port 161). Podaci su organizovani u stablo; svaki podatak ima OID, npr. <code>1.3.6.1.2.1.1.3.0</code> je <code>sysUpTime.0</code>. MIB fajlovi daju imena OID-ovima: <code>SNMPv2-MIB</code> opisuje sistem (<code>sysName</code>, <code>sysLocation</code>, <code>sysContact</code>), a <code>IF-MIB</code> interfejse (<code>ifDescr</code>, <code>ifOperStatus</code>). <code>snmpget</code> čita zadate OID-ove, a <code>snmpwalk</code> ceo podstablo. U verziji v2c pristup štiti samo ime zajednice (<em>community</em>), koje se šalje nešifrovano, pa se agent ograničava i na dozvoljene adrese i na čitanje.</p>
+
+</div>
+<section class="page"><h2>Vežba 9, Zadatak – Nadzor mreže: Nagios, syslog i SNMP</h2>
+
+<p>Mreža laboratorije ima dva veb servera, jedan VPC i dva mrežna uređaja iz Vežbe 8 (MikroTik ruter R1 i SONiC svič). Treba postaviti nadzorni server NAGIOS (Nagios Core), koji proverava dostupnost uređaja i njihovih servisa, i centralni syslog server SYSLOG, koji prima poruke sa svih uređaja. Sve je u jednoj podmreži 10.9.0.0/24, povezanoj jednim svičem SW1.</p>
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 340" width="1000" height="340" style="max-width:100%;height:auto" font-family="DejaVu Sans, sans-serif" font-size="12">
+  <!-- kablovi -->
+  <g stroke="#555" stroke-width="2">
+    <line x1="115" y1="78" x2="430" y2="160"/>
+    <line x1="305" y1="78" x2="470" y2="160"/>
+    <line x1="695" y1="78" x2="530" y2="160"/>
+    <line x1="885" y1="78" x2="570" y2="160"/>
+    <line x1="205" y1="262" x2="440" y2="215"/>
+    <line x1="500" y1="262" x2="500" y2="215"/>
+    <line x1="795" y1="262" x2="560" y2="215"/>
+  </g>
+  <!-- SW1 -->
+  <rect x="400" y="160" width="200" height="55" rx="6" fill="#fff3cd" stroke="#555" stroke-width="1.5"/>
+  <text x="500" y="184" text-anchor="middle" font-size="14" font-weight="bold">SW1</text>
+  <text x="500" y="202" text-anchor="middle" font-size="11">Open vSwitch</text>
+  <!-- oznake portova SW1 -->
+  <g fill="#aa0000" font-size="11">
+    <text x="392" y="150">eth0</text>
+    <text x="446" y="140">eth1</text>
+    <text x="528" y="140">eth2</text>
+    <text x="580" y="150">eth3</text>
+    <text x="372" y="236">eth4</text>
+    <text x="506" y="240">eth5</text>
+    <text x="598" y="236">eth6</text>
+  </g>
+  <!-- gornji red -->
+  <rect x="40" y="20" width="150" height="58" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="115" y="42" text-anchor="middle" font-weight="bold">NAGIOS</text>
+  <text x="115" y="60" text-anchor="middle">10.9.0.10</text>
+  <text x="115" y="73" text-anchor="middle" font-size="10">Nagios Core</text>
+  <rect x="230" y="20" width="150" height="58" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="305" y="42" text-anchor="middle" font-weight="bold">SYSLOG</text>
+  <text x="305" y="60" text-anchor="middle">10.9.0.20</text>
+  <text x="305" y="73" text-anchor="middle" font-size="10">rsyslog</text>
+  <rect x="620" y="20" width="150" height="58" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="695" y="42" text-anchor="middle" font-weight="bold">SERVER1</text>
+  <text x="695" y="60" text-anchor="middle">10.9.0.31</text>
+  <text x="695" y="73" text-anchor="middle" font-size="10">httpd, snmpd</text>
+  <rect x="810" y="20" width="150" height="58" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="885" y="42" text-anchor="middle" font-weight="bold">SERVER2</text>
+  <text x="885" y="60" text-anchor="middle">10.9.0.32</text>
+  <text x="885" y="73" text-anchor="middle" font-size="10">httpd, snmpd</text>
+  <!-- donji red -->
+  <rect x="130" y="262" width="150" height="58" rx="4" fill="#dce6f1" stroke="#555" stroke-width="1.2"/>
+  <text x="205" y="286" text-anchor="middle" font-weight="bold">VPC1</text>
+  <text x="205" y="304" text-anchor="middle">10.9.0.50</text>
+  <rect x="425" y="262" width="150" height="58" rx="4" fill="#d9ead3" stroke="#555" stroke-width="1.2"/>
+  <text x="500" y="282" text-anchor="middle" font-weight="bold">R1 (MikroTik)</text>
+  <text x="500" y="299" text-anchor="middle">10.9.0.1</text>
+  <text x="500" y="313" text-anchor="middle" font-size="10" fill="#aa0000">ether1</text>
+  <rect x="720" y="262" width="150" height="58" rx="4" fill="#fff3cd" stroke="#555" stroke-width="1.2"/>
+  <text x="795" y="282" text-anchor="middle" font-weight="bold">SONiC</text>
+  <text x="795" y="299" text-anchor="middle">10.9.0.2</text>
+  <text x="795" y="313" text-anchor="middle" font-size="10" fill="#aa0000">eth0 (upravljački)</text>
+</svg>
+
+<p class="caption">Slika 1. Topologija. Svi uređaji su u podmreži 10.9.0.0/24; R1 i SONiC su uređaji iz Vežbe 8.</p>
+
+<ol>
+<li><strong>Korak –</strong> U GNS3 napravite topologiju sa slike i povežite uređaje prema tabeli. SW1 je Open vSwitch (<code>gns3/openvswitch</code>, podrazumevana konfiguracija: svi portovi u <code>br0</code>), NAGIOS je Docker slika <code>jasonrivers/nagios</code>, a SYSLOG, SERVER1 i SERVER2 su Docker slika <code>vezba9-linux</code>, koja se jednom napravi na GNS3 mašini (<code>docker build -t vezba9-linux .</code>) iz sledećeg fajla <code>Dockerfile</code>:
+<pre data-file="Dockerfile"><code>FROM alpine:3.21
+RUN apk add --no-cache net-snmp net-snmp-tools rsyslog logger busybox-extras</code></pre>
+
+<table style="break-inside:avoid">
+<tr><th>Uređaj i port</th><th>Povezuje se sa</th><th>Uređaj i port</th><th>Povezuje se sa</th></tr>
+<tr><td>SW1 eth0</td><td>NAGIOS eth0</td><td>SW1 eth4</td><td>VPC1 Ethernet0</td></tr>
+<tr><td>SW1 eth1</td><td>SYSLOG eth0</td><td>SW1 eth5</td><td>R1 ether1</td></tr>
+<tr><td>SW1 eth2</td><td>SERVER1 eth0</td><td>SW1 eth6</td><td>SONiC eth0 (upravljački)</td></tr>
+<tr><td>SW1 eth3</td><td>SERVER2 eth0</td><td></td><td></td></tr>
+</table>
+
+<p>Veb interfejs Nagios-a koristi se kroz HTTP konzolu simulatora: konzola čvora NAGIOS je tipa <code>http</code> (port 80 u kontejneru, putanja <code>/nagios/</code>, korisnik <code>nagiosadmin</code>, lozinka <code>nagios</code>), a komande se kucaju u pomoćnoj (<em>auxiliary</em>) telnet konzoli istog čvora.</p>
+</li>
+
+<li><strong>Korak –</strong> Podesite IP adrese prema tabeli: na Docker čvorovima kroz <em>Edit network configuration</em> (pre pokretanja), na VPC1 u konzoli, a na R1 i SONiC na navedenom interfejsu. Na SERVER1 i SERVER2 pokrenite veb server (BusyBox <code>httpd</code>) iz direktorijuma <code>/var/www</code>, sa stranicom <code>index.html</code> koja sadrži ime servera, i SNMP agenta <code>snmpd</code> sa zajednicom (<em>community</em>) <code>lab9</code> samo za čitanje, dozvoljenom samo iz podmreže 10.9.0.0/24, lokacijom <code>Laboratorija 9</code> i kontaktom <code>admin@lab9.local</code>.
+
+<table style="break-inside:avoid">
+<tr><th>Uređaj</th><th>Interfejs</th><th>IP adresa</th><th>Uređaj</th><th>Interfejs</th><th>IP adresa</th></tr>
+<tr><td>NAGIOS</td><td>eth0</td><td>10.9.0.10 / 24</td><td>VPC1</td><td>Ethernet0</td><td>10.9.0.50 / 24</td></tr>
+<tr><td>SYSLOG</td><td>eth0</td><td>10.9.0.20 / 24</td><td>R1</td><td>ether1</td><td>10.9.0.1 / 24</td></tr>
+<tr><td>SERVER1</td><td>eth0</td><td>10.9.0.31 / 24</td><td>SONiC</td><td>eth0</td><td>10.9.0.2 / 24</td></tr>
+<tr><td>SERVER2</td><td>eth0</td><td>10.9.0.32 / 24</td><td></td><td></td><td></td></tr>
+</table>
+</li>
+
+<li><strong>Korak –</strong> Na NAGIOS-u u fajlu <code>/opt/nagios/etc/conf.d/lab9.cfg</code> (Nagios učitava sve <code>.cfg</code> fajlove iz tog direktorijuma) napravite šablon hosta <code>lab9-host</code>: provera komandom <code>check-host-alive</code> (ping) svakog minuta, ponovna provera posle minuta, stanje je konačno (HARD) posle 2 neuspešne provere, obaveštenja grupi kontakata <code>admins</code> za DOWN, UNREACHABLE i oporavak. Pomoću šablona definišite hostove za sve uređaje iz tabele osim NAGIOS-a (ime hosta = ime uređaja), grupu hostova <code>serveri</code> (SERVER1, SERVER2) i <code>mrezni-uredjaji</code> (R1, SONiC) i servis <code>HTTP</code> (komanda <code>check_http</code>) za grupu <code>serveri</code>. Proverite konfiguraciju (<code>nagios -v</code>), učitajte je ponovo (<code>sv reload nagios</code>) i u veb interfejsu (<em>Hosts</em>) proverite da su svi uređaji UP.
+
+<p>Primer sintakse (drugi host i druga grupa):</p>
+<pre><code>define host {
+    use         lab9-host
+    host_name   WEB9
+    address     192.168.50.9
+}
+define hostgroup {
+    hostgroup_name  baze
+    members         DB1,DB2
+}
+define service {
+    use                  generic-service
+    hostgroup_name       baze
+    service_description  MySQL
+    check_command        check_tcp!3306
+}</code></pre>
+<p>Šablon je <code>define host</code> sa <code>name</code> umesto <code>host_name</code> i sa <code>register 0</code>; host ga koristi direktivom <code>use</code>. Argumenti komande pišu se iza znaka <code>!</code>.</p>
+</li>
+
+<li><strong>Korak –</strong> U fajlu <code>/opt/nagios/etc/conf.d/nadzor.cfg</code> napravite komandu <code>check_snmp_lab9</code>, koja pokreće <code>check_snmp</code> (SNMP v2c) sa zajednicom i OID-om kao argumentima, i servis <code>SNMP uptime</code> za obe grupe hostova, koji čita <code>sysUpTime</code> (OID <code>1.3.6.1.2.1.1.3.0</code>) sa zajednicom <code>lab9</code>. Napravite i kontakt <code>dezurni</code> u grupi <code>admins</code>, čija se obaveštenja o hostovima i servisima, umesto e-poštom, šalju kao syslog poruke serveru SYSLOG (UDP 514, oznaka <code>nagios</code>), komandama <code>notify-host-by-syslog</code> i <code>notify-service-by-syslog</code>. Učitajte konfiguraciju i proverite da je servis <code>SNMP uptime</code> na serverima OK.
+
+<p>Primer sintakse komande sa argumentima (u komandi su <code>$ARG1$</code>, <code>$ARG2$</code>; u servisu <code>naziv!arg1!arg2</code>):</p>
+<pre><code>define command {
+    command_name  check_port_timeout
+    command_line  $USER1$/check_tcp -H $HOSTADDRESS$ -p $ARG1$ -t $ARG2$
+}</code></pre>
+<p>Kontakt dobija komande za obaveštenja direktivama <code>host_notification_commands</code> i <code>service_notification_commands</code>, a u grupu se dodaje direktivom <code>contactgroups</code>. U komandi za obaveštenje koriste se makroi <code>$NOTIFICATIONTYPE$</code>, <code>$HOSTNAME$</code>, <code>$HOSTSTATE$</code>, <code>$SERVICEDESC$</code> i <code>$SERVICESTATE$</code>.</p>
+</li>
+
+<li><strong>Korak –</strong> Na SYSLOG-u podesite <code>rsyslog</code> (fajl <code>/etc/rsyslog.d/mreza.conf</code>) tako da prima poruke preko UDP porta 514 i da poruke svakog hosta upisuje u poseban fajl <code>/var/log/mreza/&lt;ime hosta&gt;.log</code>, pa pokrenite <code>rsyslogd</code>. Sa SERVER1 pošaljite poruku komandom <code>logger</code> i pronađite je na SYSLOG-u. Podesite R1 i SONiC da svoje poruke šalju SYSLOG-u.
+
+<p>Primer sintakse (prijem preko TCP porta 10514 u jedan fajl):</p>
+<pre><code>module(load="imtcp")
+ruleset(name="primer") {
+  action(type="omfile" file="/var/log/primer.log")
+}
+input(type="imtcp" port="10514" ruleset="primer")</code></pre>
+<p>Za ime fajla koje zavisi od poruke koristi se <code>template</code> (npr. sa svojstvom <code>%HOSTNAME%</code>) i u akciji <code>dynaFile</code> umesto <code>file</code>. Opcije komande <code>logger</code>: <code>-n</code> server, <code>-P</code> port, <code>-d</code> UDP, <code>-t</code> oznaka.</p>
+</li>
+
+<li><strong>Korak –</strong> Sa NAGIOS-a komandom <code>snmpget</code> pročitajte <code>sysName</code>, <code>sysLocation</code> i <code>sysUpTime</code> sa SERVER1, a komandom <code>snmpwalk</code> imena i stanja interfejsa (<code>ifDescr</code>, <code>ifOperStatus</code>) sa SERVER2. Ponovite <code>snmpget</code> sa zajednicom <code>public</code>. Na R1 i SONiC uključite SNMP sa zajednicom <code>lab9</code> samo za čitanje. U slici NAGIOS-a MIB modul navedite opcijom <code>-m</code> (npr. <code>-m IF-MIB</code>), inače SNMP alati ispisuju upozorenja o MIB fajlovima koji nedostaju.</li>
+
+<li><strong>Korak –</strong> Zaustavite čvor SERVER2 i pratite ga u veb interfejsu (<em>Hosts</em>, <em>Services</em>). Proverite sledeće:
+<ul>
+<li>U kom stanju su host SERVER2 i njegovi servisi <code>HTTP</code> i <code>SNMP uptime</code>, i posle koliko provera stanje hosta postaje HARD?</li>
+<li>Koje obaveštenje je stiglo na SYSLOG i u kom fajlu se nalazi?</li>
+<li>Zašto za servise SERVER2 nije poslato obaveštenje?</li>
+<li>Šta vraća <code>snmpget</code> sa zajednicom <code>public</code> iz Koraka 6?</li>
+</ul>
+</li>
+</ol>
+</section>
+<section class="page"><h2>Vežba 9, Zadatak – Rešenje (komande)</h2>
+
+<p>Komande za NAGIOS, SYSLOG, SERVER1, SERVER2 i VPC1 su izvršene u ovom redosledu na pravim kontejnerima (<code>jasonrivers/nagios</code> sa Nagios Core 4.5.12, <code>vezba9-linux</code>, VPCS) povezanim preko Open vSwitch-a, a prikazani izlazi potiču iz tog testa. <strong>Komande za R1 (MikroTik) i SONiC nisu izvršene</strong> (ti uređaji nisu bili dostupni), pa su u izlazima testa R1 i SONiC u stanju DOWN. Blokovi se mogu nalepiti u konzolu takvi kakvi su.</p>
+
+<h3>Korak 2 – IP adrese, veb server i SNMP agent</h3>
+
+<p><strong>NAGIOS</strong> – <em>Edit network configuration</em> (SYSLOG, SERVER1 i SERVER2 isto, sa svojom adresom iz tabele):</p>
+<pre data-netcfg="nagios"><code>auto eth0
+iface eth0 inet static
+    address 10.9.0.10
+    netmask 255.255.255.0</code></pre>
+
+<p><strong>VPC1</strong></p>
+<pre data-dev="vpc1"><code>ip 10.9.0.50/24</code></pre>
+
+<pre class="out"><code>Checking for duplicate address...
+VPC1 : 10.9.0.50 255.255.255.0</code></pre>
+
+<p><strong>SERVER1</strong> i <strong>SERVER2</strong> (isti blok; ime servera u stranici daje <code>hostname</code>)</p>
+<pre data-dev="server1 server2"><code>mkdir -p /var/www
+echo "&lt;h1&gt;$(hostname)&lt;/h1&gt;" &gt; /var/www/index.html
+httpd -h /var/www
+cat &gt; /etc/snmp/snmpd.conf &lt;&lt;'EOF'
+agentAddress udp:161
+rocommunity lab9 10.9.0.0/24
+sysLocation Laboratorija 9
+sysContact admin@lab9.local
+EOF
+snmpd
+ps</code></pre>
+
+<pre class="out"><code>PID   USER     TIME  COMMAND
+    1 root      0:00 /bin/sh
+  333 root      0:00 httpd -h /var/www
+  336 root      0:00 [snmpd]
+  337 root      0:00 snmpd
+  338 root      0:00 ps</code></pre>
+
+<p><code>rocommunity lab9 10.9.0.0/24</code> dozvoljava samo čitanje i samo zahteve iz te podmreže; <code>agentAddress udp:161</code> otvara agenta na svim interfejsima (podrazumevano sluša samo 127.0.0.1). BusyBox <code>httpd</code> i <code>snmpd</code> rade u pozadini.</p>
+
+<p><strong>R1</strong> (nije izvršeno)</p>
+<pre data-dev="mikrotik"><code>/system identity set name=R1
+/ip address add address=10.9.0.1/24 interface=ether1</code></pre>
+
+<p><strong>SONiC</strong> (nije izvršeno)</p>
+<pre data-dev="sonic"><code>sudo config interface ip add eth0 10.9.0.2/24</code></pre>
+
+<h3>Korak 3 – hostovi, grupe hostova i servis HTTP</h3>
+
+<p><strong>NAGIOS</strong> (pomoćna konzola)</p>
+<pre data-dev="nagios"><code>cat &gt; /opt/nagios/etc/conf.d/lab9.cfg &lt;&lt;'EOF'
+define host {
+    name                  lab9-host
+    use                   generic-host
+    check_command         check-host-alive
+    check_interval        1
+    retry_interval        1
+    max_check_attempts    2
+    notification_options  d,u,r
+    contact_groups        admins
+    register              0
+}
+define host {
+    use         lab9-host
+    host_name   SYSLOG
+    address     10.9.0.20
+}
+define host {
+    use         lab9-host
+    host_name   SERVER1
+    address     10.9.0.31
+}
+define host {
+    use         lab9-host
+    host_name   SERVER2
+    address     10.9.0.32
+}
+define host {
+    use         lab9-host
+    host_name   VPC1
+    address     10.9.0.50
+}
+define host {
+    use         lab9-host
+    host_name   R1
+    address     10.9.0.1
+}
+define host {
+    use         lab9-host
+    host_name   SONiC
+    address     10.9.0.2
+}
+EOF</code></pre>
+
+<p>Grupe hostova i servis HTTP dodaju se na kraj istog fajla (<code>&gt;&gt;</code>), pa se konfiguracija proverava i učitava:</p>
+<pre data-dev="nagios"><code>cat &gt;&gt; /opt/nagios/etc/conf.d/lab9.cfg &lt;&lt;'EOF'
+define hostgroup {
+    hostgroup_name  serveri
+    alias           Serveri
+    members         SERVER1,SERVER2
+}
+define hostgroup {
+    hostgroup_name  mrezni-uredjaji
+    alias           Mrezni uredjaji
+    members         R1,SONiC
+}
+define service {
+    use                  generic-service
+    hostgroup_name       serveri
+    service_description  HTTP
+    check_command        check_http
+    check_interval       1
+    retry_interval       1
+    max_check_attempts   2
+}
+EOF
+/opt/nagios/bin/nagios -v /opt/nagios/etc/nagios.cfg | tail -3
+sv reload nagios</code></pre>
+
+<pre class="out"><code>Total Errors:   0
+
+Things look okay - No serious problems were detected during the pre-flight check
+ok: run: nagios: (pid 318) 14s</code></pre>
+
+<p>Posle jednog do dva minuta svi hostovi su provereni. Stanje se vidi u veb interfejsu (<em>Hosts</em>), a isto daje i JSON CGI Nagios-a:</p>
+<pre data-dev="nagios" data-wait="k3"><code>S="http://nagiosadmin:nagios@localhost/nagios/cgi-bin/statusjson.cgi"
+curl -s "$S?query=hostlist" | jq -c .data.hostlist</code></pre>
+
+<pre class="out"><code>{"R1":4,"SERVER1":2,"SERVER2":2,"SONiC":4,"SYSLOG":2,"VPC1":2,"localhost":2}</code></pre>
+
+<p>Kod stanja hosta: 1 = PENDING (još nije proveren), 2 = UP, 4 = DOWN. <code>localhost</code> je sam NAGIOS iz podrazumevane konfiguracije slike. R1 i SONiC su u testu DOWN jer ih nije bilo u mreži; u laboratoriji sa Vežbom 8 su UP.</p>
+
+<h3>Korak 4 – komanda, servis SNMP uptime i kontakt</h3>
+
+<p><strong>NAGIOS</strong></p>
+<pre data-dev="nagios"><code>cat &gt; /opt/nagios/etc/conf.d/nadzor.cfg &lt;&lt;'EOF'
+define command {
+    command_name  check_snmp_lab9
+    command_line  $USER1$/check_snmp -H $HOSTADDRESS$ -P 2c -C $ARG1$ -o $ARG2$
+}
+define service {
+    use                  generic-service
+    hostgroup_name       serveri,mrezni-uredjaji
+    service_description  SNMP uptime
+    check_command        check_snmp_lab9!lab9!1.3.6.1.2.1.1.3.0
+    check_interval       1
+    retry_interval       1
+    max_check_attempts   2
+}
+define command {
+    command_name  notify-host-by-syslog
+    command_line  /usr/bin/logger -n 10.9.0.20 -P 514 -d -t nagios \
+"HOST $NOTIFICATIONTYPE$: $HOSTNAME$ je $HOSTSTATE$"
+}
+define command {
+    command_name  notify-service-by-syslog
+    command_line  /usr/bin/logger -n 10.9.0.20 -P 514 -d -t nagios \
+"SERVIS $NOTIFICATIONTYPE$: $HOSTNAME$/$SERVICEDESC$ je $SERVICESTATE$"
+}
+define contact {
+    contact_name                   dezurni
+    use                            generic-contact
+    alias                          Dezurni administrator
+    contactgroups                  admins
+    host_notification_commands     notify-host-by-syslog
+    service_notification_commands  notify-service-by-syslog
+}
+EOF
+/opt/nagios/bin/nagios -v /opt/nagios/etc/nagios.cfg | tail -3
+sv reload nagios</code></pre>
+
+<pre class="out"><code>Total Errors:   0
+
+Things look okay - No serious problems were detected during the pre-flight check
+ok: run: nagios: (pid 318) 75s</code></pre>
+
+<p>Znak <code>\</code> na kraju reda u Nagios konfiguraciji nastavlja direktivu u sledećem redu. Šablon <code>generic-contact</code> daje periode (24x7) i vrste obaveštenja; kontakt menja samo komande. Grupa <code>admins</code> sada ima dva člana: <code>nagiosadmin</code> (e-pošta) i <code>dezurni</code> (syslog).</p>
+
+<pre data-dev="nagios" data-wait="k4"><code>S="http://nagiosadmin:nagios@localhost/nagios/cgi-bin/statusjson.cgi"
+curl -s "$S?query=servicelist&amp;hostgroup=serveri" | jq -c .data.servicelist</code></pre>
+
+<pre class="out"><code>{"SERVER1":{"HTTP":2,"SNMP uptime":2},"SERVER2":{"HTTP":2,"SNMP uptime":2}}</code></pre>
+
+<p>Kod stanja servisa: 2 = OK, 16 = CRITICAL.</p>
+
+<h3>Korak 5 – syslog server</h3>
+
+<p><strong>SYSLOG</strong></p>
+<pre data-dev="syslog"><code>mkdir -p /etc/rsyslog.d
+cat &gt; /etc/rsyslog.d/mreza.conf &lt;&lt;'EOF'
+module(load="imudp")
+template(name="poHostu" type="string" string="/var/log/mreza/%HOSTNAME%.log")
+ruleset(name="mreza") {
+  action(type="omfile" dynaFile="poHostu")
+}
+input(type="imudp" port="514" ruleset="mreza")
+EOF
+rsyslogd -N1
+rsyslogd
+netstat -lnu | grep 514</code></pre>
+
+<pre class="out"><code>rsyslogd: version 8.2410.0, config validation run (level 1), master config /etc/rsyslog.conf
+rsyslogd: End of config validation run. Bye.
+udp        0      0 0.0.0.0:514             0.0.0.0:*
+udp        0      0 :::514                  :::*</code></pre>
+
+<p>Poruke primljene preko UDP-a idu u skup pravila <code>mreza</code>, pa se upisuju samo u fajlove po hostovima, a ne i u <code>/var/log/messages</code>.</p>
+
+<p><strong>SERVER1</strong></p>
+<pre data-dev="server1"><code>logger -n 10.9.0.20 -P 514 -d -t proba "Poruka sa SERVER1"</code></pre>
+
+<p><strong>SYSLOG</strong></p>
+<pre data-dev="syslog"><code>ls /var/log/mreza
+cat /var/log/mreza/SERVER1.log</code></pre>
+
+<pre class="out"><code>SERVER1.log
+2026-11-19T18:47:28.936019+00:00 SERVER1 proba Poruka sa SERVER1</code></pre>
+
+<p><strong>R1</strong> (nije izvršeno)</p>
+<pre data-dev="mikrotik"><code>/system logging action add name=nadzor target=remote remote=10.9.0.20 remote-port=514
+/system logging add topics=info action=nadzor</code></pre>
+
+<p><strong>SONiC</strong> (nije izvršeno)</p>
+<pre data-dev="sonic"><code>sudo config syslog add 10.9.0.20</code></pre>
+
+<h3>Korak 6 – SNMP upiti</h3>
+
+<p><strong>NAGIOS</strong></p>
+<pre data-dev="nagios"><code>snmpget -v2c -c lab9 -m SNMPv2-MIB 10.9.0.31 sysName.0 sysLocation.0 sysUpTime.0
+snmpwalk -v2c -c lab9 -m IF-MIB 10.9.0.32 ifDescr
+snmpwalk -v2c -c lab9 -m IF-MIB 10.9.0.32 ifOperStatus
+snmpget -v2c -c public -m SNMPv2-MIB 10.9.0.31 sysName.0</code></pre>
+
+<pre class="out"><code>SNMPv2-MIB::sysName.0 = STRING: SERVER1
+SNMPv2-MIB::sysLocation.0 = STRING: Laboratorija 9
+SNMPv2-MIB::sysUpTime.0 = Timeticks: (8785) 0:01:27.85
+IF-MIB::ifDescr.1 = STRING: lo
+IF-MIB::ifDescr.2 = STRING: eth0
+IF-MIB::ifOperStatus.1 = INTEGER: up(1)
+IF-MIB::ifOperStatus.2 = INTEGER: up(1)
+Timeout: No Response from 10.9.0.31.</code></pre>
+
+<p>Agent ne odgovara na zahtev sa zajednicom koja nije podešena, pa <code>snmpget</code> posle ponovljenih pokušaja javlja <code>Timeout</code> (isto bi se desilo za zahtev sa adrese van 10.9.0.0/24).</p>
+
+<p><strong>R1</strong> (nije izvršeno)</p>
+<pre data-dev="mikrotik"><code>/snmp community add name=lab9 addresses=10.9.0.0/24 read-access=yes write-access=no
+/snmp set enabled=yes location="Laboratorija 9" contact=admin@lab9.local</code></pre>
+
+<p><strong>SONiC</strong> (nije izvršeno)</p>
+<pre data-dev="sonic"><code>sudo config snmp community add lab9 RO</code></pre>
+
+<h3>Korak 7 – ispad servera SERVER2</h3>
+
+<p>Čvor SERVER2 se zaustavlja u GNS3 (<em>Stop</em>). Posle dva do tri minuta:</p>
+
+<p><strong>NAGIOS</strong></p>
+<pre data-dev="nagios" data-wait="k7"><code>S="http://nagiosadmin:nagios@localhost/nagios/cgi-bin/statusjson.cgi"
+curl -s "$S?query=host&amp;hostname=SERVER2" | \
+  jq -c '.data.host | {status, state_type, current_attempt, plugin_output}'
+curl -s "$S?query=servicelist&amp;hostname=SERVER2" | jq -c .data.servicelist</code></pre>
+
+<pre class="out"><code>{"status":4,"state_type":1,"current_attempt":2,"plugin_output":"CRITICAL - Host Unreachable (10.9.0.32)"}
+{"SERVER2":{"HTTP":16,"SNMP uptime":16}}</code></pre>
+
+<p><strong>SYSLOG</strong></p>
+<pre data-dev="syslog"><code>grep SERVER2 /var/log/mreza/NAGIOS.log</code></pre>
+
+<pre class="out"><code>2026-11-19T18:49:23.550039+00:00 NAGIOS nagios HOST PROBLEM: SERVER2 je DOWN</code></pre>
+
+<p>Odgovori na pitanja:</p>
+<ul>
+<li>Host SERVER2 je DOWN (<code>status 4</code>), a servisi <code>HTTP</code> i <code>SNMP uptime</code> CRITICAL (<code>16</code>). Prva neuspešna provera daje SOFT DOWN; posle druge (<code>max_check_attempts 2</code>) stanje je HARD (<code>state_type 1</code>, <code>current_attempt 2</code>). Isto se vidi u veb interfejsu (crveno polje, kolona <em>Attempt</em> 2/2).</li>
+<li>Na SYSLOG je stigla poruka <code>HOST PROBLEM: SERVER2 je DOWN</code> od hosta NAGIOS, sa oznakom <code>nagios</code>, u fajlu <code>/var/log/mreza/NAGIOS.log</code>. Poslao ju je kontakt <code>dezurni</code> komandom <code>notify-host-by-syslog</code> kada je stanje postalo HARD.</li>
+<li>Nagios ne šalje obaveštenja za servise hosta koji je DOWN: uzrok je ispad hosta, pa bi poruke o servisima bile suvišne. Zato u logu nema poruke <code>SERVIS PROBLEM</code> za SERVER2.</li>
+<li><code>snmpget</code> sa zajednicom <code>public</code> ne dobija odgovor (<code>Timeout: No Response from 10.9.0.31.</code>), jer je na agentu podešena samo zajednica <code>lab9</code>.</li>
+</ul>
+</section></body></html>
