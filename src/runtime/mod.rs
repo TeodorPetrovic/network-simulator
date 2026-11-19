@@ -193,7 +193,7 @@ fn docker_hostname(name: &str, node_id: &str) -> String {
         .chars()
         .map(|character| {
             if character.is_ascii_alphanumeric() {
-                character.to_ascii_lowercase()
+                character
             } else {
                 '-'
             }

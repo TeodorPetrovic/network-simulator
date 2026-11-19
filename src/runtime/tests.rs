@@ -49,9 +49,11 @@ fn derives_stable_safe_names_for_node_networks() {
 fn docker_hostnames_are_valid_and_stable_for_node_names() {
     assert_eq!(
         docker_hostname("Alpine Router 1", "01234567"),
-        "alpine-router-1"
+        "Alpine-Router-1"
     );
     assert_eq!(docker_hostname("---", "01234567"), "node-01234567");
+    // Like GNS3, the node name is the hostname and keeps its case.
+    assert_eq!(docker_hostname("SERVER1", "01234567"), "SERVER1");
 }
 
 #[test]
