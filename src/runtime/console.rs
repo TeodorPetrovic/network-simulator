@@ -49,14 +49,18 @@ impl DockerRuntime {
         &self,
         tigervnc: &Path,
         resolution: &str,
+        forced_display: Option<u16>,
     ) -> Result<DockerConsoleHost, RuntimeError> {
-        let display = (10..=999)
-            .find(|display| !Path::new(&format!("/tmp/.X11-unix/X{display}")).exists())
-            .ok_or_else(|| {
-                RuntimeError::Unavailable(
-                    "No free X11 display is available for Docker VNC".to_owned(),
-                )
-            })?;
+        let display = match forced_display {
+            Some(display) => display,
+            None => (10..=999)
+                .find(|display| !Path::new(&format!("/tmp/.X11-unix/X{display}")).exists())
+                .ok_or_else(|| {
+                    RuntimeError::Unavailable(
+                        "No free X11 display is available for Docker VNC".to_owned(),
+                    )
+                })?,
+        };
         let console_port = available_tcp_port().await?;
         let mut process = Command::new(tigervnc)
             .args([
@@ -129,7 +133,9 @@ impl DockerRuntime {
         if let Some(tigervnc) = runtime_program("NETWORK_SIMULATOR_TIGERVNC", "Xtigervnc")
             .or_else(|| runtime_program("NETWORK_SIMULATOR_TIGERVNC", "Xvnc"))
         {
-            return self.start_tigervnc_console(&tigervnc, resolution).await;
+            return self
+                .start_tigervnc_console(&tigervnc, resolution, None)
+                .await;
         }
         let xvfb = runtime_program("NETWORK_SIMULATOR_XVFB", "Xvfb");
         let x11vnc = runtime_program("NETWORK_SIMULATOR_X11VNC", "x11vnc");
@@ -239,6 +245,53 @@ impl DockerRuntime {
             vnc_processes: vec![xvfb_process, x11vnc_process],
             http_task: None,
         })
+    }
+
+    /// The X/VNC server of a Docker VNC node lives in this process: after a controller or host
+    /// restart the container is still there (with `DISPLAY=:N` baked in) but nobody serves
+    /// display N, so the guest app dies with "could not open display". Start it again on the
+    /// same display before the container starts (GNS3 does the same on every node start).
+    pub(super) async fn ensure_vnc_console_host(
+        &self,
+        container_id: &str,
+    ) -> Result<(), RuntimeError> {
+        if self.console_hosts.lock().await.contains_key(container_id) {
+            return Ok(());
+        }
+        let Ok(environment) = self
+            .command(
+                [
+                    "inspect",
+                    "--format",
+                    "{{range .Config.Env}}{{println .}}{{end}}",
+                    container_id,
+                ],
+                DOCKER_TIMEOUT,
+            )
+            .await
+        else {
+            return Ok(());
+        };
+        let Some(display) = environment
+            .lines()
+            .find_map(|line| line.strip_prefix("DISPLAY=:"))
+            .and_then(|value| value.trim().parse::<u16>().ok())
+        else {
+            return Ok(());
+        };
+        let Some(tigervnc) = runtime_program("NETWORK_SIMULATOR_TIGERVNC", "Xtigervnc")
+            .or_else(|| runtime_program("NETWORK_SIMULATOR_TIGERVNC", "Xvnc"))
+        else {
+            return Ok(());
+        };
+        let host = self
+            .start_tigervnc_console(&tigervnc, "1024x768", Some(display))
+            .await?;
+        self.console_hosts
+            .lock()
+            .await
+            .insert(container_id.to_owned(), host);
+        Ok(())
     }
 
     pub async fn console_port(&self, container_id: &str) -> Option<u16> {

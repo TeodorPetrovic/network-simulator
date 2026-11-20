@@ -88,6 +88,7 @@ impl DockerRuntime {
                     .await?;
             }
             NodeAction::Start if status != "started" => {
+                self.ensure_vnc_console_host(container_id).await?;
                 self.command(["start", container_id], DOCKER_TIMEOUT)
                     .await?;
             }
